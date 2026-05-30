@@ -654,6 +654,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       nextTeacherId = sqlInt(subject.teacher_id);
     }
     const nextMode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : (subject.mode || "exam");
+    const nextInstructions = body.instructions !== undefined ? (trimStr(body.instructions) || null) : (subject.instructions || null);
     // Compute total_score from the DB — never trust a client-supplied value
     const computedTotalScore = (db.prepare(
       "SELECT COALESCE(SUM(marks),0) as t FROM questions WHERE subject_id = ?"
@@ -671,6 +672,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.class !== undefined ? (trimStr(body.class) || null) : (subject.class || null),
       body.session !== undefined ? (trimStr(body.session) || null) : (subject.session || null),
       nextMode,
+      nextInstructions,
       subjectId,
     );
     return apiSuccess(queries.getSubjectById.get(subjectId));
