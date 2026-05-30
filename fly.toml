@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for exam-pool-app-1 on 2026-05-30T04:38:45Z
+# fly.toml app configuration file generated for exam-pool-app-1-wbasyw on 2026-05-30T05:18:18Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'exam-pool-app-1'
-primary_region = 'lhr'
+app = 'exam-pool-app-1-wbasyw'
+primary_region = 'ams'
 
 [build]
   dockerfile = 'Dockerfile'
