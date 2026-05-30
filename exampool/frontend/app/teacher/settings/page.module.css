@@ -1,0 +1,87 @@
+/* ── Settings / Profile Page ─────────────────────── */
+.page { max-width: 580px; }
+
+/* Profile card */
+.profileCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 2rem;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+  position: relative;
+}
+.profileCard::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: var(--color-primary);
+}
+.profileHeader {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.avatar {
+  width: 72px; height: 72px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--color-primary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.75rem; font-weight: 800; color: #fff;
+  box-shadow: 0 4px 16px rgba(2,132,199,0.25);
+  letter-spacing: -0.02em;
+}
+.nameBlock { flex: 1; min-width: 0; }
+.name  { font-size: 1.1875rem; font-weight: 800; color: var(--color-text); line-height: 1.2; }
+.email { font-size: 0.8125rem; color: var(--color-muted); margin-top: 0.25rem; }
+
+.fields {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) 1fr;
+  gap: 0.6rem 1.5rem;
+  font-size: 0.875rem;
+  border-top: 1px solid var(--color-border);
+  padding-top: 1.25rem;
+}
+.lbl { color: var(--color-muted); font-weight: 600; font-size: 0.8125rem; }
+.val { font-weight: 700; color: var(--color-text); word-break: break-all; font-size: 0.875rem; }
+
+/* Section card */
+.sectionCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1.25rem;
+}
+.sectionTitle {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.875rem; font-weight: 700;
+  color: var(--color-text); margin-bottom: 1.125rem;
+  letter-spacing: -0.01em;
+}
+.row {
+  display: flex; justify-content: space-between;
+  align-items: center; padding: 0.875rem 0;
+  border-bottom: 1px solid var(--color-border);
+  gap: 1rem; flex-wrap: wrap;
+}
+.row:last-child { border-bottom: none; }
+.rowLabel { font-weight: 600; font-size: 0.875rem; color: var(--color-text); margin-bottom: 0.15rem; }
+.rowSub   { color: var(--color-muted); font-size: 0.78rem; }
+
+/* Mobile */
+@media (max-width: 520px) {
+  .page { max-width: 100%; }
+  .profileCard { padding: 1.375rem; }
+  .profileCard::before { height: 3px; }
+  .avatar { width: 58px; height: 58px; font-size: 1.375rem; }
+  .fields { grid-template-columns: 1fr; gap: 0.4rem; }
+  .sectionCard { padding: 1.125rem; }
+  .row { flex-direction: column; align-items: flex-start; }
+  .row > *:last-child { width: 100%; }
+}

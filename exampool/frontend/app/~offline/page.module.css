@@ -1,0 +1,22 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.card {
+  width: min(420px, 100%);
+  background: var(--color-surface);
+  border: 1px solid #2a3458;
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.card button {
+  border: none;
+  border-radius: 10px;
+  padding: 0.7rem 1rem;
+  background: var(--color-primary);
+  color: #fff;
+}

@@ -1,0 +1,45 @@
+# dependencies (bun install)
+node_modules
+
+# Next.js build cache and output
+.next
+out
+dist
+
+# Build artifacts
+*.tgz
+*.tsbuildinfo
+
+# code coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+
+# SQLite database files (runtime data — do NOT commit)
+*.db
+*.db-shm
+*.db-wal
+
+# IntelliJ based IDEs
+.idea
+
+# Finder (MacOS) folder config
+.DS_Store
+
+# Windows
+Thumbs.db

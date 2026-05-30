@@ -1,0 +1,14 @@
+# Bun test runner config for ExamPool
+# Docs: https://bun.sh/docs/runtime/bunfig
+
+[test]
+# Default timeout per individual test (ms).  Concurrent tests override per-suite.
+timeout = 30000
+
+# Run test files matching this glob
+root = "./tests"
+
+# Environment variables injected into every test run.
+# Override on CLI: TEST_BASE_URL=http://192.168.1.10:3000 bun test
+[test.env]
+TEST_BASE_URL = "http://localhost:3999"

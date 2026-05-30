@@ -1,6 +1,3 @@
-# Exam-Pool-App-1
-An offline Computer Based test app
-
 # Exampool LAN
 
 Offline-first LAN examination system with:
@@ -19,7 +16,7 @@ Install these first on the server machine:
 ## Quick Start (Windows PowerShell)
 
 ```powershell
-cd "c:\Users\USER\Documents\exampool (3)\exampool"
+cd "c:\Users\DUDU\Documents\EXAM POOL\exampool"
 bun install
 cd frontend
 bun install

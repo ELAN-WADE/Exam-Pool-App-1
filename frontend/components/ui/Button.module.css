@@ -1,0 +1,118 @@
+.button {
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  transition: all 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.4;
+  position: relative;
+  overflow: hidden;
+  letter-spacing: 0.01em;
+  font-family: inherit;
+}
+
+.button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 250ms ease;
+  background: rgba(255,255,255,0.12);
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.button:hover::after {
+  opacity: 1;
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.965);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.sm {
+  padding: 0.35rem 0.875rem;
+  font-size: 0.8125rem;
+  border-radius: var(--radius-sm);
+  min-height: 34px;
+}
+
+.md {
+  padding: 0.55rem 1.25rem;
+  font-size: 0.875rem;
+  min-height: 42px;
+}
+
+.lg {
+  padding: 0.75rem 1.625rem;
+  font-size: 1rem;
+  min-height: 48px;
+  border-radius: var(--radius-lg);
+}
+
+.primary {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: var(--shadow-sm), 0 4px 16px rgba(15, 118, 110, 0.24);
+}
+.primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+  box-shadow: 0 6px 20px rgba(15, 118, 110, 0.32);
+  transform: translateY(-1px);
+}
+
+.secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-xs);
+}
+.secondary:hover:not(:disabled) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.danger {
+  background: var(--color-danger);
+  color: #fff;
+  box-shadow: var(--shadow-sm), 0 4px 16px rgba(225, 29, 72, 0.24);
+}
+.danger:hover:not(:disabled) {
+  background: var(--color-danger-dark);
+  box-shadow: 0 6px 20px rgba(225, 29, 72, 0.32);
+  transform: translateY(-1px);
+}
+
+.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-muted);
+  box-shadow: none;
+}
+.ghost:hover:not(:disabled) {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+@media (max-width: 768px) {
+  .button {
+    padding: 0.625rem 1.125rem;
+  }
+}

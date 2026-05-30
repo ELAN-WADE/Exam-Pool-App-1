@@ -1,0 +1,120 @@
+/* ── Teacher Students Page ───────────────────────── */
+
+/* Subject tabs */
+.tabs {
+  display: flex;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  background: var(--color-surface);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  box-shadow: var(--shadow-xs);
+}
+.tab {
+  padding: 0.375rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: all 160ms var(--ease);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.tab:hover  { background: var(--color-surface-2); color: var(--color-text); }
+.tabActive  { background: var(--color-primary) !important; color: #fff !important; box-shadow: var(--shadow-sm); }
+
+/* Stats row */
+.statsRow {
+  display: flex;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.75rem;
+}
+.statCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  min-width: 120px;
+  flex: 1;
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow 220ms var(--ease), transform 220ms var(--ease);
+  position: relative;
+  overflow: hidden;
+}
+
+.statCard:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.statValue {
+  font-size: 1.625rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--color-text);
+  margin-bottom: 0.2rem;
+}
+.statLabel {
+  font-size: 0.68rem;
+  color: var(--color-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Search */
+.search { margin-bottom: 1.125rem; }
+
+/* Table */
+.tableCard {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.empty {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 0.75rem; padding: 3.5rem 2rem;
+  color: var(--color-muted); text-align: center;
+}
+.empty p { font-size: 0.875rem; max-width: 260px; line-height: 1.6; }
+
+/* Cell styles */
+.studentCell { display: flex; align-items: center; gap: 0.625rem; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--color-success-bg);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 0.75rem;
+  color: var(--color-success); flex-shrink: 0;
+  border: 1px solid var(--color-success-border);
+}
+
+/* Score bar */
+.scoreCell  { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.pctBar     { width: 60px; height: 5px; background: var(--color-surface-3); border-radius: 999px; overflow: hidden; flex-shrink: 0; }
+.pctFill    { height: 100%; border-radius: 999px; transition: width 0.6s var(--ease-spring); }
+
+/* Mobile */
+@media (max-width: 768px) {
+  .statsRow { gap: 0.5rem; margin-bottom: 1.25rem; }
+  .statCard { min-width: calc(50% - 0.25rem); padding: 0.875rem 1rem; }
+  .statValue { font-size: 1.375rem; }
+  .tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .tableCard { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .empty { padding: 2.5rem 1rem; }
+  .pctBar { width: 40px; }
+}
+@media (max-width: 420px) {
+  .statCard { min-width: 100%; }
+}

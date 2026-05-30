@@ -1,0 +1,15 @@
+{
+  "name": "exampool",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"bun server.ts\" \"cd frontend && bun run dev\"",
+    "build": "cd frontend && bun run build",
+    "start": "bun server.ts",
+    "setup": "cd frontend && bun install"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.13",
+    "concurrently": "^9.1.0"
+  }
+}
