@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: exampool
+    env: docker
+    plan: starter # Note: Render requires a paid 'Starter' plan ($7/mo) to use Disks. Free tier cannot use SQLite!
+    disk:
+      name: exampool_data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: EXAMPOOL_DB
+        value: /app/data/exampool.db
+      - key: PORT
+        value: 8000
+      - key: NODE_ENV
+        value: production
