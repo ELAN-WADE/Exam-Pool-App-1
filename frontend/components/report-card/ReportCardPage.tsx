@@ -256,8 +256,21 @@ function ReportCardPageInner() {
       <style>{`
         @keyframes slideInRight { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:translateX(0)} }
         @media print {
+          @page { margin: 0; size: A4 portrait; }
           body > *:not(#rc-print-clone) { display: none !important; }
-          #rc-print-clone { display: block !important; position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; background: #fff !important; z-index: 999999 !important; }
+          #rc-print-clone { 
+            display: block !important; position: absolute !important; 
+            left: 0 !important; top: 0 !important; 
+            width: 100% !important; height: 100% !important; 
+            background: #fff !important; z-index: 999999 !important; 
+            color: #000 !important;
+            filter: grayscale(100%) !important;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+          }
+          #rc-print-clone * {
+            color: #000 !important;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+          }
         }
         #rc-print-frame { display: none; }
         .no-print { }

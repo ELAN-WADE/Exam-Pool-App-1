@@ -16,6 +16,15 @@ const roleBadge: Record<string, string> = {
   operator: "badge-warning",
 };
 
+function generateSecureCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let result = "TCH-";
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
 export default function OperatorUsersPage() {
   return (
     <RequireRole role="operator">
@@ -298,7 +307,17 @@ function UsersContent() {
           </div>
           <div className="field">
             <label>Password *</label>
-            <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Min 8 characters" required />
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Min 8 characters" required style={{ flex: 1 }} />
+              {form.role === "teacher" && (
+                <button type="button" className="btn btn-ghost" onClick={() => setForm({ ...form, password: generateSecureCode() })}>Generate Code</button>
+              )}
+            </div>
+            {form.password && form.role === "teacher" && form.password.startsWith("TCH-") && (
+              <div style={{ fontSize: "0.85rem", color: "var(--color-primary)", marginTop: "0.4rem" }}>
+                Teacher Code: <strong>{form.password}</strong> (Share this with the teacher)
+              </div>
+            )}
           </div>
           {form.role === "student" && (
             <div className="field">
@@ -334,16 +353,27 @@ function UsersContent() {
         <form onSubmit={handleResetPassword} className={styles.form}>
           <div className="field">
             <label>New Password *</label>
-            <input
-              className="input"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Min 8 characters"
-              required
-              minLength={8}
-              autoFocus
-            />
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                className="input"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Min 8 characters"
+                required
+                minLength={8}
+                autoFocus
+                style={{ flex: 1 }}
+              />
+              {resetModal?.role === "teacher" && (
+                <button type="button" className="btn btn-ghost" onClick={() => setNewPassword(generateSecureCode())}>Generate Code</button>
+              )}
+            </div>
+            {newPassword && resetModal?.role === "teacher" && newPassword.startsWith("TCH-") && (
+              <div style={{ fontSize: "0.85rem", color: "var(--color-primary)", marginTop: "0.4rem" }}>
+                New Teacher Code: <strong>{newPassword}</strong> (Share this with the teacher)
+              </div>
+            )}
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-ghost" onClick={() => { setResetModal(null); setNewPassword(""); }}>Cancel</button>

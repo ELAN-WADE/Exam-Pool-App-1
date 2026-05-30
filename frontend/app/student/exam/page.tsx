@@ -65,7 +65,7 @@ function ExamContent() {
       await api.submitExamWithAnswers(examId, buildAnswerPayload());
       showToast("Exam submitted successfully!", "success");
       setMode("completed");
-      router.replace("/student/results");
+      router.replace("/student/dashboard");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Submit failed", "error");
       setError(err instanceof Error ? err.message : "Submit failed");

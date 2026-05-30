@@ -129,23 +129,6 @@ function DashboardContent() {
             <div className={styles.statLabel}>Available</div>
           </div>
         </div>
-        <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "100ms", "--accent": "var(--color-success)" } as React.CSSProperties}>
-          <div className={styles.statIconBox} style={{ background: "var(--color-success-bg)", color: "var(--color-success)" }}>
-            <CheckCircleIcon width="22" height="22" />
-          </div>
-          <div className={styles.statData}>
-            <div className={styles.statValue}>{stats.examsTaken}</div>
-            <div className={styles.statLabel}>Completed</div>
-          </div>
-        </div>
-        <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "150ms", "--accent": "var(--color-warning)" } as React.CSSProperties}>
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem", flex: 1 }}>
-            <div className={styles.statData}>
-              <div className={styles.statLabel} style={{ marginBottom: "0.25rem" }}>Avg Score</div>
-            </div>
-            <ProgressRing radius={28} stroke={4} progress={stats.avgScore} />
-          </div>
-        </div>
       </div>
 
       {/* Exam Categories */}
@@ -159,7 +142,7 @@ function DashboardContent() {
         </div>
       ) : (
         <div className={styles.categories}>
-          {["active", "upcoming", "past"].map((category) => {
+          {["active", "upcoming"].map((category) => {
             const categorySubjects = subjects.filter((s: any) => {
               if (!s.exam_datetime) return false;
               const examDate = new Date(s.exam_datetime);
@@ -180,7 +163,7 @@ function DashboardContent() {
               <div key={category} className={styles.categorySection} style={{ marginBottom: "3rem" }}>
                 <div className={styles.sectionHeader}>
                   <span className={styles.sectionLabel}>
-                    {category === "active" ? "🔥 Open Now" : category === "upcoming" ? "📅 Upcoming Timetable" : "📝 Past / Completed"}
+                    {category === "active" ? "🔥 Open Now" : "📅 Upcoming Timetable"}
                   </span>
                   {category === "active" && (
                     <div className={styles.refreshIndicator}>
