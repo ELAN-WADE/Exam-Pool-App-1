@@ -218,6 +218,27 @@ function ExamContent() {
       <button className="btn btn-ghost" onClick={() => router.back()}>← Go back</button>
     </main>
   );
+  if (showInstructions) {
+    return (
+      <main className={styles.page}>
+        <div className={styles.modal}>
+          <div className={styles.modalBox} style={{ maxWidth: "600px" }}>
+            <h3>Exam Instructions</h3>
+            <div style={{ maxHeight: "40vh", overflowY: "auto", margin: "1rem 0", padding: "1.25rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", whiteSpace: "pre-wrap", fontSize: "0.95rem", color: "var(--color-text)", lineHeight: 1.6, border: "1px solid var(--color-border)" }}>
+              {subject?.instructions || "No specific instructions provided. Please read each question carefully and manage your time."}
+            </div>
+            <div className={styles.modalActions}>
+              <button className="btn btn-ghost" onClick={() => router.push("/student/dashboard")}>Back to Dashboard</button>
+              <button className="btn btn-primary" onClick={() => { setShowInstructions(false); startExam(subject); }}>
+                Start Exam
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   if (mode === "loading" || mode === "starting") return (
     <main className={styles.errorState}>
       <div className="spinner" />
@@ -250,23 +271,6 @@ function ExamContent() {
         </div>
       )}
 
-      {/* ── Instructions modal ── */}
-      {showInstructions && (
-        <div className={styles.modal}>
-          <div className={styles.modalBox} style={{ maxWidth: "600px" }}>
-            <h3>Exam Instructions</h3>
-            <div style={{ maxHeight: "40vh", overflowY: "auto", margin: "1rem 0", padding: "1.25rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", whiteSpace: "pre-wrap", fontSize: "0.95rem", color: "var(--color-text)", lineHeight: 1.6, border: "1px solid var(--color-border)" }}>
-              {subject?.instructions || "No specific instructions provided. Please read each question carefully and manage your time."}
-            </div>
-            <div className={styles.modalActions}>
-              <button className="btn btn-ghost" onClick={() => router.push("/student/dashboard")}>Back to Dashboard</button>
-              <button className="btn btn-primary" onClick={() => { setShowInstructions(false); startExam(subject); }}>
-                Start Exam
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Submit confirm modal ── */}
       {showSubmitConfirm && (
