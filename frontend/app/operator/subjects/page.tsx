@@ -283,8 +283,8 @@ function SubjectsContent() {
             <p>{search ? "No subjects match your search." : "No subjects yet. Create one to get started."}</p>
           </div>
         ) : (
-          <div className={styles.tableWrap}>
-            <table className="tbl">
+          <div className={styles.tableWrap} style={{ overflowX: "auto", width: "100%" }}>
+            <table className="tbl" style={{ minWidth: "1000px" }}>
               <thead>
                 <tr>
                   <th>Subject</th>

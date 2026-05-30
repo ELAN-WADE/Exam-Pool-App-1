@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently \"bun server.ts\" \"cd frontend && bun run dev\"",
+    "postinstall": "cd frontend && bun install",
     "build": "cd frontend && bun run build",
     "start": "bun server.ts",
     "setup": "cd frontend && bun install"

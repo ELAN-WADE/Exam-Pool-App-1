@@ -41,7 +41,7 @@ function DashboardContent() {
       const now = Date.now();
       const activeOne = (subjectsData as any[]).find(s => {
         const start = new Date(s.exam_datetime).getTime();
-        const end = start + Number(s.duration) * 60_000;
+        const end = start + Number(s.window_duration || 120) * 60_000;
         const isTaken = (resultsData as any[]).some(r => Number(r.subject_id) === Number(s.id));
         return !isTaken && now >= start && now < end;
       });
@@ -148,7 +148,7 @@ function DashboardContent() {
               const examDate = new Date(s.exam_datetime);
               const now = currentTime;
               const start = examDate.getTime();
-              const end = start + Number(s.duration) * 60_000;
+              const end = start + Number(s.window_duration || 120) * 60_000;
               const isTaken = takenIds.has(Number(s.id));
               
               if (category === "active") return !isTaken && now >= start && now < end;

@@ -586,7 +586,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         db.prepare(`
           SELECT s.* FROM subjects s
           INNER JOIN subject_enrollments se ON se.subject_id = s.id AND se.student_id = ?
-          WHERE s.is_published = 1
+          WHERE s.is_timetable_published = 1
           ORDER BY s.name
         `).all(auth.userId)
       );
@@ -620,7 +620,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const session = trimStr(body?.session) || null;
     const mode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : "exam";
     const instructions = trimStr(body?.instructions) || null;
-    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions) as {
+    const window_duration = Number(body?.window_duration) || 120;
+    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration) as {
       lastInsertRowid: number | bigint;
     };
     auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
@@ -673,6 +674,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.session !== undefined ? (trimStr(body.session) || null) : (subject.session || null),
       nextMode,
       nextInstructions,
+      body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0),
+      body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120),
       subjectId,
     );
     return apiSuccess(queries.getSubjectById.get(subjectId));

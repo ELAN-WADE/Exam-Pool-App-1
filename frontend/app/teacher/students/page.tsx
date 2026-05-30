@@ -227,7 +227,6 @@ function StudentRoster() {
                 <th>Score</th>
                 <th>Letter</th>
                 <th>Status</th>
-                <th style={{ textAlign: "right" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -279,22 +278,6 @@ function StudentRoster() {
                         ? <span className="badge badge-success">Completed</span>
                         : <span className="badge badge-info">Pending</span>
                       }
-                    </td>
-                    <td>
-                      <div style={{ display: "flex", gap: "0.4rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
-                        {hasExam && (
-                          <>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openReview(row)} title="View per-question review">
-                              <EyeIcon width="14" height="14" />
-                              Review
-                            </button>
-                          </>
-                        )}
-                        <button className="btn btn-ghost btn-sm" onClick={() => openGrade(row)} title="Promote / demote student grade">
-                          <ArrowUpIcon width="14" height="14" />
-                          Promote
-                        </button>
-                      </div>
                     </td>
                   </tr>
                 );

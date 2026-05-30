@@ -581,7 +581,7 @@ function ReportCardPageInner() {
         <div id="rc-print-frame" style={{ display: "none" }}>
           <div style={{
             fontFamily: "'Inter', 'Segoe UI', sans-serif",
-            padding: "20mm",
+            padding: "12mm",
             color: "#0f172a",
             width: "210mm",
             minHeight: "297mm",
@@ -592,7 +592,7 @@ function ReportCardPageInner() {
           }}>
             {/* Outer decorative border */}
             <div style={{
-              position: "absolute", inset: "12mm",
+              position: "absolute", inset: "8mm",
               border: "2pt solid #0f766e",
               borderRadius: "4mm",
               pointerEvents: "none",
@@ -607,12 +607,12 @@ function ReportCardPageInner() {
 
             <div style={{ position: "relative", zIndex: 10, padding: "10mm 14mm" }}>
               {/* ── Header: Logo left, School name centre ── */}
-              <div style={{ display: "flex", alignItems: "center", gap: "16mm", paddingBottom: "8mm", marginBottom: "8mm", borderBottom: "1.5pt solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16mm", paddingBottom: "10mm", marginBottom: "10mm", borderBottom: "2pt solid #e2e8f0" }}>
                 {/* Logo seal */}
-                <div style={{ flexShrink: 0, width: "26mm", height: "26mm", display: "flex", alignItems: "center", justifyContent: "center", background: "#f8fafc", borderRadius: "3mm", border: "1pt solid #e2e8f0" }}>
+                <div style={{ flexShrink: 0, width: "32mm", height: "32mm", display: "flex", alignItems: "center", justifyContent: "center", background: "#f8fafc", borderRadius: "4mm", border: "1pt solid #e2e8f0" }}>
                   {logo ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={logo} alt="School Logo" style={{ width: "22mm", height: "22mm", objectFit: "contain" }} />
+                    <img src={logo} alt="School Logo" style={{ width: "28mm", height: "28mm", objectFit: "contain" }} />
                   ) : (
                     <div style={{ fontSize: "8pt", color: "#94a3b8", fontWeight: 700 }}>LOGO</div>
                   )}
@@ -620,10 +620,10 @@ function ReportCardPageInner() {
 
                 {/* School name & title */}
                 <div style={{ flex: 1, textAlign: "center" }}>
-                  <div style={{ fontSize: "20pt", fontWeight: 900, color: "#0f766e", letterSpacing: "0.02em", textTransform: "uppercase", lineHeight: 1.15 }}>
+                  <div style={{ fontSize: "22pt", fontWeight: 900, color: "#0f766e", letterSpacing: "0.02em", textTransform: "uppercase", lineHeight: 1.15 }}>
                     {schoolName}
                   </div>
-                  <div style={{ fontSize: "10pt", color: "#64748b", marginTop: "2mm", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 600 }}>
+                  <div style={{ fontSize: "11pt", color: "#64748b", marginTop: "3mm", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 700 }}>
                     Official Student Report Card
                   </div>
                   <div style={{ fontSize: "8.5pt", color: "#94a3b8", marginTop: "1mm" }}>{currentTerm}</div>

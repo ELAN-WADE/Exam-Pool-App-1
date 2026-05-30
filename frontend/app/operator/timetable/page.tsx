@@ -13,6 +13,7 @@ type Subject = {
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
   description?: string; class?: string; session?: string; mode?: string;
+  is_timetable_published?: number; window_duration?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
 
@@ -38,11 +39,12 @@ function TimetableContent() {
 
   // Create Form State
   const [form, setForm] = useState({
-    name: "", code: "", term: "", duration: "60", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam"
+    name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam"
   });
 
   const [examDate, setExamDate] = useState("");
   const [duration, setDuration] = useState("");
+  const [windowDuration, setWindowDuration] = useState("120");
   const [isPublished, setIsPublished] = useState(false);
 
   const showToast = useCallback((type: "success" | "error", text: string) => {
@@ -86,7 +88,8 @@ function TimetableContent() {
     setEditing(s);
     setExamDate(s.exam_datetime ?? "");
     setDuration(String(s.duration));
-    setIsPublished(!!s.is_published);
+    setWindowDuration(String(s.window_duration ?? 120));
+    setIsPublished(!!s.is_timetable_published);
     setModalOpen(true);
   };
 
@@ -102,7 +105,8 @@ function TimetableContent() {
       await api.updateSubject(editing.id, {
         exam_datetime: examDate,
         duration: Number(duration),
-        is_published: isPublished ? 1 : 0,
+        window_duration: Number(windowDuration),
+        is_timetable_published: isPublished ? 1 : 0,
       });
       showToast("success", `Timetable updated for "${editing.name}".`);
       setModalOpen(false);
@@ -123,13 +127,13 @@ function TimetableContent() {
     try {
       await api.createSubject({
         name: form.name, code: form.code, term: form.term,
-        duration: Number(form.duration), exam_datetime: form.exam_datetime,
+        duration: Number(form.duration), window_duration: Number(form.window_duration), exam_datetime: form.exam_datetime,
         teacher_id: Number(form.teacher_id), class: form.class || null,
         session: form.session || null, mode: form.mode || "exam"
       });
       showToast("success", `Subject "${form.name}" created and scheduled.`);
       setCreateModalOpen(false);
-      setForm({ name: "", code: "", term: "", duration: "60", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam" });
+      setForm({ name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam" });
       await load();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Create failed.");
@@ -139,8 +143,8 @@ function TimetableContent() {
   };
   const togglePublish = async (s: Subject) => {
     try {
-      await api.updateSubject(s.id, { is_published: s.is_published ? 0 : 1 });
-      showToast("success", s.is_published ? `"${s.name}" unpublished.` : `"${s.name}" published.`);
+      await api.updateSubject(s.id, { is_timetable_published: s.is_timetable_published ? 0 : 1 });
+      showToast("success", s.is_timetable_published ? `"${s.name}" unpublished.` : `"${s.name}" published.`);
       await load();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Toggle failed.");
@@ -224,9 +228,9 @@ function TimetableContent() {
                       </td>
                       <td>
                         <div className={styles.statusCell}>
-                          <span className={s.is_published ? styles.statusDotPublished : styles.statusDotDraft} style={{ width: 7, height: 7, borderRadius: "50%", display: "inline-block" }} />
-                          <span className={`badge ${s.is_published ? "badge-success" : "badge-muted"}`}>
-                            {s.is_published ? "Published" : "Draft"}
+                          <span className={s.is_timetable_published ? styles.statusDotPublished : styles.statusDotDraft} style={{ width: 7, height: 7, borderRadius: "50%", display: "inline-block" }} />
+                          <span className={`badge ${s.is_timetable_published ? "badge-success" : "badge-muted"}`}>
+                            {s.is_timetable_published ? "Published" : "Draft"}
                           </span>
                         </div>
                       </td>
@@ -235,8 +239,8 @@ function TimetableContent() {
                           <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Schedule">
                             <EditIcon width="13" height="13" /> Schedule
                           </button>
-                          <button className={`btn btn-sm ${s.is_published ? styles.unpublishBtn : styles.publishBtn}`} onClick={() => togglePublish(s)}>
-                            {s.is_published ? "Unpublish" : "Publish"}
+                          <button className={`btn btn-sm ${s.is_timetable_published ? styles.unpublishBtn : styles.publishBtn}`} onClick={() => togglePublish(s)}>
+                            {s.is_timetable_published ? "Unpublish" : "Publish"}
                           </button>
                         </div>
                       </td>
@@ -258,8 +262,12 @@ function TimetableContent() {
             <input className="input" type="datetime-local" value={examDate} onChange={(e) => setExamDate(e.target.value)} required />
           </div>
           <div className="field">
-            <label>Duration (minutes) *</label>
+            <label>Session Duration (minutes) *</label>
             <input className="input" type="number" min={1} max={360} value={duration} onChange={(e) => setDuration(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Overall Time Window (minutes) *</label>
+            <input className="input" type="number" min={1} max={1440} value={windowDuration} onChange={(e) => setWindowDuration(e.target.value)} required />
           </div>
           <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
             <input type="checkbox" id="publish-toggle" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
@@ -298,14 +306,18 @@ function TimetableContent() {
             </div>
           </div>
           
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
             <div className="field">
               <label>Exam Date & Time *</label>
               <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
             </div>
             <div className="field">
-              <label>Duration (min) *</label>
+              <label>Session (min) *</label>
               <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
+            </div>
+            <div className="field">
+              <label>Window (min) *</label>
+              <input className="input" type="number" min={1} value={form.window_duration} onChange={(e) => setForm({ ...form, window_duration: e.target.value })} required />
             </div>
           </div>
           
