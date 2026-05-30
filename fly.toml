@@ -1,23 +1,32 @@
-# fly.toml app configuration file generated for exampool
+# fly.toml app configuration file generated for exam-pool-app-1 on 2026-05-30T04:38:45Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "exampool"
-primary_region = "iad" # You can change this to a region closest to you
+app = 'exam-pool-app-1'
+primary_region = 'lhr'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  PORT = "8000"
-  EXAMPOOL_DB = "/app/data/exampool.db"
+  EXAMPOOL_DB = '/app/data/exampool.db'
+  PORT = '8000'
 
-[mounts]
-  source = "exampool_data"
-  destination = "/app/data"
+[[mounts]]
+  source = 'exampool_data'
+  destination = '/app/data'
 
 [http_service]
-  internal_port = 8000
+  internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
