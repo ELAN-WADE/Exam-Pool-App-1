@@ -1,11 +1,17 @@
 import { Database } from "bun:sqlite";
 import path from "path";
+import fs from "fs";
 
 /**
  * Absolute path so the same file is always used regardless of process cwd.
  * Override with env EXAMPOOL_DB if needed (e.g. tests).
  */
 export const EXAMPOOL_DB_PATH = Bun.env.EXAMPOOL_DB || path.join(import.meta.dir, "exampool.db");
+
+const dbDir = path.dirname(EXAMPOOL_DB_PATH);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
 
 const db = new Database(EXAMPOOL_DB_PATH, { create: true });
 
