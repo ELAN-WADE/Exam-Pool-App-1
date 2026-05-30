@@ -102,20 +102,25 @@ function ExamContent() {
 
   const startExam = useCallback(async (subjectForStart: any) => {
     setMode("starting");
-    const start = await api.startExam(subjectForStart.id) as any;
-    if (!start) throw new Error("Could not start exam — check that the exam window is open");
-    const id = Number(start.examId ?? start.exam?.id);
-    if (!id) throw new Error("Server did not return exam ID");
-    setExamId(id);
-    const qs = (start.questions as any[]) ?? [];
-    if (qs.length > 0) {
-      setQuestions(qs);
-    } else {
-      const fetched = ((await api.getQuestions(subjectForStart.id)) as any[]) ?? [];
-      setQuestions(fetched);
+    try {
+      const start = await api.startExam(subjectForStart.id) as any;
+      if (!start) throw new Error("Could not start exam — check that the exam window is open");
+      const id = Number(start.examId ?? start.exam?.id);
+      if (!id) throw new Error("Server did not return exam ID");
+      setExamId(id);
+      const qs = (start.questions as any[]) ?? [];
+      if (qs.length > 0) {
+        setQuestions(qs);
+      } else {
+        const fetched = ((await api.getQuestions(subjectForStart.id)) as any[]) ?? [];
+        setQuestions(fetched);
+      }
+      seedTimer(start.startTime ?? new Date().toISOString(), Number(subjectForStart.duration));
+      setMode("in-progress");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start exam. The exam window might be closed.");
+      setMode("error" as any); // fallback mode, the render block catches `error` state regardless
     }
-    seedTimer(start.startTime ?? new Date().toISOString(), Number(subjectForStart.duration));
-    setMode("in-progress");
   }, [seedTimer]);
 
   useEffect(() => {

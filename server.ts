@@ -973,7 +973,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subjectId = Number(body?.subject_id);
     if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject_id");
     const subject = queries.getSubjectById.get(subjectId) as any;
-    if (!subject || !subject.is_published) return apiError(403, "Exam is not available");
+    if (!subject || !subject.is_timetable_published) return apiError(403, "Exam is not available");
     // Must be enrolled
     const enrollment = db.prepare(
       "SELECT id FROM subject_enrollments WHERE subject_id = ? AND student_id = ?"
@@ -982,7 +982,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const now = Date.now();
     const start = Date.parse(subject.exam_datetime);
     if (!Number.isFinite(start)) return apiError(500, "Invalid subject schedule");
-    const end = start + Number(subject.duration) * 60_000;
+    const end = start + Number(subject.window_duration || 120) * 60_000;
     if (now < start) return apiError(403, "Exam window not open yet");
     if (now >= end) return apiError(403, "Exam window has closed");
     const currentTerm = (queries.getSetting.get("CURRENT_TERM") as any)?.value || "";
