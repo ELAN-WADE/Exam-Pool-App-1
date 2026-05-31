@@ -68,7 +68,7 @@ function auditLog(actorId: number, action: string, resource: string, resourceId:
   }
 }
 
-let setupRequired = rowCount(queries.countUsers.get() as { count?: unknown }) === 0;
+let setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1431,6 +1431,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       } else {
         queries.deactivateUser.run(uid);
       }
+      setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
       auditLog(auth.userId, body.is_active ? "USER_ACTIVATE" : "USER_DEACTIVATE", "user", uid, "{}");
       return apiSuccess(queries.getUserById.get(uid));
     }
@@ -1458,6 +1459,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const hasExam = db.prepare("SELECT id FROM exams WHERE student_id = ? LIMIT 1").get(userId);
     if (hasExam) return apiError(409, "Cannot delete user with exam records");
     queries.deactivateUser.run(userId);
+    setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
     auditLog(auth.userId, "USER_DEACTIVATE", "user", userId, "{}");
     return apiMessage("User deactivated");
   }
@@ -1485,7 +1487,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!magic.startsWith("SQLite format 3")) return apiError(400, "Invalid SQLite file");
     await Bun.write(EXAMPOOL_DB_PATH, buffer);
     auditLog(auth.userId, "SETTINGS_IMPORT", "setting", null, "{}");
-    setupRequired = rowCount(queries.countUsers.get() as { count?: unknown }) === 0;
+    setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
     return apiMessage("Import successful. Restart the server to reload the database file.");
   }
 
