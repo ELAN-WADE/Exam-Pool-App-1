@@ -20,10 +20,16 @@ import {
 /** Next `distDir: "../dist"` → `exampool/dist`; some layouts use `exampool/frontend/dist`. */
 function resolveStaticDistDir(): string {
   const siblingDist = path.join(import.meta.dir, "dist");
-  const nestedFrontend = path.join(import.meta.dir, "frontend", "dist");
+  const siblingOut = path.join(import.meta.dir, "out");
+  const nestedFrontendDist = path.join(import.meta.dir, "frontend", "dist");
+  const nestedFrontendOut = path.join(import.meta.dir, "frontend", "out");
+  
+  if (existsSync(path.join(siblingOut, "index.html"))) return siblingOut;
   if (existsSync(path.join(siblingDist, "index.html"))) return siblingDist;
-  if (existsSync(path.join(nestedFrontend, "index.html"))) return nestedFrontend;
-  return siblingDist;
+  if (existsSync(path.join(nestedFrontendOut, "index.html"))) return nestedFrontendOut;
+  if (existsSync(path.join(nestedFrontendDist, "index.html"))) return nestedFrontendDist;
+  
+  return siblingOut;
 }
 
 const distDir = resolveStaticDistDir();
@@ -1511,6 +1517,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
 const server = serve({
   port: Number(Bun.env.PORT ?? 8000),
+  hostname: "0.0.0.0",
   async fetch(req) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
     const url = new URL(req.url);

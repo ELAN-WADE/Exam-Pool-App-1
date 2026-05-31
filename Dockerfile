@@ -11,13 +11,14 @@ RUN bun install
 # Copy all source files
 COPY . .
 
+ENV NODE_ENV=production
+
 # Build the frontend Next.js app
 RUN bun run build
 
 # Fly.io injects the PORT environment variable. We default to 8000.
 EXPOSE 8000
 ENV PORT=8000
-ENV NODE_ENV=production
 
 # Start the Bun server
 CMD ["bun", "run", "start"]
