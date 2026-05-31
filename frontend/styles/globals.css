@@ -275,7 +275,7 @@ button, [role="button"], input, select { min-height: 40px; }
   box-shadow: var(--shadow-sm);
   transition: box-shadow var(--duration) var(--ease), border-color var(--duration) var(--ease), transform var(--duration) var(--ease);
   width: 100%;
-  overflow: hidden;
+  overflow-x: auto;
 }
 .card:hover {
   box-shadow: var(--shadow-md);
@@ -344,6 +344,9 @@ button, [role="button"], input, select { min-height: 40px; }
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
   z-index: 10;
+}
+.tbl th, .tbl td {
+  white-space: nowrap;
 }
 .tbl tbody td { 
   padding: 1.25rem; 

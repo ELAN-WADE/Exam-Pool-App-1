@@ -65,7 +65,6 @@ function ExamContent() {
       await api.submitExamWithAnswers(examId, buildAnswerPayload());
       showToast("Exam submitted successfully!", "success");
       setMode("completed");
-      router.replace("/student/dashboard");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Submit failed", "error");
       setError(err instanceof Error ? err.message : "Submit failed");
@@ -251,6 +250,16 @@ function ExamContent() {
     </main>
   );
 
+  if (mode === "completed") return (
+    <main className={styles.errorState}>
+      <div style={{ textAlign: "center", padding: "3rem", background: "var(--color-surface)", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-md)" }}>
+        <h2 style={{ fontSize: "1.5rem", color: "var(--color-success)", marginBottom: "1rem" }}>You have finally completed the exam</h2>
+        <p style={{ color: "var(--color-muted)", marginBottom: "2rem" }}>Your answers have been saved and submitted successfully.</p>
+        <button className="btn btn-primary" onClick={() => router.replace("/student/dashboard")}>Return to Dashboard</button>
+      </div>
+    </main>
+  );
+
   const current       = questions[currentIndex];
   const timerClass    = remaining > 300 ? styles.green : remaining > 120 ? styles.yellow : styles.red;
   const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
@@ -347,7 +356,7 @@ function ExamContent() {
                 <img
                   src={current.image_url}
                   alt="Question diagram"
-                  style={{ maxWidth: "100%", borderRadius: "var(--radius-md)", marginBottom: "1.25rem", border: "1px solid var(--color-border)" }}
+                  className={styles.questionImg}
                 />
               )}
 

@@ -1328,8 +1328,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     // Operators get full access; teachers may only fetch student list (role=student)
     if (auth.role === "teacher") {
       if (role !== "student") return apiError(403, "Forbidden");
-      if (grade) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, reg_id, is_active, created_at FROM users WHERE role = 'student' AND grade = ?").all(grade));
-      return apiSuccess(db.prepare("SELECT id, name, email, role, grade, reg_id, is_active, created_at FROM users WHERE role = 'student'").all());
+      if (grade) return apiSuccess(db.prepare("SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND u.grade = ? AND s.teacher_id = ?").all(grade, auth.userId));
+      return apiSuccess(db.prepare("SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND s.teacher_id = ?").all(auth.userId));
     }
     requireRole(auth.role, ["operator"]);
     if (role && !isValidRoleParam(role)) return apiError(400, "Invalid role filter");
@@ -1406,7 +1406,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       orgName,
       trimStr(body?.licence_key) || current.licence_key || null,
       licType,
-      typeof body?.theme_json === "object" ? JSON.stringify(body.theme_json) : (current.theme_json || "{}"),
+      typeof body?.theme_json === "object" ? JSON.stringify(body.theme_json) : (typeof body?.theme_json === "string" ? body.theme_json : (current.theme_json || "{}")),
       trimStr(body?.version) || current.version || "1.0.0",
       trimStr(body?.admin_email) || current.admin_email || null,
     );
