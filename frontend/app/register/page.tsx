@@ -18,20 +18,21 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [successRegId, setSuccessRegId] = useState("");
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      await api.register({
+      const res = await api.register({
         name,
         email,
         password,
         role,
         ...(role === "student" ? { grade, dob } : { phone }),
       });
-      router.replace("/?message=Account%20created%2C%20please%20login");
+      setSuccessRegId(res.data.user.reg_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {
@@ -62,72 +63,111 @@ export default function RegisterPage() {
         <div className={styles.rightPane}>
           <div className={styles.formWrapper}>
             <h2>Create an account</h2>
-            <p className={styles.subtitle}>
-              Already have an account? <Link href="/" className={styles.link}>Log in</Link>
-            </p>
-
-            {error && (
-              <div className={styles.errorBanner}>
-                <WarningIcon width="16" height="16" />
-                {error}
-              </div>
-            )}
-
-            <form className={styles.form} onSubmit={onSubmit}>
-              <div className="field">
-                <label>Full Name</label>
-                <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" required />
-              </div>
-              {role === "teacher" && (
-                <div className="field">
-                  <label>Email Address</label>
-                  <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teacher@school.edu" required />
+            
+            {successRegId ? (
+              <div style={{ textAlign: "center", marginTop: "2rem" }}>
+                <div style={{
+                  background: "var(--color-success-subtle)",
+                  color: "var(--color-success)",
+                  padding: "1rem",
+                  borderRadius: "8px",
+                  marginBottom: "1.5rem"
+                }}>
+                  <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>Registration Successful!</p>
+                  <p style={{ margin: 0, fontSize: "0.9rem" }}>Please save your Registration ID. You can use it to log in or reset your password.</p>
                 </div>
-              )}
-              <div className="field">
-                <label>Password</label>
-                <input
-                  className="input"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a strong password"
-                  required
-                />
-              </div>
-              
-              <div className={styles.row}>
-                <div className="field" style={{ flex: 1 }}>
-                  <label>I am a...</label>
-                  <select className="select" value={role} onChange={(e) => setRole(e.target.value as "student" | "teacher")}>
-                    <option value="student">Student</option>
-                    <option value="teacher">Teacher</option>
-                  </select>
+                
+                <div style={{
+                  fontSize: "2rem",
+                  fontWeight: 800,
+                  letterSpacing: "2px",
+                  background: "var(--color-surface)",
+                  border: "1px solid var(--color-border)",
+                  padding: "1rem",
+                  borderRadius: "8px",
+                  marginBottom: "2rem"
+                }}>
+                  {successRegId}
                 </div>
-                {role === "student" && (
-                  <>
-                    <div className="field" style={{ flex: 1 }}>
-                      <label>Grade / Class</label>
-                      <input className="input" value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="e.g. Grade 10" required />
-                    </div>
-                    <div className="field" style={{ flex: 1, marginTop: "0.5rem" }}>
-                      <label>Date of Birth</label>
-                      <input className="input" type="date" value={dob} onChange={(e) => setDob(e.target.value)} required />
-                    </div>
-                  </>
-                )}
-                {role === "teacher" && (
-                  <div className="field" style={{ flex: 1 }}>
-                    <label>Phone Number</label>
-                    <input className="input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1234567890" required />
+                
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => router.push("/")}
+                  style={{ width: "100%", padding: "0.85rem" }}
+                >
+                  Proceed to Login
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className={styles.subtitle}>
+                  Already have an account? <Link href="/" className={styles.link}>Log in</Link>
+                </p>
+
+                {error && (
+                  <div className={styles.errorBanner}>
+                    <WarningIcon width="16" height="16" />
+                    {error}
                   </div>
                 )}
-              </div>
 
-              <button className="btn btn-primary" type="submit" disabled={submitting} style={{ width: "100%", padding: "0.85rem", marginTop: "0.5rem" }}>
-                {submitting ? "Creating account..." : "Create account"}
-              </button>
-            </form>
+                <form className={styles.form} onSubmit={onSubmit}>
+                  <div className="field">
+                    <label>Full Name</label>
+                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Doe" required />
+                  </div>
+                  {role === "teacher" && (
+                    <div className="field">
+                      <label>Email Address</label>
+                      <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teacher@school.edu" required />
+                    </div>
+                  )}
+                  <div className="field">
+                    <label>Password</label>
+                    <input
+                      className="input"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Create a strong password"
+                      required
+                    />
+                  </div>
+                  
+                  <div className={styles.row}>
+                    <div className="field" style={{ flex: 1 }}>
+                      <label>I am a...</label>
+                      <select className="select" value={role} onChange={(e) => setRole(e.target.value as "student" | "teacher")}>
+                        <option value="student">Student</option>
+                        <option value="teacher">Teacher</option>
+                      </select>
+                    </div>
+                    {role === "student" && (
+                      <>
+                        <div className="field" style={{ flex: 1 }}>
+                          <label>Grade / Class</label>
+                          <input className="input" value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="e.g. Grade 10" required />
+                        </div>
+                        <div className="field" style={{ flex: 1, marginTop: "0.5rem" }}>
+                          <label>Date of Birth</label>
+                          <input className="input" type="date" value={dob} onChange={(e) => setDob(e.target.value)} required />
+                        </div>
+                      </>
+                    )}
+                    {role === "teacher" && (
+                      <div className="field" style={{ flex: 1 }}>
+                        <label>Phone Number</label>
+                        <input className="input" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1234567890" required />
+                      </div>
+                    )}
+                  </div>
+
+                  <button className="btn btn-primary" type="submit" disabled={submitting} style={{ width: "100%", padding: "0.85rem", marginTop: "0.5rem" }}>
+                    {submitting ? "Creating account..." : "Create account"}
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         </div>
       </div>

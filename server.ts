@@ -400,7 +400,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (role === "student" && !dob) return apiError(400, "Date of Birth is required for student accounts");
     if (role === "teacher" && !phone) return apiError(400, "Phone number is required for teacher accounts");
     
-    const regId = `REG-${Date.now().toString(36).toUpperCase()}`;
+    const prefix = role === "teacher" ? "TCH" : "REG";
+    const regId = `${prefix}-${Date.now().toString(36).toUpperCase()}`;
     
     // Auto-generate dummy email for student if not provided
     if (role === "student" && !email) {
