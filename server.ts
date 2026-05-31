@@ -1539,10 +1539,11 @@ const interfaces = os.networkInterfaces();
 for (const [name, addresses] of Object.entries(interfaces)) {
   for (const addr of addresses ?? []) {
     if (addr.family === "IPv4" && !addr.internal) {
-      console.log(`[${name}] Students should open: http://${addr.address}:${server.port}`);
+      console.log(`[${name}] Local Network: http://${addr.address}:${server.port}`);
     }
   }
 }
+console.log("Note: If deployed on a cloud platform (Railway/Render), use your provided public domain.");
 console.log(`SQLite: ${EXAMPOOL_DB_PATH}`);
 console.log(`Static dist: ${distDir}`);
 console.log(`Setup required: ${setupRequired}`);
