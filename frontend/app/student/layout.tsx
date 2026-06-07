@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "../../components/ui/Sidebar";
 import { TopBar } from "../../components/ui/TopBar";
 
@@ -33,6 +34,11 @@ const studentNav = [
 
 export default function StudentLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pathname = usePathname();
+
+  if (pathname === "/student/exam" || pathname === "/student/exam/") {
+    return <>{children}</>;
+  }
 
   return (
     <div className="shell">

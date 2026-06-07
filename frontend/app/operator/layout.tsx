@@ -7,7 +7,7 @@ import { TopBar } from "../../components/ui/TopBar";
 
 const operatorNav = [
   {
-    href: "/operator/dashboard",
+    href: "/ADMIN/dashboard",
     label: "Dashboard",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -19,7 +19,7 @@ const operatorNav = [
     ),
   },
   {
-    href: "/operator/subjects",
+    href: "/ADMIN/subjects",
     label: "Subjects",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -29,7 +29,7 @@ const operatorNav = [
     ),
   },
   {
-    href: "/operator/timetable",
+    href: "/ADMIN/timetable",
     label: "Timetable",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -41,7 +41,7 @@ const operatorNav = [
     ),
   },
   {
-    href: "/operator/users",
+    href: "/ADMIN/users",
     label: "Users",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -53,7 +53,7 @@ const operatorNav = [
     ),
   },
   {
-    href: "/operator/report-card",
+    href: "/ADMIN/report-card",
     label: "Report Card",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -66,7 +66,7 @@ const operatorNav = [
     ),
   },
   {
-    href: "/operator/settings",
+    href: "/ADMIN/settings",
     label: "Settings",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

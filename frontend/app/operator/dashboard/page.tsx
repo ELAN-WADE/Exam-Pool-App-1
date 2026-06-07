@@ -80,9 +80,9 @@ function OperatorDashboard() {
   ];
 
   const quickLinks = [
-    { href: "/operator/subjects", label: "Manage Subjects", desc: "Create, assign & publish exams", icon: <BookIcon width="20" height="20" /> },
-    { href: "/operator/users",    label: "Manage Users",    desc: "Add teachers, students & operators", icon: <UsersIcon width="20" height="20" /> },
-    { href: "/operator/settings", label: "System Settings", desc: "Backup, restore & audit logs", icon: <SettingsIcon width="20" height="20" /> },
+    { href: "/ADMIN/subjects", label: "Manage Subjects", desc: "Create, assign & publish exams", icon: <BookIcon width="20" height="20" /> },
+    { href: "/ADMIN/users",    label: "Manage Users",    desc: "Add teachers, students & operators", icon: <UsersIcon width="20" height="20" /> },
+    { href: "/ADMIN/settings", label: "System Settings", desc: "Backup, restore & audit logs", icon: <SettingsIcon width="20" height="20" /> },
   ];
 
   return (
@@ -143,7 +143,7 @@ function OperatorDashboard() {
       <section className={`${styles.section} animate-enter`} style={{ animationDelay: "400ms" }}>
         <div className={styles.sectionHeader}>
           <span className={styles.sectionTitle}>Recent Subjects</span>
-          <Link href="/operator/subjects" className="btn btn-ghost btn-sm inline">View All →</Link>
+          <Link href="/ADMIN/subjects" className="btn btn-ghost btn-sm inline">View All →</Link>
         </div>
         {subjects.length > 0 ? (
           <div className={styles.tableCard}>
@@ -176,7 +176,7 @@ function OperatorDashboard() {
           <EmptyState
             title="No Subjects Yet"
             description="You haven't created any subjects yet. Get started by adding one."
-            action={<Link href="/operator/subjects" className="btn btn-primary">Create Subject</Link>}
+            action={<Link href="/ADMIN/subjects" className="btn btn-primary">Create Subject</Link>}
             icon={<BookIcon width="24" height="24" />}
           />
         )}

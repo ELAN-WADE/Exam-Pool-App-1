@@ -44,7 +44,7 @@ export default function SetupPage() {
       if (!result) return;
       await init();
       setStep(3); // Show success step before redirecting
-      setTimeout(() => router.replace("/operator/dashboard/"), 2000);
+      setTimeout(() => router.replace("/ADMIN/dashboard/"), 2000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Setup failed");
       setSubmitting(false);

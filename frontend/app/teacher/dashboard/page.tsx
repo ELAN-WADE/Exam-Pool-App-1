@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
+import { ReportCardModal } from "../../../components/Teacher/ReportCardModal";
 import { api } from "../../../lib/api";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
@@ -196,16 +196,16 @@ function TeacherDashboard() {
               {/* Card Actions */}
               <div className={styles.cardActions}>
                 <Link
-                  href={`/teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`}
+                  href={`/Teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`}
                   className={`btn btn-primary ${styles.actionBtn}`}
                 >
                   {isLive ? "View Questions" : "Manage Questions"}
                 </Link>
                 <div className={styles.actionRow}>
-                  <Link href={`/teacher/students?subjectId=${s.id}`} className={`btn btn-ghost ${styles.actionBtnSm}`}>
+                  <Link href={`/Teacher/students?subjectId=${s.id}`} className={`btn btn-ghost ${styles.actionBtnSm}`}>
                     <UsersIcon width="12" height="12" /> Students
                   </Link>
-                  <Link href="/teacher/results" className={`btn btn-ghost ${styles.actionBtnSm}`}>
+                  <Link href="/Teacher/results" className={`btn btn-ghost ${styles.actionBtnSm}`}>
                     <BookIcon width="12" height="12" /> Results
                   </Link>
                 </div>

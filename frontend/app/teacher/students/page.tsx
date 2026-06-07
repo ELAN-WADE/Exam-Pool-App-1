@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { ReviewModal } from "../../../components/teacher/ReviewModal";
+import { ReviewModal } from "../../../components/Teacher/ReviewModal";
 import { api } from "../../../lib/api";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib/gradeUtils";
 import { UsersIcon, SearchIcon, ArrowUpIcon, EyeIcon, DocumentIcon } from "../../../components/icons/Icons";
@@ -167,7 +167,7 @@ function StudentRoster() {
             </svg>
             Refresh
           </button>
-          <Link href="/teacher/dashboard" className="btn btn-ghost">← Back</Link>
+          <Link href="/Teacher/dashboard" className="btn btn-ghost">← Back</Link>
         </div>
       </div>
 
@@ -177,7 +177,7 @@ function StudentRoster() {
           {subjects.map((s) => (
             <Link
               key={s.id}
-              href={`/teacher/students?subjectId=${s.id}`}
+              href={`/Teacher/students?subjectId=${s.id}`}
               className={`${styles.tab} ${Number(s.id) === activeSubjectId ? styles.tabActive : ""}`}
             >
               {s.name}

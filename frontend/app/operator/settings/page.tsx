@@ -18,6 +18,7 @@ type Config = {
   theme_json?: string;
   version?: string;
   admin_email?: string;
+  registration_open?: boolean;
 };
 
 export default function OperatorSettingsPage() {
@@ -222,6 +223,21 @@ function SettingsContent() {
           <div className="field" style={{ marginTop: "0.5rem" }}>
             <label>Description</label>
             <textarea className={`input ${styles.textarea}`} rows={2} value={configForm.description ?? ""} onChange={(e) => setConfigForm({ ...configForm, description: e.target.value })} placeholder="Brief school description…" />
+          </div>
+
+          <div className="field" style={{ marginTop: "1rem", padding: "1rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)" }}>
+            <label style={{ margin: 0, fontWeight: 600, display: "flex", alignItems: "center", gap: "0.6rem", cursor: "pointer" }}>
+              <input 
+                type="checkbox" 
+                checked={configForm.registration_open ?? true} 
+                onChange={(e) => setConfigForm({ ...configForm, registration_open: e.target.checked })} 
+                style={{ width: "1.1rem", height: "1.1rem", accentColor: "var(--color-primary)" }} 
+              />
+              Allow Students & Teachers to Register
+            </label>
+            <p style={{ margin: "0.4rem 0 0 1.7rem", fontSize: "0.85rem", color: "var(--color-muted)" }}>
+              When enabled, anyone can create an account. When disabled, only Operators can add new users.
+            </p>
           </div>
 
           {/* ── School Logo Upload ── */}

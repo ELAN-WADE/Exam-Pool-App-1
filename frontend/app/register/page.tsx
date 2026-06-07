@@ -32,7 +32,7 @@ export default function RegisterPage() {
         role,
         ...(role === "student" ? { grade, dob } : { phone }),
       });
-      setSuccessRegId(res.data.user.reg_id);
+      setSuccessRegId(res.user.reg_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed");
     } finally {

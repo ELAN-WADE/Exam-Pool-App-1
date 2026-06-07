@@ -123,11 +123,41 @@ function apiSetupRequired() {
   return apiError(503, "Setup required", { setup: true });
 }
 
-async function readJson(req: Request): Promise<any> {
+async function readJson(req: Request, maxSize = 1048576): Promise<any> {
+  // Allow up to 50MB for database imports
+  if (req.url.includes("/api/settings/import")) maxSize = 52428800;
+
+  const contentLength = Number(req.headers.get("content-length"));
+  if (contentLength && contentLength > maxSize) {
+    throw new HttpError(413, "Payload Too Large");
+  }
+
+  const reader = req.body?.getReader();
+  if (!reader) return {};
+
+  let received = 0;
+  const chunks: Uint8Array[] = [];
   try {
-    return await req.json();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        received += value.length;
+        if (received > maxSize) throw new HttpError(413, "Payload Too Large");
+        chunks.push(value);
+      }
+    }
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(400, "Bad request stream");
+  }
+
+  const bodyString = Buffer.concat(chunks).toString("utf8");
+  if (!bodyString) return {};
+  try {
+    return JSON.parse(bodyString);
   } catch {
-    throw new HttpError(400, "Bad request");
+    throw new HttpError(400, "Invalid JSON");
   }
 }
 
@@ -251,6 +281,9 @@ async function serveStatic(urlPath: string): Promise<Response> {
     }
   }
   // Fallback SPA shell — also no-cache
+  if (!(await indexFile.exists())) {
+    return apiError(404, "Not found");
+  }
   return new Response(indexFile, {
     headers: {
       ...corsHeaders,
@@ -966,11 +999,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (method === "GET" && pathname === "/api/exams/active") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["student"]);
-    return apiSuccess(
-      db.prepare(
-        "SELECT e.*, s.name as subject_name, s.duration FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'in-progress'",
-      ).all(auth.userId),
-    );
+    const exams = db.prepare(
+      "SELECT e.*, s.name as subject_name, s.duration FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'in-progress'",
+    ).all(auth.userId);
+    return apiSuccess({ exams, server_time: new Date().toISOString() });
   }
 
   if (method === "POST" && pathname === "/api/exams/start") {
@@ -1389,7 +1421,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (method === "GET" && pathname === "/api/config") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
-    return apiSuccess(queries.getConfig.get() ?? {});
+    const configData = (queries.getConfig.get() as any) ?? {};
+    configData.registration_open = getRegistrationOpen();
+    return apiSuccess(configData);
   }
 
   if (method === "PUT" && pathname === "/api/config") {
@@ -1411,8 +1445,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       trimStr(body?.admin_email) || current.admin_email || null,
     );
     queries.upsertSetting.run("SCHOOL_NAME", orgName);
+    if (typeof body?.registration_open === "boolean") {
+      queries.upsertSetting.run("REGISTRATION_OPEN", body.registration_open ? "true" : "false");
+    }
     auditLog(auth.userId, "CONFIG_UPDATE", "config", 1, "{}");
-    return apiSuccess(queries.getConfig.get());
+    const updatedConfig = (queries.getConfig.get() as any) ?? {};
+    updatedConfig.registration_open = getRegistrationOpen();
+    return apiSuccess(updatedConfig);
   }
   // ── User profile update ───────────────────────────────────────────────────
   const userUpdateMatch = pathname.match(/^\/api\/users\/(\d+)$/);
@@ -1519,13 +1558,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 }
 
 const server = serve({
-  port: Number(Bun.env.PORT ?? 8000),
+  port: Number(Bun.env.PORT ?? 8001),
   hostname: "0.0.0.0",
   async fetch(req) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
     const url = new URL(req.url);
     try {
-      if (url.pathname.startsWith("/api/")) return await handleApi(req, url);
+      if (url.pathname.startsWith("/api/") || url.pathname === "/api") return await handleApi(req, url);
       return await serveStatic(url.pathname);
     } catch (error) {
       if (error instanceof HttpError) return apiError(error.status, error.message);

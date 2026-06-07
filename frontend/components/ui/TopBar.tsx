@@ -11,20 +11,20 @@ type Props = {
 };
 
 const BREADCRUMB_MAP: Record<string, string> = {
-  "/teacher/dashboard":  "Dashboard",
-  "/teacher/questions":  "Question Bank",
-  "/teacher/results":    "Exam Results",
-  "/teacher/students":   "Students",
-  "/teacher/settings":   "Settings",
+  "/Teacher/dashboard":  "Dashboard",
+  "/Teacher/questions":  "Question Bank",
+  "/Teacher/results":    "Exam Results",
+  "/Teacher/students":   "Students",
+  "/Teacher/settings":   "Settings",
   "/student/dashboard":  "Dashboard",
   "/student/exam":       "Exam Room",
   "/student/results":    "My Results",
   "/student/settings":   "Settings",
-  "/operator/dashboard": "Dashboard",
-  "/operator/subjects":  "Subjects",
-  "/operator/timetable": "Timetable",
-  "/operator/users":     "Users",
-  "/operator/settings":  "Settings",
+  "/ADMIN/dashboard": "Dashboard",
+  "/ADMIN/subjects":  "Subjects",
+  "/ADMIN/timetable": "Timetable",
+  "/ADMIN/users":     "Users",
+  "/ADMIN/settings":  "Settings",
 };
 
 export function TopBar({ onMenuClick, title }: Props) {

@@ -8,7 +8,7 @@ import type { NextConfig } from "next";
 const isVercel = process.env.VERCEL === "1";
 const isProd = process.env.NODE_ENV === "production" && !isVercel;
 
-const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const backendUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8001";
 
 const nextConfig: NextConfig = {
   ...(isProd && {

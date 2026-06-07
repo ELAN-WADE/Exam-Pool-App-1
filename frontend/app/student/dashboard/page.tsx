@@ -53,7 +53,9 @@ function DashboardContent() {
 
       setSubjects((subjectsData as any[]) ?? []);
       setResults((resultsData as any[]) ?? []);
-      setActiveExams((activeData as any[]) ?? []);
+      
+      const activeDataPayload = (activeData as any)?.exams ?? activeData;
+      setActiveExams((activeDataPayload as any[]) ?? []);
     } catch (err) {
       if (isInitial) setError(err instanceof Error ? err.message : "Failed to load dashboard");
     } finally {

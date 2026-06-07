@@ -7,8 +7,11 @@ import { useMonotonicTimer } from "../../../hooks/useMonotonicTimer";
 import { useSingleInstance } from "../../../hooks/useSingleInstance";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { useToast } from "../../../hooks/useToast";
-import { WarningIcon, ClockIcon, FlagIcon } from "../../../components/icons/Icons";
+import { WarningIcon, ClockIcon, FlagIcon, CheckCircleIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
+
+import { Scratchpad } from "../../../components/student/Scratchpad";
+import { Calculator } from "../../../components/student/Calculator";
 
 type Mode = "loading" | "starting" | "in-progress" | "submitting" | "completed";
 
@@ -42,6 +45,12 @@ function ExamContent() {
   const [timerSeed,         setTimerSeed]         = useState(0);
   const [isFocusMode,       setIsFocusMode]       = useState(false);
   const [showInstructions,  setShowInstructions]  = useState(false);
+  const [saveStatus,        setSaveStatus]        = useState<"idle" | "syncing" | "saved" | "offline">("idle");
+  const [cheatWarnings,     setCheatWarnings]     = useState(0);
+  const [isTabFocused,      setIsTabFocused]      = useState(true);
+  const [scoreResult,       setScoreResult]       = useState<{score: number, total_score: number} | null>(null);
+  const [showScratchpad,    setShowScratchpad]    = useState(false);
+  const [showCalculator,    setShowCalculator]    = useState(false);
 
   const answersRef = useRef(answers);
   useEffect(() => { answersRef.current = answers; }, [answers]);
@@ -62,9 +71,11 @@ function ExamContent() {
     isSubmittingRef.current = true;
     setMode("submitting");
     try {
-      await api.submitExamWithAnswers(examId, buildAnswerPayload());
+      const res = await api.submitExamWithAnswers(examId, buildAnswerPayload());
+      setScoreResult(res as any);
       showToast("Exam submitted successfully!", "success");
       setMode("completed");
+      fireConfetti();
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Submit failed", "error");
       setError(err instanceof Error ? err.message : "Submit failed");
@@ -93,8 +104,9 @@ function ExamContent() {
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [mode]);
 
-  const seedTimer = useCallback((startTimeIso: string, durationMins: number) => {
-    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(startTimeIso)) / 1000));
+  const seedTimer = useCallback((startTimeIso: string, durationMins: number, serverTimeIso?: string) => {
+    const now = serverTimeIso ? Date.parse(serverTimeIso) : Date.now();
+    const elapsed = Math.max(0, Math.floor((now - Date.parse(startTimeIso)) / 1000));
     const seed    = Math.max(0, durationMins * 60 - elapsed);
     setTimerSeed(seed);
   }, []);
@@ -102,11 +114,15 @@ function ExamContent() {
   const startExam = useCallback(async (subjectForStart: any) => {
     setMode("starting");
     try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen().catch(() => console.warn("Fullscreen denied"));
+      }
       const start = await api.startExam(subjectForStart.id) as any;
       if (!start) throw new Error("Could not start exam — check that the exam window is open");
       const id = Number(start.examId ?? start.exam?.id);
       if (!id) throw new Error("Server did not return exam ID");
       setExamId(id);
+      localStorage.removeItem(`exam_answers_${id}`);
       const qs = (start.questions as any[]) ?? [];
       if (qs.length > 0) {
         setQuestions(qs);
@@ -114,7 +130,7 @@ function ExamContent() {
         const fetched = ((await api.getQuestions(subjectForStart.id)) as any[]) ?? [];
         setQuestions(fetched);
       }
-      seedTimer(start.startTime ?? new Date().toISOString(), Number(subjectForStart.duration));
+      seedTimer(start.startTime ?? new Date().toISOString(), Number(subjectForStart.duration), start.server_time);
       setMode("in-progress");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start exam. The exam window might be closed.");
@@ -136,21 +152,29 @@ function ExamContent() {
         const s = ((subjects as any[]) ?? []).find((item) => Number(item.id) === subjectId);
         if (!s) throw new Error("Subject not found or you are not enrolled");
         setSubject(s);
-        const inProgress = ((activeExams as any[]) ?? []).find(
+        const activeExamsPayload = (activeExams as any)?.exams ?? activeExams;
+        const serverTime = (activeExams as any)?.server_time;
+
+        const inProgress = ((activeExamsPayload as any[]) ?? []).find(
           (item) => Number(item.subject_id) === subjectId,
         );
         if (inProgress) {
           setExamId(Number(inProgress.id));
           try {
-            const saved = JSON.parse(inProgress.answers_json || "[]") as Array<{
-              question_id: number; selected_option?: number | null; essay_response?: string | null;
-            }>;
-            const mapped: Record<number, number | string> = {};
-            for (const entry of saved) {
-              if (entry.selected_option !== null && entry.selected_option !== undefined) {
-                mapped[entry.question_id] = entry.selected_option;
-              } else if (entry.essay_response) {
-                mapped[entry.question_id] = entry.essay_response;
+            let mapped: Record<number, number | string> = {};
+            const ls = localStorage.getItem(`exam_answers_${inProgress.id}`);
+            if (ls) {
+              mapped = JSON.parse(ls);
+            } else {
+              const saved = JSON.parse(inProgress.answers_json || "[]") as Array<{
+                question_id: number; selected_option?: number | null; essay_response?: string | null;
+              }>;
+              for (const entry of saved) {
+                if (entry.selected_option !== null && entry.selected_option !== undefined) {
+                  mapped[entry.question_id] = entry.selected_option;
+                } else if (entry.essay_response) {
+                  mapped[entry.question_id] = entry.essay_response;
+                }
               }
             }
             setAnswers(mapped);
@@ -158,7 +182,7 @@ function ExamContent() {
           const qs = ((await api.getQuestions(subjectId)) as any[]) ?? [];
           if (!mounted) return;
           setQuestions(qs);
-          seedTimer(inProgress.start_time, Number(s.duration));
+          seedTimer(inProgress.start_time, Number(s.duration), serverTime);
           setShowResume(true);
         } else {
           setShowInstructions(true);
@@ -171,12 +195,68 @@ function ExamContent() {
   }, [subjectId, startExam, seedTimer]);
 
   useEffect(() => {
+    if (!examId || mode !== "in-progress") return;
+    localStorage.setItem(`exam_answers_${examId}`, JSON.stringify(answers));
+  }, [answers, examId, mode]);
+
+  useEffect(() => {
     if (mode !== "in-progress" || !examId) return;
     const id = setInterval(() => {
-      api.saveExam(examId, buildAnswerPayload()).catch(() => undefined);
-    }, 30_000);
+      if (!navigator.onLine) {
+        setSaveStatus("offline");
+        return;
+      }
+      setSaveStatus("syncing");
+      api.saveExam(examId, buildAnswerPayload())
+        .then(() => {
+          setSaveStatus("saved");
+          setTimeout(() => setSaveStatus("idle"), 3000);
+        })
+        .catch(() => setSaveStatus("offline"));
+    }, 30_000 + Math.floor(Math.random() * 5000));
     return () => clearInterval(id);
   }, [mode, examId, buildAnswerPayload]);
+
+  useEffect(() => {
+    if (mode !== "in-progress") return;
+    const onBlur = () => {
+      setIsTabFocused(false);
+      setCheatWarnings((w) => {
+        const next = w + 1;
+        if (next >= 3) {
+           handleSubmit();
+        } else {
+           showToast(`Warning: Please stay on the exam tab. (${next}/3 warnings)`, "error");
+        }
+        return next;
+      });
+    };
+    const onFocus = () => setIsTabFocused(true);
+
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    
+    const onFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        setCheatWarnings((w) => {
+          const next = w + 1;
+          if (next >= 3) {
+             handleSubmit();
+          } else {
+             showToast(`Warning: You exited fullscreen. (${next}/3 warnings)`, "error");
+          }
+          return next;
+        });
+      }
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, [mode, handleSubmit, showToast]);
 
   useEffect(() => {
     if (mode !== "in-progress") return;
@@ -200,8 +280,18 @@ function ExamContent() {
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, questions, currentIndex]);
 
-  const handleResumeContinue = () => { setShowResume(false); setMode("in-progress"); };
-  const handleResumeReset    = () => { setAnswers({}); setFlags({}); setShowResume(false); setMode("in-progress"); };
+  const handleResumeContinue = async () => { 
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen().catch(() => {});
+    setShowResume(false); 
+    setMode("in-progress"); 
+  };
+  const handleResumeReset    = async () => { 
+    if (!document.fullscreenElement) await document.documentElement.requestFullscreen().catch(() => {});
+    setAnswers({}); 
+    setFlags({}); 
+    setShowResume(false); 
+    setMode("in-progress"); 
+  };
 
   // ── Render gates ──────────────────────────────────
   if (blocked) {
@@ -252,21 +342,22 @@ function ExamContent() {
 
   if (mode === "completed") return (
     <main className={styles.errorState}>
-      <div style={{ textAlign: "center", padding: "3rem", background: "var(--color-surface)", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-md)" }}>
-        <h2 style={{ fontSize: "1.5rem", color: "var(--color-success)", marginBottom: "1rem" }}>You have finally completed the exam</h2>
-        <p style={{ color: "var(--color-muted)", marginBottom: "2rem" }}>Your answers have been saved and submitted successfully.</p>
-        <button className="btn btn-primary" onClick={() => router.replace("/student/dashboard")}>Return to Dashboard</button>
+      <div style={{ textAlign: "center", padding: "3rem", background: "var(--color-surface)", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-md)", minWidth: "360px" }}>
+        <h2 style={{ fontSize: "1.5rem", color: "var(--color-success)", marginBottom: "1.5rem" }}>Exam Completed Successfully</h2>
+        {scoreResult && <DonutChart score={scoreResult.score} total={scoreResult.total_score} />}
+        <p style={{ color: "var(--color-muted)", marginBottom: "2rem" }}>Your answers have been saved and graded.</p>
+        <button className="btn btn-primary" onClick={() => router.replace("/student/dashboard")} style={{ width: "100%" }}>Return to Dashboard</button>
       </div>
     </main>
   );
 
   const current       = questions[currentIndex];
-  const timerClass    = remaining > 300 ? styles.green : remaining > 120 ? styles.yellow : styles.red;
+  const timerClass    = remaining > 300 ? styles.green : remaining > 60 ? styles.yellow : styles.red;
   const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
   const flaggedCount  = questions.filter((q) => flags[q.id]).length;
 
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} ${!isTabFocused ? styles.blurred : ""}`}>
 
       {/* ── Resume modal ── */}
       {showResume && (
@@ -316,18 +407,38 @@ function ExamContent() {
         <p className={timerClass} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.95rem", flexShrink: 0 }}>
           <ClockIcon width="15" height="15" /> {formatTime(remaining)}
         </p>
+
+        {/* Auto-Save Indicator */}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.75rem", flexShrink: 0, minWidth: "100px", justifyContent: "center" }}>
+          {saveStatus === "syncing" && <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> <span style={{ color: "var(--color-muted)" }}>Syncing...</span></>}
+          {saveStatus === "saved" && <><CheckCircleIcon width="14" height="14" style={{ color: "var(--color-success)" }} /> <span style={{ color: "var(--color-success)" }}>Saved to Server</span></>}
+          {saveStatus === "offline" && <><WarningIcon width="14" height="14" style={{ color: "var(--color-warning)" }} /> <span style={{ color: "var(--color-warning)" }}>Queued Offline</span></>}
+        </div>
+
         <p style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.25rem", flexShrink: 0 }}>
           <span style={{ color: online ? "#22c55e" : "#ef4444", fontSize: "1.1rem" }}>●</span>
           <span style={{ color: "var(--color-muted)" }}>{online ? "Live" : "Offline"}</span>
         </p>
-        <button
-          className="btn btn-ghost"
-          style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", marginLeft: "1rem" }}
-          onClick={() => setIsFocusMode(!isFocusMode)}
-        >
-          {isFocusMode ? "Exit Focus" : "Focus Mode"}
-        </button>
+        <div className={styles.topbarRight}>
+          <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }} onClick={() => setShowScratchpad(!showScratchpad)}>
+            Scratchpad
+          </button>
+          <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }} onClick={() => setShowCalculator(!showCalculator)}>
+            Calculator
+          </button>
+          <button
+            className="btn btn-ghost"
+            style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", marginLeft: "1rem" }}
+            onClick={() => setIsFocusMode(!isFocusMode)}
+          >
+            {isFocusMode ? "Exit Focus" : "Focus Mode"}
+          </button>
+        </div>
       </header>
+
+      {/* Tools Overlays */}
+      {showScratchpad && <Scratchpad onClose={() => setShowScratchpad(false)} />}
+      {showCalculator && <Calculator onClose={() => setShowCalculator(false)} />}
 
       {/* ── Main two-panel area ── */}
       <div className={`${styles.examBody} ${isFocusMode ? styles.focusMode : ""}`}>
@@ -350,45 +461,51 @@ function ExamContent() {
                 )}
               </div>
 
-              <p className={styles.questionText}>{current.question_text}</p>
+              <div className={current.image_url ? styles.questionSplitLayout : ""}>
+                {current.image_url && (
+                  <div className={styles.imageWrapper}>
+                    <img
+                      src={current.image_url}
+                      alt="Question diagram"
+                      className={styles.questionImg}
+                    />
+                  </div>
+                )}
 
-              {current.image_url && (
-                <img
-                  src={current.image_url}
-                  alt="Question diagram"
-                  className={styles.questionImg}
-                />
-              )}
+                <div className={current.image_url ? styles.questionContentRight : ""}>
+                  <p className={styles.questionText}>{current.question_text}</p>
 
-              {current.question_type === "essay" ? (
-                <textarea
-                  className={styles.essayTextarea}
-                  placeholder="Write your answer here…"
-                  value={(answers[current.id] as string) || ""}
-                  onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
-                />
-              ) : (
-                <div className={styles.options}>
-                  {safeOptions(current.options_json)
-                    .slice(0, current.question_type === "true_false" ? 2 : 4)
-                    .map((option, idx) =>
-                      option || current.question_type !== "objective" ? (
-                        <button
-                          key={idx}
-                          className={answers[current.id] === idx ? styles.optionActive : styles.option}
-                          onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
-                        >
-                          <span className={styles.optionLabel}>
-                            {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
-                          </span>
-                          {current.question_type === "true_false"
-                            ? ["True", "False"][idx]
-                            : option}
-                        </button>
-                      ) : null
-                    )}
+                  {current.question_type === "essay" ? (
+                    <textarea
+                      className={styles.essayTextarea}
+                      placeholder="Write your answer here…"
+                      value={(answers[current.id] as string) || ""}
+                      onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                    />
+                  ) : (
+                    <div className={styles.options}>
+                      {safeOptions(current.options_json)
+                        .slice(0, current.question_type === "true_false" ? 2 : 4)
+                        .map((option, idx) =>
+                          option || current.question_type !== "objective" ? (
+                            <button
+                              key={idx}
+                              className={answers[current.id] === idx ? styles.optionActive : styles.option}
+                              onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
+                            >
+                              <span className={styles.optionLabel}>
+                                {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
+                              </span>
+                              {current.question_type === "true_false"
+                                ? ["True", "False"][idx]
+                                : option}
+                            </button>
+                          ) : null
+                        )}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           ) : (
             <div className={styles.questionCard}>
@@ -491,4 +608,45 @@ function formatTime(totalSeconds: number): string {
   const m = Math.floor((totalSeconds % 3600) / 60).toString().padStart(2, "0");
   const s = (totalSeconds % 60).toString().padStart(2, "0");
   return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
+}
+
+function fireConfetti() {
+  const script = document.createElement("script");
+  script.src = "https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js";
+  script.onload = () => {
+    (window as any).confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+  };
+  document.body.appendChild(script);
+}
+
+function DonutChart({ score, total }: { score: number; total: number }) {
+  const [value, setValue] = useState(0);
+  const percentage = total > 0 ? (score / total) * 100 : 0;
+  
+  useEffect(() => {
+    const timer = setTimeout(() => setValue(percentage), 100);
+    return () => clearTimeout(timer);
+  }, [percentage]);
+
+  const radius = 60;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (value / 100) * circumference;
+
+  return (
+    <div style={{ position: "relative", width: "160px", height: "160px", margin: "0 auto 2rem" }}>
+      <svg width="160" height="160" viewBox="0 0 160 160" style={{ transform: "rotate(-90deg)" }}>
+        <circle cx="80" cy="80" r={radius} fill="none" stroke="var(--color-border)" strokeWidth="12" />
+        <circle cx="80" cy="80" r={radius} fill="none" stroke="var(--color-primary)" strokeWidth="12"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          style={{ transition: "stroke-dashoffset 1.5s cubic-bezier(0.25, 1, 0.5, 1)" }}
+          strokeLinecap="round"
+        />
+      </svg>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+        <span style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--color-primary)", lineHeight: 1 }}>{Math.round(value)}%</span>
+        <span style={{ fontSize: "0.75rem", color: "var(--color-muted)", marginTop: "4px" }}>{score} / {total} marks</span>
+      </div>
+    </div>
+  );
 }

@@ -252,7 +252,7 @@ function QuestionsContent() {
         <LockIcon width="48" height="48" />
         <h2>No Subject Selected</h2>
         <p>Go to your dashboard and click "Manage Questions" on a subject.</p>
-        <Link href="/teacher/dashboard" className="btn btn-primary" style={{ marginTop: "0.5rem" }}>
+        <Link href="/Teacher/dashboard" className="btn btn-primary" style={{ marginTop: "0.5rem" }}>
           Go to Dashboard
         </Link>
       </div>
@@ -480,7 +480,7 @@ function QuestionsContent() {
 
       <div className="pageHeader">
         <div>
-          <Link href="/teacher/dashboard" className={styles.backLink}>← Back to Dashboard</Link>
+          <Link href="/Teacher/dashboard" className={styles.backLink}>← Back to Dashboard</Link>
           <h1 className="pageTitle" style={{ marginTop: "0.25rem" }}>{subject?.name ?? "Questions"}</h1>
           {subject && (
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem", flexWrap: "wrap" }}>

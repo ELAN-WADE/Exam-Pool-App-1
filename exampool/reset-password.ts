@@ -2,7 +2,7 @@ import db from "./db.ts";
 import { hashPassword } from "./auth.ts";
 
 async function resetPassword() {
-  const email = "admin@test.com";
+  const email = "elanwadeonline@gmail.com";
   const newPassword = "Password123!";
   
   const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);

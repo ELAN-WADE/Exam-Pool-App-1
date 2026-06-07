@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "../../components/ui/Sidebar";
 import { TopBar } from "../../components/ui/TopBar";
 
 const teacherNav = [
   {
-    href: "/teacher/dashboard",
+    href: "/Teacher/dashboard",
     label: "Dashboard",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -19,7 +20,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/teacher/questions",
+    href: "/Teacher/questions",
     label: "Questions",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -30,7 +31,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/teacher/results",
+    href: "/Teacher/results",
     label: "Results",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -41,7 +42,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/teacher/students",
+    href: "/Teacher/students",
     label: "Students",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -53,7 +54,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/teacher/report-card",
+    href: "/Teacher/report-card",
     label: "Report Card",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -66,7 +67,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/teacher/settings",
+    href: "/Teacher/settings",
     label: "Settings",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -79,6 +80,12 @@ const teacherNav = [
 
 export default function TeacherLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const pathname = usePathname();
+
+  const lowerPath = pathname.toLowerCase();
+  if (lowerPath === "/teacher" || lowerPath === "/teacher/") {
+    return <>{children}</>;
+  }
 
   return (
     <div className="shell">
