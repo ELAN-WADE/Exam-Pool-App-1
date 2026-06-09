@@ -196,16 +196,16 @@ function TeacherDashboard() {
               {/* Card Actions */}
               <div className={styles.cardActions}>
                 <Link
-                  href={`/Teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`}
+                  href={`/teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`}
                   className={`btn btn-primary ${styles.actionBtn}`}
                 >
                   {isLive ? "View Questions" : "Manage Questions"}
                 </Link>
                 <div className={styles.actionRow}>
-                  <Link href={`/Teacher/students?subjectId=${s.id}`} className={`btn btn-ghost ${styles.actionBtnSm}`}>
+                  <Link href={`/teacher/students?subjectId=${s.id}`} className={`btn btn-ghost ${styles.actionBtnSm}`}>
                     <UsersIcon width="12" height="12" /> Students
                   </Link>
-                  <Link href="/Teacher/results" className={`btn btn-ghost ${styles.actionBtnSm}`}>
+                  <Link href="/teacher/results" className={`btn btn-ghost ${styles.actionBtnSm}`}>
                     <BookIcon width="12" height="12" /> Results
                   </Link>
                 </div>

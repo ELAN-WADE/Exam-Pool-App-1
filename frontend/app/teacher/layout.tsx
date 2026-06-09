@@ -8,7 +8,7 @@ import { TopBar } from "../../components/ui/TopBar";
 
 const teacherNav = [
   {
-    href: "/Teacher/dashboard",
+    href: "/teacher/dashboard",
     label: "Dashboard",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -20,7 +20,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/Teacher/questions",
+    href: "/teacher/questions",
     label: "Questions",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -31,7 +31,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/Teacher/results",
+    href: "/teacher/results",
     label: "Results",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -42,7 +42,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/Teacher/students",
+    href: "/teacher/students",
     label: "Students",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -54,7 +54,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/Teacher/report-card",
+    href: "/teacher/report-card",
     label: "Report Card",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -67,7 +67,7 @@ const teacherNav = [
     ),
   },
   {
-    href: "/Teacher/settings",
+    href: "/teacher/settings",
     label: "Settings",
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

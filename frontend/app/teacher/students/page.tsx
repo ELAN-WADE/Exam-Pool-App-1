@@ -167,7 +167,7 @@ function StudentRoster() {
             </svg>
             Refresh
           </button>
-          <Link href="/Teacher/dashboard" className="btn btn-ghost">← Back</Link>
+          <Link href="/teacher/dashboard" className="btn btn-ghost">← Back</Link>
         </div>
       </div>
 
@@ -177,7 +177,7 @@ function StudentRoster() {
           {subjects.map((s) => (
             <Link
               key={s.id}
-              href={`/Teacher/students?subjectId=${s.id}`}
+              href={`/teacher/students?subjectId=${s.id}`}
               className={`${styles.tab} ${Number(s.id) === activeSubjectId ? styles.tabActive : ""}`}
             >
               {s.name}

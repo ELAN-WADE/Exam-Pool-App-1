@@ -71,7 +71,7 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
         window.location.href = "/student/dashboard/";
       });
     } else if (user.role === "teacher") {
-      window.location.href = "/Teacher/dashboard/";
+      window.location.href = "/teacher/dashboard/";
     } else {
       window.location.href = "/ADMIN/dashboard/";
     }

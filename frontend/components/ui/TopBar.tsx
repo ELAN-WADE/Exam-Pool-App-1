@@ -11,11 +11,11 @@ type Props = {
 };
 
 const BREADCRUMB_MAP: Record<string, string> = {
-  "/Teacher/dashboard":  "Dashboard",
-  "/Teacher/questions":  "Question Bank",
-  "/Teacher/results":    "Exam Results",
-  "/Teacher/students":   "Students",
-  "/Teacher/settings":   "Settings",
+  "/teacher/dashboard":  "Dashboard",
+  "/teacher/questions":  "Question Bank",
+  "/teacher/results":    "Exam Results",
+  "/teacher/students":   "Students",
+  "/teacher/settings":   "Settings",
   "/student/dashboard":  "Dashboard",
   "/student/exam":       "Exam Room",
   "/student/results":    "My Results",
