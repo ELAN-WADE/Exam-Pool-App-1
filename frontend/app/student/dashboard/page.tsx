@@ -43,10 +43,11 @@ function DashboardContent() {
         const start = new Date(s.exam_datetime).getTime();
         const end = start + Number(s.window_duration || 120) * 60_000;
         const isTaken = (resultsData as any[]).some(r => Number(r.subject_id) === Number(s.id));
-        return !isTaken && now >= start && now < end;
+        return !isTaken && s.is_published === 1 && now >= start && now < end;
       });
       
       if (activeOne) {
+        // Exam is live and published. Auto-route the student.
         router.replace(`/student/exam?subjectId=${activeOne.id}`);
         return;
       }
@@ -87,8 +88,9 @@ function DashboardContent() {
         return acc + (Number(curr.score ?? 0) / total) * 100;
       }, 0) / taken.length,
     );
-    return { available: subjects.length, examsTaken: taken.length, avgScore: avg };
-  }, [subjects, results]);
+    const available = subjects.filter(s => !takenIds.has(Number(s.id))).length;
+    return { available, examsTaken: taken.length, avgScore: avg };
+  }, [subjects, results, takenIds]);
 
   const firstName = user?.name?.split(" ")[0] ?? "Student";
 
@@ -116,14 +118,37 @@ function DashboardContent() {
       <div className={`${styles.welcomeBanner} animate-enter`}>
         <div className={styles.welcomeText}>
           <h1 className={styles.greeting}>Hello, {firstName}! 👋</h1>
-          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {subjects.length} exam{subjects.length !== 1 ? "s" : ""} available</p>
+          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} exam{stats.available !== 1 ? "s" : ""} pending</p>
         </div>
       </div>
+
+      {/* Live Exam Alert Banner */}
+      {subjects.filter(s => {
+        const now = currentTime;
+        const start = new Date(s.exam_datetime).getTime();
+        const end = start + Number(s.window_duration || 120) * 60_000;
+        return !takenIds.has(Number(s.id)) && s.is_published === 1 && now >= start && now < end;
+      }).map(activeExam => (
+        <div key={`alert-${activeExam.id}`} className="animate-enter" style={{ background: "var(--color-primary)", color: "#fff", padding: "1.25rem 1.5rem", borderRadius: "var(--radius-xl)", marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "var(--shadow-sm)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.2)", padding: "0.5rem", borderRadius: "50%", display: "flex" }}>
+              <PlayIcon width="24" height="24" />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>🔥 Exam Live: {activeExam.name}</h3>
+              <p style={{ margin: 0, fontSize: "0.9rem", opacity: 0.9 }}>This exam is now open. You will be automatically routed in a few seconds, or click to enter now.</p>
+            </div>
+          </div>
+          <Link href={`/student/exam?subjectId=${activeExam.id}`} className="btn" style={{ background: "#fff", color: "var(--color-primary)", fontWeight: 800, whiteSpace: "nowrap" }}>
+            Enter Now →
+          </Link>
+        </div>
+      ))}
 
       {/* Stats Row */}
       <div className={styles.statsRow}>
         <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "50ms", "--accent": "var(--color-primary)" } as React.CSSProperties}>
-          <div className={styles.statIconBox} style={{ background: "var(--color-primary-glow)", color: "var(--color-primary)" }}>
+          <div className={styles.statIconBox} style={{ background: "rgba(20, 184, 166, 0.12)", color: "var(--color-primary)" }}>
             <BookIcon width="22" height="22" />
           </div>
           <div className={styles.statData}>
@@ -169,7 +194,7 @@ function DashboardContent() {
                   </span>
                   {category === "active" && (
                     <div className={styles.refreshIndicator}>
-                      <span className={`${styles.refreshDot} ${styles.spinning}`} />
+                      <span className={styles.refreshDot} />
                       Auto-refreshing
                     </div>
                   )}
@@ -206,12 +231,12 @@ function DashboardContent() {
                       >
                         <div className={styles.cardContent}>
                           <div className={styles.cardTop}>
-                            <div className={`${styles.subjectIconBox} ${isOpen && !isTaken ? styles.openRing : ""}`}>
+                            <div className={styles.subjectIconBox}>
                               <SubjectIcon width="16" height="16" />
                             </div>
                             <div>
                               {isTaken    && <span className="badge badge-success">✓ Done</span>}
-                              {!isTaken && isOpen     && <span className="badge badge-success" style={{ animation: "pulse 2s infinite" }}>● Open</span>}
+                              {!isTaken && isOpen     && <span className="badge badge-success">● Open</span>}
                               {!isTaken && isClosed   && <span className="badge badge-muted">Closed</span>}
                               {!isTaken && isUpcoming && <span className="badge badge-info">Upcoming</span>}
                             </div>

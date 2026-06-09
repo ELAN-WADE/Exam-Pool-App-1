@@ -19,13 +19,7 @@
   transition: all var(--duration) var(--ease);
 }
 .pill:hover { box-shadow: var(--shadow-md); border-color: var(--color-border-hover); }
-.pill::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--accent, transparent);
-}
+/* Bottom accent line removed per user request for a cleaner look */
 .pillNum {
   color: var(--color-text);
   font-weight: 900;

@@ -1,6 +1,6 @@
 /** Shared input validation for HTTP handlers (keeps server.ts readable). */
 
-export const MIN_PASSWORD_LENGTH = 6;
+export const MIN_PASSWORD_LENGTH = 8;
 
 export function trimStr(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";

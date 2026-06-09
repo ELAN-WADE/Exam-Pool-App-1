@@ -165,14 +165,16 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
           </div>
         </div>
 
-        <button type="submit" className={styles.submitBtn} disabled={submitting}>
-          {submitting ? (
-            <>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
-              Signing in…
-            </>
-          ) : "Sign in →"}
-        </button>
+        <div style={{ display: "flex", justifyContent: "flex-start", marginTop: "0.25rem" }}>
+          <button type="submit" className={styles.submitBtn} disabled={submitting} style={{ width: "30%", minWidth: "120px" }}>
+            {submitting ? (
+              <>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
+                Signing in…
+              </>
+            ) : "Sign in →"}
+          </button>
+        </div>
       </form>
 
       <div className={styles.status}>

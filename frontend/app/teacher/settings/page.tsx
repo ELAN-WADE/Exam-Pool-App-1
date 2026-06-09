@@ -5,6 +5,7 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { ChangePasswordModal } from "../../../components/auth/ChangePasswordModal";
 import { useAuth } from "../../../hooks/useAuth";
 import { LockIcon } from "../../../components/icons/Icons";
+import Link from "next/link";
 import styles from "./page.module.css";
 
 export default function TeacherSettingsPage() {
@@ -25,11 +26,11 @@ function TeacherSettings() {
     <>
       {showPwModal && <ChangePasswordModal onClose={() => setShowPwModal(false)} />}
 
-      <div className="pageHeader">
-        <h1 className="pageTitle">Account Settings</h1>
-      </div>
-
       <div className={styles.page}>
+        <div className="pageHeader" style={{ padding: "0 0.5rem" }}>
+          <h1 className="pageTitle">My Profile</h1>
+          <Link href="/teacher/dashboard" className="btn btn-ghost">← Dashboard</Link>
+        </div>
 
         {/* ── Profile Card ── */}
         <div className={styles.profileCard}>

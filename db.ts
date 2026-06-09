@@ -144,7 +144,9 @@ export function initializeDatabase(): void {
   addColumnIfMissing("exams", "session",           "TEXT");
   addColumnIfMissing("exams", "term",              "TEXT");
   addColumnIfMissing("exams", "mode",              "TEXT");
-  addColumnIfMissing("exams", "total_score",       "INTEGER");
+  addColumnIfMissing("exams", "total_score",       "INTEGER NOT NULL DEFAULT 0");
+  // v6: backfill any legacy NULL total_score rows to 0 to prevent NULL arithmetic in score % calculations
+  db.run("UPDATE exams SET total_score = 0 WHERE total_score IS NULL");
   // v4: denormalised reg_id for fast result lookup
   addColumnIfMissing("exams", "reg_id",            "TEXT");
   // v5: per-student per-exam remarks
@@ -221,6 +223,9 @@ export function initializeDatabase(): void {
   db.run("CREATE INDEX IF NOT EXISTS idx_exams_student      ON exams(student_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_exams_subject      ON exams(subject_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_exams_status       ON exams(status)");
+  // Composite covering index — used by every dashboard and results query
+  db.run("CREATE INDEX IF NOT EXISTS idx_exams_student_status   ON exams(student_id, status)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_exams_subject_status   ON exams(subject_id, status)");
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_actor        ON audit_logs(actor_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON audit_logs(timestamp)");
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_resource     ON audit_logs(resource, resource_id)");
@@ -229,6 +234,11 @@ export function initializeDatabase(): void {
   db.run("CREATE INDEX IF NOT EXISTS idx_sa_student    ON student_answers(student_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_sa_question   ON student_answers(question_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_sa_subject    ON student_answers(subject_id)");
+  // Composite covering index for exam review joins
+  db.run("CREATE INDEX IF NOT EXISTS idx_sa_exam_question ON student_answers(exam_id, question_id)");
+
+  // Run SQLite's built-in statistics analyzer so the query planner uses all new indexes effectively
+  db.run("PRAGMA optimize");
 
   // ── subject_enrollments ───────────────────────────────────────────────────
   // Operator assigns students to specific subjects.
@@ -287,7 +297,7 @@ export const queries = {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getUserById:    db.prepare("SELECT * FROM users WHERE id = ?"),
-  getAllUsers:     db.prepare("SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users"),
+  getAllUsers:     db.prepare("SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users ORDER BY id DESC LIMIT 1000"),
   updateUser:     db.prepare("UPDATE users SET first_name=?, last_name=?, address=?, phone=?, dob=?, grade=?, image_url=? WHERE id=?"),
   deactivateUser: db.prepare("UPDATE users SET is_active = 0 WHERE id = ?"),
   activateUser:   db.prepare("UPDATE users SET is_active = 1 WHERE id = ?"),
@@ -310,7 +320,6 @@ export const queries = {
     JOIN users u ON u.id = se.student_id
     LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
     WHERE se.subject_id = ?
-    ORDER BY u.name
   `),
   getEnrolledSubjectsByStudent: db.prepare(`
     SELECT s.* FROM subjects s
@@ -389,6 +398,50 @@ export const queries = {
     INSERT INTO student_term_remarks (student_id, term, principal_remark)
     VALUES (?, ?, ?)
     ON CONFLICT(student_id, term) DO UPDATE SET principal_remark=excluded.principal_remark, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  `),
+
+  // ── Hot-path pre-compiled statements (prevents repeated query plan compilation) ─
+  getExamByIdAndStudent:   db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?"),
+  getQuestionById:         db.prepare("SELECT * FROM questions WHERE id = ?"),
+  getQuestionByIdAndSubject: db.prepare("SELECT * FROM questions WHERE id = ? AND subject_id = ?"),
+  getCompletedExamsByStudent: db.prepare("SELECT e.*, s.name as subject_name, s.total_score FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'"),
+  getCompletedExamsByTeacher: db.prepare("SELECT e.*, s.name as subject_name, s.total_score, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC"),
+  getAllCompletedExams:        db.prepare("SELECT e.*, s.name as subject_name, s.total_score, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY e.end_time DESC"),
+  updateExamAnswersJson:   db.prepare("UPDATE exams SET answers_json = '[]' WHERE id = ?"),
+  updateUserPassword:      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?"),
+  updateExamScore:         db.prepare("UPDATE exams SET score = ? WHERE id = ?"),
+  updateExamTeacherRemark: db.prepare("UPDATE exams SET teacher_remark = ? WHERE id = ?"),
+  updateExamPrincipalRemark: db.prepare("UPDATE exams SET principal_remark = ? WHERE id = ?"),
+  getSubjectExamCheck:     db.prepare("SELECT id FROM exams WHERE subject_id = ? LIMIT 1"),
+  getStudentHasExam:       db.prepare("SELECT id FROM exams WHERE student_id = ? LIMIT 1"),
+  getSubjectTotalScore:    db.prepare("SELECT COALESCE(SUM(marks),0) as total FROM questions WHERE subject_id = ?"),
+  updateSubjectTotalScore: db.prepare("UPDATE subjects SET total_score = (SELECT COALESCE(SUM(marks),0) FROM questions WHERE subject_id = ?) WHERE id = ?"),
+  getStudentsByGrade:      db.prepare("SELECT id FROM users WHERE role = 'student' AND grade = ? AND is_active = 1"),
+  getStudentEnrolledSubjects: db.prepare(`
+    SELECT s.id, s.name, s.code, s.term, s.duration, s.total_score,
+           s.exam_datetime, s.is_published, s.mode,
+           e.status as exam_status, e.score, e.end_time
+    FROM subject_enrollments se
+    JOIN subjects s ON s.id = se.subject_id
+    LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
+    WHERE se.student_id = ?
+    ORDER BY s.name
+  `),
+  getStudentExamStats: db.prepare(`
+    SELECT
+      COUNT(*) as total_exams,
+      COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
+      ROUND(AVG(CASE WHEN status = 'completed' AND total_score > 0 THEN CAST(score AS REAL)/total_score*100 END), 1) as avg_pct
+    FROM exams WHERE student_id = ?
+  `),
+  getStudentExamsForRoster: db.prepare(`
+    SELECT e.id as exam_id, e.score, e.total_score, e.end_time,
+           e.teacher_remark, e.principal_remark,
+           s.name as subject_name, s.code, s.term
+    FROM exams e
+    JOIN subjects s ON e.subject_id = s.id
+    WHERE e.student_id = ? AND e.status = 'completed'
+    ORDER BY e.end_time DESC
   `),
 };
 

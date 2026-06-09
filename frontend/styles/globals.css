@@ -92,6 +92,30 @@
   --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.1);
   --duration:    220ms;
   --duration-lg: 380ms;
+
+  /* ── Premium Exam UI Tokens (Phase 7 Overhaul) ── */
+  --glass-bg:           rgba(255, 255, 255, 0.75);
+  --glass-bg-dark:      rgba(15, 23, 42, 0.85);
+  --glass-border:       rgba(255, 255, 255, 0.4);
+  --glass-shadow:       0 8px 32px 0 rgba(15, 23, 42, 0.05);
+  --glass-blur:         blur(16px);
+  --accent-gradient:    linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+}
+
+/* ── Premium Utility Classes ── */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+}
+.animated-gradient-text {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-size: 200% auto;
+  animation: shimmer 3s linear infinite;
 }
 
 /* ─── Reset ──────────────────────────────────────── */
@@ -345,8 +369,11 @@ button, [role="button"], input, select { min-height: 40px; }
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03);
   z-index: 10;
 }
-.tbl th, .tbl td {
+.tbl th {
   white-space: nowrap;
+}
+.tbl td {
+  white-space: normal; /* Let td wrap if needed to sit nicely */
 }
 .tbl tbody td { 
   padding: 1.25rem; 
@@ -497,10 +524,17 @@ button, [role="button"], input, select { min-height: 40px; }
 }
 
 /* ─── Search ─────────────────────────────────────── */
-.searchBar { position: relative; flex: 1; min-width: 200px; max-width: 340px; }
+.searchBar { 
+  display: flex; 
+  align-items: center;
+  position: relative; 
+  flex: 1; 
+  min-width: 200px; 
+  max-width: 340px; 
+}
 .searchBar input {
   width: 100%;
-  padding: 0.5625rem 1rem 0.5625rem 2.5rem;
+  padding: 0.75rem 1rem 0.75rem 2.5rem;
   background: var(--color-surface);
   border: 1.5px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -511,7 +545,16 @@ button, [role="button"], input, select { min-height: 40px; }
 }
 .searchBar input:focus { border-color: var(--color-primary); outline: none; box-shadow: var(--ring); }
 .searchBar input::placeholder { color: var(--color-muted-2); }
-.searchBar svg { position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--color-muted); pointer-events: none; }
+.searchBar svg { 
+  position: absolute; 
+  left: 0.75rem; 
+  top: 50%; 
+  transform: translateY(-50%); 
+  color: var(--color-muted); 
+  pointer-events: none; 
+  display: block; /* Ensure it doesn't wrap or act weird inline */
+  flex-shrink: 0;
+}
 
 /* ─── Divider ────────────────────────────────────── */
 .divider { border: none; border-top: 1px solid var(--color-border); margin: 1.125rem 0; }

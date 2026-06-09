@@ -1,5 +1,5 @@
 /* ── Student Settings ──────────────────────────────── */
-.page { max-width: 660px; }
+.page { max-width: 900px; margin: 0 auto; width: 100%; }
 
 /* ── Profile card ─────────────────────────────────── */
 .profileCard {
@@ -12,14 +12,7 @@
   overflow: hidden;
   position: relative;
 }
-.profileCard::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 3px;
-  background: var(--color-info);
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-}
+/* Removed colored border for a more mature/professional look */
 .profileHeader {
   display: flex; align-items: center;
   gap: 1.25rem; margin-bottom: 1.625rem;

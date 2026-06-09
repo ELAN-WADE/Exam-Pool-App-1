@@ -52,12 +52,11 @@ function StudentSettings() {
     <>
       {showPwModal && <ChangePasswordModal onClose={() => setShowPwModal(false)} />}
 
-      <div className="pageHeader">
-        <h1 className="pageTitle">My Profile</h1>
-        <Link href="/student/dashboard" className="btn btn-ghost">← Dashboard</Link>
-      </div>
-
       <div className={styles.page}>
+        <div className="pageHeader" style={{ padding: "0 0.5rem" }}>
+          <h1 className="pageTitle">My Profile</h1>
+          <Link href="/student/dashboard" className="btn btn-ghost">← Dashboard</Link>
+        </div>
 
         {/* ── Profile Card ── */}
         <div className={styles.profileCard}>

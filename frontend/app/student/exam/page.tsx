@@ -7,7 +7,7 @@ import { useMonotonicTimer } from "../../../hooks/useMonotonicTimer";
 import { useSingleInstance } from "../../../hooks/useSingleInstance";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { useToast } from "../../../hooks/useToast";
-import { WarningIcon, ClockIcon, FlagIcon, CheckCircleIcon } from "../../../components/icons/Icons";
+import { WarningIcon, ClockIcon, FlagIcon, CheckCircleIcon, DocumentIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
 import { Scratchpad } from "../../../components/student/Scratchpad";
@@ -162,21 +162,33 @@ function ExamContent() {
           setExamId(Number(inProgress.id));
           try {
             let mapped: Record<number, number | string> = {};
-            const ls = localStorage.getItem(`exam_answers_${inProgress.id}`);
-            if (ls) {
-              mapped = JSON.parse(ls);
-            } else {
-              const saved = JSON.parse(inProgress.answers_json || "[]") as Array<{
-                question_id: number; selected_option?: number | null; essay_response?: string | null;
-              }>;
-              for (const entry of saved) {
-                if (entry.selected_option !== null && entry.selected_option !== undefined) {
-                  mapped[entry.question_id] = entry.selected_option;
-                } else if (entry.essay_response) {
-                  mapped[entry.question_id] = entry.essay_response;
-                }
+            let lsMapped: Record<number, number | string> = {};
+            let serverMapped: Record<number, number | string> = {};
+
+            const saved = JSON.parse(inProgress.answers_json || "[]") as Array<{
+              question_id: number; selected_option?: number | null; essay_response?: string | null;
+            }>;
+            for (const entry of saved) {
+              if (entry.selected_option !== null && entry.selected_option !== undefined) {
+                serverMapped[entry.question_id] = entry.selected_option;
+              } else if (entry.essay_response) {
+                serverMapped[entry.question_id] = entry.essay_response;
               }
             }
+
+            const ls = localStorage.getItem(`exam_answers_${inProgress.id}`);
+            if (ls) {
+              try { lsMapped = JSON.parse(ls); } catch {}
+            }
+
+            // Smart Merge: Prefer local state only if it contains MORE answers (i.e. student was offline and hasn't synced).
+            // Otherwise, strictly rely on the server state to prevent a stale computer from wiping out progress.
+            if (Object.keys(lsMapped).length > Object.keys(serverMapped).length) {
+              mapped = { ...serverMapped, ...lsMapped };
+            } else {
+              mapped = serverMapped;
+            }
+            
             setAnswers(mapped);
           } catch { setAnswers({}); }
           const qs = ((await api.getQuestions(subjectId)) as any[]) ?? [];
@@ -314,19 +326,25 @@ function ExamContent() {
   );
   if (showInstructions) {
     return (
-      <main className={styles.page}>
-        <div className={styles.modal}>
-          <div className={styles.modalBox} style={{ maxWidth: "600px" }}>
-            <h3>Exam Instructions</h3>
-            <div style={{ maxHeight: "40vh", overflowY: "auto", margin: "1rem 0", padding: "1.25rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", whiteSpace: "pre-wrap", fontSize: "0.95rem", color: "var(--color-text)", lineHeight: 1.6, border: "1px solid var(--color-border)" }}>
-              {subject?.instructions || "No specific instructions provided. Please read each question carefully and manage your time."}
+      <main className={styles.page} style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--color-bg)" }}>
+        <div className="animate-enter" style={{ width: "100%", maxWidth: "700px", padding: "3rem", background: "var(--glass-bg)", backdropFilter: "var(--glass-blur)", borderRadius: "var(--radius-xl)", border: "1px solid var(--glass-border)", boxShadow: "0 20px 40px rgba(0,0,0,0.08)" }}>
+          <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+            <div style={{ display: "inline-flex", background: "var(--color-primary-glow)", color: "var(--color-primary)", padding: "1rem", borderRadius: "50%", marginBottom: "1rem" }}>
+              <DocumentIcon width="32" height="32" />
             </div>
-            <div className={styles.modalActions}>
-              <button className="btn btn-ghost" onClick={() => router.push("/student/dashboard")}>Back to Dashboard</button>
-              <button className="btn btn-primary" onClick={() => { setShowInstructions(false); startExam(subject); }}>
-                Start Exam
-              </button>
-            </div>
+            <h2 style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--color-text)", margin: 0 }}>Exam Instructions</h2>
+            <p style={{ color: "var(--color-muted)", marginTop: "0.5rem" }}>{subject?.name || "Please read carefully before proceeding"}</p>
+          </div>
+          
+          <div style={{ maxHeight: "40vh", overflowY: "auto", margin: "1.5rem 0", padding: "1.5rem", background: "#fff", borderRadius: "var(--radius-lg)", whiteSpace: "pre-wrap", fontSize: "1rem", color: "var(--color-text)", lineHeight: 1.7, border: "1px solid var(--color-border)", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.02)" }}>
+            {subject?.instructions || "No specific instructions provided. Please read each question carefully and manage your time."}
+          </div>
+          
+          <div style={{ display: "flex", gap: "1rem", justifyContent: "center", marginTop: "2.5rem" }}>
+            <button className="btn btn-ghost" onClick={() => router.push("/student/dashboard")} style={{ padding: "0.75rem 2rem" }}>Cancel & Return</button>
+            <button className="btn btn-primary" onClick={() => { setShowInstructions(false); startExam(subject); }} style={{ padding: "0.75rem 3rem", fontSize: "1.1rem", boxShadow: "0 8px 24px rgba(15,118,110,0.25)" }}>
+              Start Exam →
+            </button>
           </div>
         </div>
       </main>
@@ -379,21 +397,21 @@ function ExamContent() {
 
       {/* ── Submit confirm modal ── */}
       {showSubmitConfirm && (
-        <div className={styles.modal}>
-          <div className={styles.modalBox}>
-            <h3>Submit Exam?</h3>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.9rem", marginTop: "0.25rem" }}>
-              Answered: <strong>{answeredCount}</strong> / {questions.length}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", backdropFilter: "blur(6px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem" }}>
+          <div className="animate-enter" style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", width: "100%", maxWidth: "460px", boxShadow: "0 20px 40px rgba(0,0,0,0.15)", border: "1px solid var(--color-border)" }}>
+            <h3 style={{ fontSize: "1.35rem", fontWeight: 800, margin: 0, color: "var(--color-text)" }}>Submit Exam?</h3>
+            <p style={{ color: "var(--color-muted)", fontSize: "0.95rem", marginTop: "0.5rem" }}>
+              Answered: <strong style={{ color: "var(--color-text)", fontWeight: 700 }}>{answeredCount}</strong> / {questions.length}
             </p>
             {questions.length - answeredCount > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem", padding: "0.75rem 1rem", background: "var(--color-warning-bg)", borderRadius: "var(--radius-md)", color: "var(--color-warning)", fontSize: "0.875rem", fontWeight: 600 }}>
-                <WarningIcon width="16" height="16" />
-                {questions.length - answeredCount} question(s) unanswered
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "1.25rem", padding: "1rem", background: "var(--color-warning-bg)", borderRadius: "var(--radius-md)", color: "var(--color-warning)", fontSize: "0.9rem", fontWeight: 600, border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+                <WarningIcon width="20" height="20" style={{ flexShrink: 0 }} />
+                You still have {questions.length - answeredCount} unanswered question(s).
               </div>
             )}
-            <div className={styles.modalActions}>
-              <button className="btn btn-ghost" onClick={() => setShowSubmitConfirm(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => { setShowSubmitConfirm(false); handleSubmit(); }}>
+            <div style={{ display: "flex", gap: "1rem", marginTop: "2rem", width: "100%" }}>
+              <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", padding: "0.875rem", fontSize: "1rem" }} onClick={() => setShowSubmitConfirm(false)}>Review Exam</button>
+              <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center", padding: "0.875rem", fontSize: "1rem" }} onClick={() => { setShowSubmitConfirm(false); handleSubmit(); }}>
                 Confirm Submit
               </button>
             </div>

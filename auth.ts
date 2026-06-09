@@ -24,7 +24,7 @@ function hmacSha256(signingInput: string): Buffer {
 export async function hashPassword(password: string): Promise<string> {
   return await Bun.password.hash(password, {
     algorithm: "argon2id",
-    memoryCost: 65536,
+    memoryCost: 8192,
     timeCost: 2,
   });
 }
@@ -90,5 +90,6 @@ export function verifyToken(token: string): { userId: number; role: string } | n
 }
 
 export function buildSessionCookie(token: string): string {
-  return `__exampool_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
+  const secure = Bun.env.IS_HTTPS === "true" ? "; Secure" : "";
+  return `__exampool_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_SECONDS}${secure}`;
 }

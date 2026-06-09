@@ -265,11 +265,11 @@ function ReportCardPageInner() {
             background: #fff !important; z-index: 999999 !important; 
             color: #000 !important;
             filter: grayscale(100%) !important;
-            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+            font-family: "Georgia", "Times New Roman", serif !important;
           }
           #rc-print-clone * {
             color: #000 !important;
-            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif !important;
+            font-family: "Georgia", "Times New Roman", serif !important;
           }
         }
         #rc-print-frame { display: none; }
@@ -497,7 +497,7 @@ function ReportCardPageInner() {
 
                 {/* Right: Overall Remarks */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-                  <div className="card" style={{ padding: "1.5rem", borderTop: "3px solid var(--color-primary)" }}>
+                  <div className="card" style={{ padding: "1.5rem" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 700, fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-primary)", marginBottom: "1.25rem" }}>
                       <EditIcon width="15" height="15" /> Overall Term Remarks
                     </div>
@@ -580,11 +580,12 @@ function ReportCardPageInner() {
       {selectedStudent && (
         <div id="rc-print-frame" style={{ display: "none" }}>
           <div style={{
-            fontFamily: "'Inter', 'Segoe UI', sans-serif",
-            padding: "12mm",
+            fontFamily: "'Georgia', 'Times New Roman', serif",
+            padding: "8mm",
             color: "#0f172a",
             width: "210mm",
-            minHeight: "297mm",
+            height: "296mm", /* Enforce 1 page A4 height exactly */
+            overflow: "hidden", /* Prevent overflow onto 2nd page */
             margin: "0 auto",
             background: "#fff",
             boxSizing: "border-box",
@@ -605,9 +606,9 @@ function ReportCardPageInner() {
               }} />
             </div>
 
-            <div style={{ position: "relative", zIndex: 10, padding: "10mm 14mm" }}>
+            <div style={{ position: "relative", zIndex: 10, padding: "8mm 12mm", height: "100%", display: "flex", flexDirection: "column" }}>
               {/* ── Header: Logo left, School name centre ── */}
-              <div style={{ display: "flex", alignItems: "center", gap: "16mm", paddingBottom: "10mm", marginBottom: "10mm", borderBottom: "2pt solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16mm", paddingBottom: "6mm", marginBottom: "6mm", borderBottom: "2pt solid #e2e8f0" }}>
                 {/* Logo seal */}
                 <div style={{ flexShrink: 0, width: "32mm", height: "32mm", display: "flex", alignItems: "center", justifyContent: "center", background: "#f8fafc", borderRadius: "4mm", border: "1pt solid #e2e8f0" }}>
                   {logo ? (
@@ -636,7 +637,7 @@ function ReportCardPageInner() {
               {/* ── Student Info Grid ── */}
               <div style={{
                 display: "grid", gridTemplateColumns: "1fr 1fr",
-                gap: "4mm 12mm", marginBottom: "8mm",
+                gap: "3mm 12mm", marginBottom: "6mm",
                 fontSize: "10pt", background: "#f8fafc",
                 padding: "6mm 8mm", borderRadius: "3mm",
                 border: "1pt solid #e2e8f0",
@@ -656,7 +657,7 @@ function ReportCardPageInner() {
               </div>
 
               {/* ── Subject Results Table ── */}
-              <div style={{ borderRadius: "3mm", border: "1pt solid #e2e8f0", overflow: "hidden", marginBottom: "8mm" }}>
+              <div style={{ borderRadius: "3mm", border: "1pt solid #e2e8f0", overflow: "hidden", marginBottom: "6mm" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt" }}>
                   <thead>
                     <tr style={{ background: "#0f766e", color: "#fff" }}>
@@ -695,7 +696,7 @@ function ReportCardPageInner() {
               </div>
 
               {/* ── Remarks Block ── */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6mm", marginBottom: "12mm" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6mm", marginBottom: "8mm" }}>
                 {/* Teacher remark */}
                 <div style={{ border: "1pt solid #cbd5e1", borderRadius: "2mm", padding: "4mm 5mm", minHeight: "22mm", position: "relative", background: "#fff" }}>
                   <div style={{ fontSize: "8pt", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "#0f766e", marginBottom: "2mm" }}>
@@ -719,7 +720,7 @@ function ReportCardPageInner() {
               </div>
 
               {/* ── Signature Block ── */}
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "10mm", marginTop: "16mm", padding: "0 10mm" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "10mm", marginTop: "auto", padding: "0 10mm" }}>
                 {["Class Teacher", "Vice Principal", "Principal / Proprietor"].map((role) => (
                   <div key={role} style={{ flex: 1, textAlign: "center" }}>
                     <div style={{ height: "10mm", borderBottom: "1pt solid #94a3b8", marginBottom: "2mm" }} />
@@ -729,7 +730,7 @@ function ReportCardPageInner() {
               </div>
 
               {/* ── Footer ── */}
-              <div style={{ position: "absolute", bottom: "10mm", left: "14mm", right: "14mm", textAlign: "center", fontSize: "8pt", color: "#94a3b8", borderTop: "1pt solid #e2e8f0", paddingTop: "3mm" }}>
+              <div style={{ textAlign: "center", fontSize: "8pt", color: "#94a3b8", borderTop: "1pt solid #e2e8f0", paddingTop: "3mm", marginTop: "6mm" }}>
                 {schoolName} &nbsp;·&nbsp; {currentTerm} &nbsp;·&nbsp; Generated {new Date().toISOString().slice(0, 10)} &nbsp;·&nbsp; Powered by ExamPool
               </div>
 

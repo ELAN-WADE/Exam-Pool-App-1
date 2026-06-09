@@ -162,9 +162,11 @@ export default function RegisterPage() {
                     )}
                   </div>
 
-                  <button className="btn btn-primary" type="submit" disabled={submitting} style={{ width: "100%", padding: "0.85rem", marginTop: "0.5rem" }}>
-                    {submitting ? "Creating account..." : "Create account"}
-                  </button>
+                  <div style={{ display: "flex", justifyContent: "flex-start", marginTop: "0.5rem" }}>
+                    <button className="btn btn-primary" type="submit" disabled={submitting} style={{ width: "35%", padding: "0.85rem" }}>
+                      {submitting ? "Creating..." : "Create account"}
+                    </button>
+                  </div>
                 </form>
               </>
             )}

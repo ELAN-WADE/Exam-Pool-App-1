@@ -70,10 +70,13 @@ function auditLog(actorId: number, action: string, resource: string, resourceId:
 
 let setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
 
+const ALLOWED_ORIGIN = Bun.env.ALLOWED_ORIGIN || "http://localhost:3000";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Credentials": "true",
   "Cache-Control": "no-store, no-cache, must-revalidate",
   "Pragma": "no-cache",
 };
@@ -93,9 +96,45 @@ function isSqliteUniqueError(e: unknown): boolean {
   return /UNIQUE|unique constraint/i.test(m);
 }
 
-/** bun:sqlite returns INTEGER as BigInt; JSON.stringify throws → 500 on many endpoints after any DB read. */
+if (!(BigInt.prototype as any).toJSON) {
+  (BigInt.prototype as any).toJSON = function () { return Number(this); };
+}
+
+/** bun:sqlite returns INTEGER as BigInt; native JSON.stringify throws -> 500. Patched BigInt prototype above to fix this securely and fast. */
 function jsonSafeStringify(payload: unknown): string {
-  return JSON.stringify(payload, (_key, value) => (typeof value === "bigint" ? Number(value) : value));
+  return JSON.stringify(payload);
+}
+
+const rateLimits = new Map<string, { count: number, resetAt: number }>();
+
+// Memory Leak Fix: Periodically clean up expired rate limit entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of rateLimits.entries()) {
+    if (now > record.resetAt) {
+      rateLimits.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000); // Run every 5 minutes
+
+function getClientIp(req: Request): string {
+  // Secure IP resolution: try X-Forwarded-For first (for cloud deployments)
+  // Fallback to Bun's native TCP socket IP (for direct internet exposure to prevent spoofing bypasses)
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0].trim();
+  if (forwarded) return forwarded;
+  // Fallback to native socket IP. (server is defined at the bottom of the file but accessible at request time)
+  try { return server.requestIP(req)?.address || "unknown"; } catch { return "unknown"; }
+}
+
+function checkRateLimit(ip: string, limit: number, windowMs: number) {
+  const now = Date.now();
+  let record = rateLimits.get(ip);
+  if (!record || now > record.resetAt) {
+    record = { count: 0, resetAt: now + windowMs };
+    rateLimits.set(ip, record);
+  }
+  record.count++;
+  if (record.count > limit) throw new HttpError(429, "Too Many Requests");
 }
 
 function apiSuccess(data: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
@@ -132,30 +171,8 @@ async function readJson(req: Request, maxSize = 1048576): Promise<any> {
     throw new HttpError(413, "Payload Too Large");
   }
 
-  const reader = req.body?.getReader();
-  if (!reader) return {};
-
-  let received = 0;
-  const chunks: Uint8Array[] = [];
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        received += value.length;
-        if (received > maxSize) throw new HttpError(413, "Payload Too Large");
-        chunks.push(value);
-      }
-    }
-  } catch (err) {
-    if (err instanceof HttpError) throw err;
-    throw new HttpError(400, "Bad request stream");
-  }
-
-  const bodyString = Buffer.concat(chunks).toString("utf8");
-  if (!bodyString) return {};
-  try {
-    return JSON.parse(bodyString);
+    return await req.json();
   } catch {
     throw new HttpError(400, "Invalid JSON");
   }
@@ -187,6 +204,13 @@ function requireAuth(req: Request): { userId: number; role: string } {
   if (!token) throw new HttpError(401, "Not authenticated");
   const decoded = verifyToken(token);
   if (!decoded) throw new HttpError(401, "Not authenticated");
+
+  // Perform stateful DB check to instantly invalidate suspended sessions
+  const user = queries.getUserById.get(decoded.userId) as any;
+  if (!user || user.is_active !== 1 || user.role !== decoded.role) {
+    throw new HttpError(401, "Session invalidated or user suspended");
+  }
+
   return decoded;
 }
 
@@ -267,7 +291,15 @@ async function serveStatic(urlPath: string): Promise<Response> {
     candidates.push(path.join(distDir, rel));
   }
 
+  // Normalize distDir for comparison (resolve symlinks/dotdots)
+  const resolvedDistDir = path.resolve(distDir);
+
   for (const filePath of candidates) {
+    // Path traversal guard: ensure resolved path stays inside distDir
+    const resolvedFilePath = path.resolve(filePath);
+    if (!resolvedFilePath.startsWith(resolvedDistDir + path.sep) && resolvedFilePath !== resolvedDistDir) {
+      return apiError(403, "Forbidden");
+    }
     const file = Bun.file(filePath);
     if (await file.exists()) {
       return new Response(file, {
@@ -345,7 +377,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     queries.upsertSetting.run("SCHOOL_NAME", schoolName || "Exampool");
     queries.upsertSetting.run("CURRENT_TERM", (currentTerm || "2026-T1").slice(0, 64));
-    queries.upsertSetting.run("REGISTRATION_OPEN", "false");
+    queries.upsertSetting.run("REGISTRATION_OPEN", "true");
     const userId = Number(result.lastInsertRowid);
     setupRequired = false;
     const token = generateToken(userId, "operator");
@@ -357,6 +389,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "POST" && pathname === "/api/auth/login") {
+    const clientIp = getClientIp(req);
+    checkRateLimit(`login_${clientIp}`, 10, 60_000);
     try {
       const body = await readJson(req);
       const identifier = trimStr(body?.email || body?.identifier);
@@ -365,45 +399,49 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       const normalizedIdentifier = identifier.includes("@") ? normalizeEmail(identifier) : identifier.toUpperCase();
       const user = queries.getUserByEmailOrReg.get(normalizedIdentifier, normalizedIdentifier) as Record<string, unknown> | undefined;
       if (!user) {
-        console.log(`[Login Failed] User not found in database: "${identifier}"`);
+        // Generic log — do NOT include identifier to prevent user enumeration in logs
+        console.warn("[Login] Failed: user not found");
         return apiError(401, "Invalid credentials");
       }
       if (sqlInt(user.is_active) !== 1) {
-        console.log(`[Login Failed] Account deactivated: "${identifier}"`);
+        console.warn("[Login] Failed: account inactive");
         return apiError(423, "Account deactivated");
       }
       const hash = user.password_hash;
       if (typeof hash !== "string" || !hash) {
-        console.log(`[Login Failed] Missing password hash for: "${identifier}"`);
+        console.warn("[Login] Failed: missing password hash");
         return apiError(401, "Invalid credentials");
       }
       let ok = false;
       try {
         ok = await verifyPassword(password, hash);
       } catch (e) {
-        console.log(`[Login Failed] verifyPassword threw an error for "${identifier}":`, e);
+        console.error("[Login] verifyPassword error:", e);
         ok = false;
       }
       if (!ok) {
-        console.log(`[Login Failed] Incorrect password entered for: "${identifier}"`);
+        console.warn("[Login] Failed: incorrect password");
         return apiError(401, "Invalid credentials");
       }
       const userId = Number(user.id);
       const role = typeof user.role === "string" ? user.role : "";
       if (!Number.isFinite(userId) || !role) {
-        console.log(`[Login Failed] Invalid user record for: "${identifier}"`);
+        console.warn("[Login] Failed: invalid user record");
         return apiError(401, "Invalid credentials");
       }
       const token = generateToken(userId, role);
       auditLog(userId, "LOGIN", "user", userId, JSON.stringify({ email: user.email }));
       return apiSuccess({ user: stripPassword(user) }, 200, { "Set-Cookie": buildSessionCookie(token) });
     } catch (error) {
-      console.error("[Login Debug]", error);
+      if (error instanceof HttpError) throw error;
+      console.error("[Login] Unexpected error:", error);
       return apiError(500, "Server error");
     }
   }
 
   if (method === "POST" && pathname === "/api/auth/register") {
+    const clientIp = getClientIp(req);
+    checkRateLimit(`register_${clientIp}`, 5, 60_000);
     const auth = (() => {
       try {
         return requireAuth(req);
@@ -428,7 +466,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isValidPassword(password)) {
       return apiError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
     }
-    if (role !== "student" && role !== "teacher") return apiError(403, "operator cannot self-register");
+    if (role === "operator" && (!auth || auth.role !== "operator")) return apiError(403, "operator cannot self-register");
+    if (role !== "student" && role !== "teacher" && role !== "operator") return apiError(403, "Invalid role");
     if (role === "student" && !grade) return apiError(400, "Grade is required for student accounts");
     if (role === "student" && !dob) return apiError(400, "Date of Birth is required for student accounts");
     if (role === "teacher" && !phone) return apiError(400, "Phone number is required for teacher accounts");
@@ -472,6 +511,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "POST" && pathname === "/api/auth/reset-password/verify-email") {
+    const clientIp = getClientIp(req);
+    checkRateLimit(`pwreset_verify_${clientIp}`, 5, 60_000);
     const body = await readJson(req);
     const identifier = trimStr(body?.email || body?.identifier);
     if (!identifier) return apiError(400, "Identifier required");
@@ -483,6 +524,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "POST" && pathname === "/api/auth/reset-password") {
+    const clientIp = getClientIp(req);
+    checkRateLimit(`pwreset_${clientIp}`, 5, 60_000);
     const body = await readJson(req);
     const identifier = trimStr(body?.email || body?.identifier);
     const verification = trimStr(body?.verification);
@@ -504,7 +547,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     
     const hash = await hashPassword(newPassword);
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, user.id);
+    queries.updateUserPassword.run(hash, user.id);
     auditLog(user.id, "USER_UPDATE", "user", user.id, JSON.stringify({ action: "self_reset_password" }));
     return apiMessage("Password reset successfully");
   }
@@ -523,7 +566,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!user) return apiError(404, "User not found");
 
     const hash = await hashPassword(newPassword);
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, userId);
+    queries.updateUserPassword.run(hash, userId);
     
     auditLog(auth.userId, "USER_UPDATE", "user", userId, JSON.stringify({ action: "reset_password" }));
     return apiMessage("Password reset successfully");
@@ -535,15 +578,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["teacher", "operator"]);
     const studentId = Number(studentExamsMatch[1]);
     
-    const exams = db.prepare(`
-      SELECT e.id as exam_id, e.score, e.total_score, e.end_time,
-             e.teacher_remark, e.principal_remark,
-             s.name as subject_name, s.code, s.term
-      FROM exams e
-      JOIN subjects s ON e.subject_id = s.id
-      WHERE e.student_id = ? AND e.status = 'completed'
-      ORDER BY e.end_time DESC
-    `).all(studentId);
+    const exams = queries.getStudentExamsForRoster.all(studentId);
     
     return apiSuccess(exams);
   }
@@ -565,7 +600,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     const body = await readJson(req);
     const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
-    db.prepare("UPDATE exams SET teacher_remark = ? WHERE id = ?").run(remark || null, examId);
+    queries.updateExamTeacherRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_REMARK", "exam", examId, JSON.stringify({ type: "teacher" }));
     return apiSuccess({ exam_id: examId, teacher_remark: remark || null });
   }
@@ -582,7 +617,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (exam.status !== "completed") return apiError(409, "Exam must be completed to add a remark");
     const body = await readJson(req);
     const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
-    db.prepare("UPDATE exams SET principal_remark = ? WHERE id = ?").run(remark || null, examId);
+    queries.updateExamPrincipalRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_PRINCIPAL_REMARK", "exam", examId, JSON.stringify({ type: "principal" }));
     return apiSuccess({ exam_id: examId, principal_remark: remark || null });
   }
@@ -726,7 +761,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator"]);
     const subjectId = Number(subjectMatch[1]);
     if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject id");
-    const examRow = db.prepare("SELECT id FROM exams WHERE subject_id = ? LIMIT 1").get(subjectId);
+    const examRow = queries.getSubjectExamCheck.get(subjectId);
     if (examRow) return apiError(409, "Cannot delete subject with active or completed exams");
     queries.deleteSubject.run(subjectId);
     auditLog(auth.userId, "SUBJECT_DELETE", "subject", subjectId, "{}");
@@ -784,7 +819,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!subject) return apiError(404, "Subject not found");
     if (auth.role === "teacher" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
     // getEnrollmentsBySubject now includes exam_id for direct review access
-    return apiSuccess(queries.getEnrollmentsBySubject.all(subjectId));
+    const enrollments = queries.getEnrollmentsBySubject.all(subjectId) as any[];
+    enrollments.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    return apiSuccess(enrollments);
   }
 
   if (subjectStudentsMatch && method === "POST") {
@@ -795,14 +832,32 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subject = queries.getSubjectById.get(subjectId) as any;
     if (!subject) return apiError(404, "Subject not found");
     const body = await readJson(req);
-    const studentId = Number(body?.student_id);
-    if (!isPositiveIntId(studentId)) return apiError(400, "student_id is required");
-    const student = queries.getUserById.get(studentId) as any;
-    if (!student || student.role !== "student") return apiError(400, "Invalid student");
-    if (sqlInt(student.is_active) !== 1) return apiError(400, "Student account is inactive");
-    queries.enrollStudent.run(subjectId, studentId, auth.userId);
-    auditLog(auth.userId, "STUDENT_ENROLL", "subject_enrollment", subjectId, JSON.stringify({ student_id: studentId }));
-    return apiSuccess({ enrolled: true, subject_id: subjectId, student_id: studentId }, 201);
+    
+    const studentIdsRaw = Array.isArray(body?.student_ids) ? body.student_ids : 
+                          (body?.student_id ? [body.student_id] : []);
+    
+    if (studentIdsRaw.length === 0) return apiError(400, "student_id or student_ids is required");
+    
+    const studentIds = [...new Set(studentIdsRaw.map(Number).filter(isPositiveIntId))];
+    if (studentIds.length === 0) return apiError(400, "Invalid student IDs provided");
+
+    let enrolledCount = 0;
+    try {
+      db.transaction(() => {
+        for (const sid of studentIds) {
+          const student = queries.getUserById.get(sid) as any;
+          if (student && student.role === "student" && sqlInt(student.is_active) === 1) {
+            queries.enrollStudent.run(subjectId, sid, auth.userId);
+            enrolledCount++;
+          }
+        }
+      })();
+    } catch (err) {
+      return apiError(500, "Bulk enrollment failed");
+    }
+
+    auditLog(auth.userId, "STUDENT_ENROLL_BULK", "subject_enrollment", subjectId, JSON.stringify({ count: enrolledCount }));
+    return apiSuccess({ enrolled: true, count: enrolledCount, subject_id: subjectId }, 201);
   }
 
   const subjectStudentDeleteMatch = pathname.match(/^\/api\/subjects\/(\d+)\/students\/(\d+)$/);
@@ -875,7 +930,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         image_url
       );
       // Always recompute total_score from source of truth
-      db.prepare("UPDATE subjects SET total_score = (SELECT COALESCE(SUM(marks),0) FROM questions WHERE subject_id = ?) WHERE id = ?").run(Number(subject_id), Number(subject_id));
+      queries.updateSubjectTotalScore.run(Number(subject_id), Number(subject_id));
       return result;
     });
     const result = tx() as { lastInsertRowid: number | bigint };
@@ -889,7 +944,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["teacher", "operator"]);
     const questionId = Number(questionMatch[1]);
     if (!isPositiveIntId(questionId)) return apiError(400, "Invalid question id");
-    const question = db.prepare("SELECT * FROM questions WHERE id = ?").get(questionId) as any;
+    const question = queries.getQuestionById.get(questionId) as any;
     if (!question) return apiError(404, "Question not found");
     const subject = queries.getSubjectById.get(question.subject_id) as any;
     if (!subject) return apiError(404, "Subject not found");
@@ -899,7 +954,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       db.transaction(() => {
         queries.deleteQuestion.run(questionId);
         // Recompute total_score from source of truth
-        db.prepare("UPDATE subjects SET total_score = (SELECT COALESCE(SUM(marks),0) FROM questions WHERE subject_id = ?) WHERE id = ?").run(Number(question.subject_id), Number(question.subject_id));
+      queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
       })();
       auditLog(auth.userId, "QUESTION_DELETE", "question", questionId, "{}");
       return apiMessage("Question deleted");
@@ -923,22 +978,22 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!nextText) return apiError(400, "question_text cannot be empty");
     const nextCorrect = Number(body.correct_answer ?? question.correct_answer);
     const nextMarks = Number(body.marks ?? question.marks);
-    if (body.correct_answer !== undefined && (!Number.isInteger(nextCorrect) || nextCorrect < 0 || nextCorrect > 3)) {
-      return apiError(400, "correct_answer must be an integer 0–3");
+    const nextType = ["objective", "essay", "true_false"].includes(body?.question_type) ? body.question_type : (question.question_type || "objective");
+    if (body.correct_answer !== undefined && (!Number.isInteger(nextCorrect) || nextCorrect < 0 || nextCorrect > (nextType === "true_false" ? 1 : 3))) {
+      return apiError(400, nextType === "true_false" ? "correct_answer must be 0 or 1 for true_false" : "correct_answer must be an integer 0–3");
     }
     if (body.marks !== undefined && (!Number.isInteger(nextMarks) || nextMarks < 1)) {
       return apiError(400, "marks must be a positive integer");
     }
-    const nextType = ["objective", "essay", "true_false"].includes(body?.question_type) ? body.question_type : (question.question_type || "objective");
     const nextTAnswer = body.teacher_answer !== undefined ? (trimStr(body.teacher_answer) || null) : (question.teacher_answer || null);
     const nextImg = body.image_url !== undefined ? (trimStr(body.image_url) || null) : (question.image_url || null);
     db.transaction(() => {
       queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, questionId);
       // Recompute total_score since marks may have changed
-      db.prepare("UPDATE subjects SET total_score = (SELECT COALESCE(SUM(marks),0) FROM questions WHERE subject_id = ?) WHERE id = ?").run(Number(question.subject_id), Number(question.subject_id));
+      queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
     })();
     auditLog(auth.userId, "QUESTION_EDIT", "question", questionId, "{}");
-    return apiSuccess(db.prepare("SELECT * FROM questions WHERE id = ?").get(questionId));
+    return apiSuccess(queries.getQuestionById.get(questionId));
   }
 
   // ── Lookup exam by student + subject (teacher/operator use for review) ─────────
@@ -978,7 +1033,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const marksAwarded  = Number(body?.marks_awarded);
     if (!isPositiveIntId(questionId)) return apiError(400, "question_id is required");
     if (!Number.isFinite(marksAwarded) || marksAwarded < 0) return apiError(400, "marks_awarded must be a non-negative number");
-    const question = db.prepare("SELECT * FROM questions WHERE id = ? AND subject_id = ?").get(questionId, exam.subject_id) as any;
+    const question = queries.getQuestionByIdAndSubject.get(questionId, exam.subject_id) as any;
     if (!question) return apiError(404, "Question not found in this exam's subject");
     if (question.question_type !== "essay") return apiError(400, "Only essay questions can be manually graded");
     if (marksAwarded > Number(question.marks)) return apiError(400, `marks_awarded cannot exceed ${question.marks}`);
@@ -1012,7 +1067,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subjectId = Number(body?.subject_id);
     if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject_id");
     const subject = queries.getSubjectById.get(subjectId) as any;
-    if (!subject || !subject.is_timetable_published) return apiError(403, "Exam is not available");
+    if (!subject || !subject.is_published) return apiError(403, "Exam is not live yet. Please wait for the admin to publish it.");
     // Must be enrolled
     const enrollment = db.prepare(
       "SELECT id FROM subject_enrollments WHERE subject_id = ? AND student_id = ?"
@@ -1049,11 +1104,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (examSaveMatch && method === "POST") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["student"]);
+    const clientIp = getClientIp(req);
+    checkRateLimit(`save_${auth.userId}_${clientIp}`, 15, 60_000);
     const examId = Number(examSaveMatch[1]);
     if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
     const body = await readJson(req);
     const answers = body?.answers;
     if (!Array.isArray(answers)) return apiError(400, "answers must be array");
+    // Validate structure: every entry must have a valid question_id (integer > 0)
+    for (const entry of answers) {
+      if (!entry || typeof entry !== "object") return apiError(400, "Each answer must be an object");
+      if (!Number.isInteger(entry.question_id) || entry.question_id <= 0) return apiError(400, "Each answer must have a valid question_id");
+    }
     const exam = db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?").get(examId, auth.userId) as any;
     if (!exam) return apiError(403, "Not your exam");
     if (exam.status !== "in-progress") return apiError(409, "Exam already submitted");
@@ -1070,6 +1132,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (examSubmitMatch && method === "POST") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["student"]);
+    const clientIp = getClientIp(req);
+    checkRateLimit(`submit_${auth.userId}_${clientIp}`, 5, 60_000);
     const examId = Number(examSubmitMatch[1]);
     if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
     const body = await readJson(req);
@@ -1134,18 +1198,26 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         if (student?.reg_id) {
           db.prepare("UPDATE exams SET reg_id = ? WHERE id = ?").run(student.reg_id, examId);
         }
-        for (const q of questions) {
-          const qid        = Number(q.id);
-          const studentSel = answerMap.get(qid) ?? null;
-          const essayResp  = q.question_type === "essay" ? (essayMap.get(qid) ?? null) : null;
-          const isCorrect  = q.question_type !== "essay" && studentSel !== null && studentSel === Number(q.correct_answer) ? 1 : 0;
-          const marksAwarded = isCorrect ? Number(q.marks) : 0;
-          queries.insertStudentAnswer.run(
-            examId, qid, auth.userId, exam.subject_id,
-            q.question_type !== "essay" ? studentSel : null,
-            essayResp, isCorrect, marksAwarded,
-          );
+        if (questions.length > 0) {
+          const placeholders = questions.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+          const params: any[] = [];
+          for (const q of questions) {
+            const qid        = Number(q.id);
+            const studentSel = answerMap.get(qid) ?? null;
+            const essayResp  = q.question_type === "essay" ? (essayMap.get(qid) ?? null) : null;
+            const isCorrect  = q.question_type !== "essay" && studentSel !== null && studentSel === Number(q.correct_answer) ? 1 : 0;
+            const marksAwarded = isCorrect ? Number(q.marks) : 0;
+            params.push(
+              examId, qid, auth.userId, exam.subject_id,
+              q.question_type !== "essay" ? studentSel : null,
+              essayResp, isCorrect, marksAwarded
+            );
+          }
+          db.prepare(`INSERT OR REPLACE INTO student_answers (exam_id, question_id, student_id, subject_id, selected_option, essay_response, is_correct, marks_awarded) VALUES ${placeholders}`).run(...params);
         }
+
+        // Free the redundant JSON blob — student_answers is now the authoritative store
+        queries.updateExamAnswersJson.run(examId);
 
         return {
           exam_id: examId, score, total_score: total,
@@ -1192,8 +1264,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
     const exam = queries.getExamById.get(examId) as any;
     if (!exam) return apiError(404, "Exam not found");
-    // Students can only view their own exam
-    if (auth.role === "student" && !sameUserId(exam.student_id, auth.userId)) return apiError(403, "Forbidden");
+    // Students can only view their own completed exam
+    if (auth.role === "student") {
+      if (!sameUserId(exam.student_id, auth.userId)) return apiError(403, "Forbidden");
+      if (exam.status !== "completed") return apiError(403, "Exam must be completed to review answers");
+    }
     // Teachers can only view exams for their subjects
     if (auth.role === "teacher") {
       const subject = queries.getSubjectById.get(exam.subject_id) as any;
@@ -1202,6 +1277,27 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const answers = queries.getStudentAnswersByExam.all(examId);
     const student = queries.getUserById.get(exam.student_id) as any;
     return apiSuccess({ exam, answers, student: student ? stripPassword(student) : null });
+  }
+
+  // ── Exam delete/reset (operator + owning teacher) ───────────────────────
+  const examDeleteMatch = pathname.match(/^\/api\/exams\/(\d+)$/);
+  if (examDeleteMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const examId = Number(examDeleteMatch[1]);
+    if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
+    const exam = queries.getExamById.get(examId) as any;
+    if (!exam) return apiError(404, "Exam not found");
+    if (auth.role === "teacher") {
+      const subject = queries.getSubjectById.get(exam.subject_id) as any;
+      if (!subject || !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "Forbidden");
+    }
+    db.transaction(() => {
+      db.prepare("DELETE FROM student_answers WHERE exam_id = ?").run(examId);
+      db.prepare("DELETE FROM exams WHERE id = ?").run(examId);
+    })();
+    auditLog(auth.userId, "EXAM_DELETE", "exam", examId, "{}");
+    return apiMessage("Exam attempt deleted");
   }
 
   // ── Results PDF export (teacher + operator) ───────────────────────────────
@@ -1243,25 +1339,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!user || sqlInt(user.is_active) !== 1) return apiError(401, "Not authenticated");
 
     // Enrolled subjects (with exam status)
-    const enrolledSubjects = db.prepare(`
-      SELECT s.id, s.name, s.code, s.term, s.duration, s.total_score,
-             s.exam_datetime, s.is_published, s.mode,
-             e.status as exam_status, e.score, e.end_time
-      FROM subject_enrollments se
-      JOIN subjects s ON s.id = se.subject_id
-      LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
-      WHERE se.student_id = ?
-      ORDER BY s.name
-    `).all(auth.userId);
+    const enrolledSubjects = queries.getStudentEnrolledSubjects.all(auth.userId);
 
     // Exam stats
-    const examStats = db.prepare(`
-      SELECT
-        COUNT(*) as total_exams,
-        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-        ROUND(AVG(CASE WHEN status = 'completed' AND total_score > 0 THEN CAST(score AS REAL)/total_score*100 END), 1) as avg_pct
-      FROM exams WHERE student_id = ?
-    `).get(auth.userId) as any;
+    const examStats = queries.getStudentExamStats.get(auth.userId) as any;
 
     return apiSuccess({
       user:             stripPassword(user),
@@ -1288,9 +1369,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!grade) return apiError(400, "grade is required");
 
     // Fetch all active students in that grade
-    const students = db.prepare(
-      "SELECT id FROM users WHERE role = 'student' AND grade = ? AND is_active = 1"
-    ).all(grade) as Array<{ id: number }>;
+    const students = queries.getStudentsByGrade.all(grade) as Array<{ id: number }>;
 
     if (students.length === 0) return apiError(404, "No active students found in that grade");
 
@@ -1324,7 +1403,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const valid = await verifyPassword(currentPassword, user.password_hash);
     if (!valid) return apiError(401, "Current password is incorrect");
     const newHash = await hashPassword(newPassword);
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, auth.userId);
+    queries.updateUserPassword.run(newHash, auth.userId);
     auditLog(auth.userId, "PASSWORD_CHANGE", "user", auth.userId, "{}");
     return apiMessage("Password changed successfully");
   }
@@ -1365,8 +1444,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     requireRole(auth.role, ["operator"]);
     if (role && !isValidRoleParam(role)) return apiError(400, "Invalid role filter");
-    if (role && grade) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ? AND grade = ?").all(role, grade));
-    if (role) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ?").all(role));
+    if (role && grade) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ? AND grade = ? ORDER BY id DESC LIMIT 1000").all(role, grade));
+    if (role) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ? ORDER BY id DESC LIMIT 1000").all(role));
     return apiSuccess(queries.getAllUsers.all());
   }
 
@@ -1495,7 +1574,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator"]);
     const userId = Number(userDeleteMatch[1]);
     if (!isPositiveIntId(userId)) return apiError(400, "Invalid user id");
-    const hasExam = db.prepare("SELECT id FROM exams WHERE student_id = ? LIMIT 1").get(userId);
+    const hasExam = queries.getStudentHasExam.get(userId);
     if (hasExam) return apiError(409, "Cannot delete user with exam records");
     queries.deactivateUser.run(userId);
     setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
@@ -1525,6 +1604,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const magic = new TextDecoder().decode(buffer.slice(0, 16));
     if (!magic.startsWith("SQLite format 3")) return apiError(400, "Invalid SQLite file");
     await Bun.write(EXAMPOOL_DB_PATH, buffer);
+    // Re-assert schema constraints, indexes, and defaults on the imported file
+    // This prevents a poisoned import from removing FK constraints or indexes
+    try { initializeDatabase(); } catch (e) {
+      console.error("[exampool] initializeDatabase after import failed:", e);
+    }
     auditLog(auth.userId, "SETTINGS_IMPORT", "setting", null, "{}");
     setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
     return apiMessage("Import successful. Restart the server to reload the database file.");

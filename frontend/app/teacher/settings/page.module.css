@@ -1,5 +1,5 @@
 /* ── Settings / Profile Page ─────────────────────── */
-.page { max-width: 580px; }
+.page { max-width: 900px; margin: 0 auto; width: 100%; }
 
 /* Profile card */
 .profileCard {
@@ -12,17 +12,13 @@
   overflow: hidden;
   position: relative;
 }
-.profileCard::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 4px;
-  background: var(--color-primary);
-}
+/* Top accent line removed per user request */
 .profileHeader {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 1.25rem;
+  text-align: center;
+  gap: 1rem;
   margin-bottom: 1.5rem;
 }
 .avatar {
@@ -35,19 +31,20 @@
   letter-spacing: -0.02em;
 }
 .nameBlock { flex: 1; min-width: 0; }
-.name  { font-size: 1.1875rem; font-weight: 800; color: var(--color-text); line-height: 1.2; }
-.email { font-size: 0.8125rem; color: var(--color-muted); margin-top: 0.25rem; }
+.name  { font-size: 1.5rem; font-weight: 800; color: var(--color-text); line-height: 1.2; }
+.email { font-size: 0.9rem; color: var(--color-muted); margin-top: 0.25rem; }
 
 .fields {
   display: grid;
-  grid-template-columns: minmax(72px, auto) 1fr;
-  gap: 0.6rem 1.5rem;
+  grid-template-columns: 1fr;
+  text-align: center;
+  gap: 0.6rem;
   font-size: 0.875rem;
   border-top: 1px solid var(--color-border);
-  padding-top: 1.25rem;
+  padding-top: 1.5rem;
 }
 .lbl { color: var(--color-muted); font-weight: 600; font-size: 0.8125rem; }
-.val { font-weight: 700; color: var(--color-text); word-break: break-all; font-size: 0.875rem; }
+.val { font-weight: 700; color: var(--color-text); word-break: break-all; font-size: 1rem; margin-bottom: 0.75rem; }
 
 /* Section card */
 .sectionCard {
@@ -59,26 +56,26 @@
   margin-bottom: 1.25rem;
 }
 .sectionTitle {
-  display: flex; align-items: center; gap: 0.5rem;
-  font-size: 0.875rem; font-weight: 700;
-  color: var(--color-text); margin-bottom: 1.125rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  font-size: 1rem; font-weight: 700;
+  color: var(--color-text); margin-bottom: 1.5rem;
   letter-spacing: -0.01em;
 }
 .row {
-  display: flex; justify-content: space-between;
-  align-items: center; padding: 0.875rem 0;
+  display: flex; flex-direction: column; justify-content: center;
+  align-items: center; padding: 1.25rem 0; text-align: center;
   border-bottom: 1px solid var(--color-border);
   gap: 1rem; flex-wrap: wrap;
 }
 .row:last-child { border-bottom: none; }
-.rowLabel { font-weight: 600; font-size: 0.875rem; color: var(--color-text); margin-bottom: 0.15rem; }
-.rowSub   { color: var(--color-muted); font-size: 0.78rem; }
+.rowLabel { font-weight: 600; font-size: 1rem; color: var(--color-text); margin-bottom: 0.25rem; }
+.rowSub   { color: var(--color-muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
 
 /* Mobile */
 @media (max-width: 520px) {
   .page { max-width: 100%; }
   .profileCard { padding: 1.375rem; }
-  .profileCard::before { height: 3px; }
+  /* .profileCard::before removed */
   .avatar { width: 58px; height: 58px; font-size: 1.375rem; }
   .fields { grid-template-columns: 1fr; gap: 0.4rem; }
   .sectionCard { padding: 1.125rem; }
