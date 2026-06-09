@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { ReportCardModal } from "../../../components/Teacher/ReportCardModal";
+import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
 import { api } from "../../../lib/api";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { ReviewModal } from "../../../components/Teacher/ReviewModal";
+import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { api } from "../../../lib/api";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib/gradeUtils";
 import { UsersIcon, SearchIcon, ArrowUpIcon, EyeIcon, DocumentIcon } from "../../../components/icons/Icons";

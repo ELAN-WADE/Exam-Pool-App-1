@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { ReviewModal } from "../../../components/Teacher/ReviewModal";
+import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { api } from "../../../lib/api";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor, fmtDate } from "../../../lib/gradeUtils";
 import { BarChartIcon, SearchIcon, EyeIcon, ArrowUpIcon, DocumentIcon } from "../../../components/icons/Icons";
