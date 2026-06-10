@@ -16,10 +16,7 @@ ENV NODE_ENV=production
 # Build the frontend Next.js app
 RUN bun run build
 
-# Create a non-root user to run the process — limits blast radius of any exploit
-RUN groupadd --system exampool && useradd --system --gid exampool exampool
-RUN chown -R exampool:exampool /app
-USER exampool
+
 
 # Fly.io injects the PORT environment variable. We default to 8000.
 EXPOSE 8000
