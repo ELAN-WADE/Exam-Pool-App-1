@@ -278,6 +278,22 @@ function getCacheControl(filePath: string): string {
 /** Normalize URL path for static lookup (supports Next `trailingSlash: true` → `/setup/` → `setup/index.html`). */
 async function serveStatic(urlPath: string): Promise<Response> {
   const pathname = urlPath.split("?")[0] ?? urlPath;
+  
+  // UX Fix: Auto-correct common casing mistakes for main portals
+  const lowerPath = pathname.toLowerCase();
+  if (lowerPath.startsWith("/teacher") && pathname !== lowerPath) {
+    return new Response(null, { status: 301, headers: { Location: lowerPath + urlPath.slice(pathname.length) } });
+  }
+  if (lowerPath.startsWith("/admin") && !pathname.startsWith("/ADMIN")) {
+    return new Response(null, { status: 301, headers: { Location: "/ADMIN" + urlPath.slice(6) } });
+  }
+  if (lowerPath.startsWith("/operator") && pathname !== lowerPath) {
+    return new Response(null, { status: 301, headers: { Location: lowerPath + urlPath.slice(pathname.length) } });
+  }
+  if (lowerPath.startsWith("/student") && pathname !== lowerPath) {
+    return new Response(null, { status: 301, headers: { Location: lowerPath + urlPath.slice(pathname.length) } });
+  }
+
   const rel = pathname.replace(/^\/+/, "").replace(/\/+$/, "");
   const candidates: string[] = [];
 
