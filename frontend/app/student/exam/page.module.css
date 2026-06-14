@@ -84,11 +84,6 @@
   position: relative;
   overflow: hidden;
 }
-.questionCard::before {
-  content: '';
-  position: absolute; left: 0; top: 0; right: 0; height: 5px;
-  background: var(--accent-gradient);
-}
 .questionCard:hover {
   box-shadow: 0 16px 48px -12px rgba(15, 118, 110, 0.15);
   transform: translateY(-3px);
@@ -101,7 +96,7 @@
 .questionNumber {
   font-size: 0.75rem; font-weight: 800;
   color: #fff; text-transform: uppercase; letter-spacing: 0.08em;
-  background: var(--accent-gradient);
+  background: var(--color-primary);
   padding: 0.35rem 0.85rem; border-radius: 999px;
   box-shadow: 0 4px 12px rgba(15, 118, 110, 0.25);
 }
@@ -187,7 +182,7 @@
   padding: 1rem 1.25rem;
   border: 1.5px solid transparent;
   border-radius: var(--radius-xl);
-  background: var(--accent-gradient);
+  background: var(--color-primary);
   color: #fff;
   cursor: pointer;
   font-size: 1rem;
@@ -296,10 +291,10 @@
 }
 .grid button:hover { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-glow); transform: translateY(-2px); box-shadow: var(--shadow-xs); }
 
-.answered  { background: var(--color-success-bg)  !important; border-color: rgba(13,148,136,0.35) !important; color: var(--color-success)  !important; }
+.answered  { background: var(--color-surface) !important; border-color: var(--color-primary) !important; color: var(--color-primary) !important; }
 .unanswered { background: var(--color-surface) !important; }
-.flagged   { background: var(--color-warning-bg)  !important; border-color: rgba(217,119,6,0.35)  !important; color: var(--color-warning)  !important; }
-.current   { outline: 2px solid var(--color-primary); outline-offset: 1px; border-color: var(--color-primary) !important; color: var(--color-primary) !important; background: var(--color-primary-glow) !important; }
+.flagged   { background: var(--color-surface) !important; border-color: var(--color-text) !important; color: var(--color-text) !important; }
+.current   { outline: 2px solid var(--color-primary); outline-offset: 1px; border-color: var(--color-primary) !important; color: #fff !important; background: var(--color-primary) !important; }
 
 /* Grid legend */
 .gridLegend { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0 0.875rem 0.875rem; }

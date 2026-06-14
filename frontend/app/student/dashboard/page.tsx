@@ -122,28 +122,17 @@ function DashboardContent() {
         </div>
       </div>
 
-      {/* Live Exam Alert Banner */}
-      {subjects.filter(s => {
-        const now = currentTime;
-        const start = new Date(s.exam_datetime).getTime();
-        const end = start + Number(s.window_duration || 120) * 60_000;
-        return !takenIds.has(Number(s.id)) && s.is_published === 1 && now >= start && now < end;
-      }).map(activeExam => (
-        <div key={`alert-${activeExam.id}`} className="animate-enter" style={{ background: "var(--color-primary)", color: "#fff", padding: "1.25rem 1.5rem", borderRadius: "var(--radius-xl)", marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "var(--shadow-sm)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-            <div style={{ background: "rgba(255,255,255,0.2)", padding: "0.5rem", borderRadius: "50%", display: "flex" }}>
-              <PlayIcon width="24" height="24" />
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>🔥 Exam Live: {activeExam.name}</h3>
-              <p style={{ margin: 0, fontSize: "0.9rem", opacity: 0.9 }}>This exam is now open. You will be automatically routed in a few seconds, or click to enter now.</p>
-            </div>
-          </div>
-          <Link href={`/student/exam?subjectId=${activeExam.id}`} className="btn" style={{ background: "#fff", color: "var(--color-primary)", fontWeight: 800, whiteSpace: "nowrap" }}>
-            Enter Now →
-          </Link>
-        </div>
-      ))}
+  // Auto-route instantly when the local clock hits the start time
+  useEffect(() => {
+    const activeOne = subjects.find(s => {
+      const start = new Date(s.exam_datetime).getTime();
+      const end = start + Number(s.window_duration || 120) * 60_000;
+      return !takenIds.has(Number(s.id)) && s.is_published === 1 && currentTime >= start && currentTime < end;
+    });
+    if (activeOne) {
+      router.replace(`/student/exam?subjectId=${activeOne.id}`);
+    }
+  }, [currentTime, subjects, takenIds, router]);
 
       {/* Stats Row */}
       <div className={styles.statsRow}>

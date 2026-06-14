@@ -120,7 +120,7 @@ setInterval(() => {
 function getClientIp(req: Request): string {
   // Secure IP resolution: try X-Forwarded-For first (for cloud deployments)
   // Fallback to Bun's native TCP socket IP (for direct internet exposure to prevent spoofing bypasses)
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0].trim();
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   if (forwarded) return forwarded;
   // Fallback to native socket IP. (server is defined at the bottom of the file but accessible at request time)
   try { return server.requestIP(req)?.address || "unknown"; } catch { return "unknown"; }
@@ -861,9 +861,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     try {
       db.transaction(() => {
         for (const sid of studentIds) {
-          const student = queries.getUserById.get(sid) as any;
+          const studentIdNum = Number(sid);
+          const student = queries.getUserById.get(studentIdNum) as any;
           if (student && student.role === "student" && sqlInt(student.is_active) === 1) {
-            queries.enrollStudent.run(subjectId, sid, auth.userId);
+            queries.enrollStudent.run(subjectId, studentIdNum, auth.userId);
             enrolledCount++;
           }
         }
@@ -906,10 +907,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(subject_id) || !question_text) return apiError(400, "Invalid question payload");
     const question_type = ["objective", "essay", "true_false"].includes(body?.question_type) ? body.question_type : "objective";
     const isTrueFalse = question_type === "true_false";
-    // true_false needs exactly 2 options; objective/essay needs exactly 4
-    const expectedOptionsLen = isTrueFalse ? 2 : 4;
-    if (!Array.isArray(options) || options.length !== expectedOptionsLen || !options.every((o) => typeof o === "string")) {
-      return apiError(400, `options must be an array of exactly ${expectedOptionsLen} strings for ${question_type} questions`);
+    // The frontend always pads options to length 4 for all types
+    if (!Array.isArray(options) || options.length !== 4 || !options.every((o) => typeof o === "string")) {
+      return apiError(400, `options must be an array of exactly 4 strings`);
     }
     if (!Number.isInteger(correct_answer) || correct_answer < 0 || correct_answer > (isTrueFalse ? 1 : 3)) {
       return apiError(400, isTrueFalse ? "correct_answer must be 0 or 1 for true_false" : "correct_answer must be an integer 0–3");
@@ -980,9 +980,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (body.options !== undefined) {
       const qTypeForValidation = body.question_type ?? question.question_type ?? "objective";
       const isTF = qTypeForValidation === "true_false";
-      const expectedLen = isTF ? 2 : 4;
-      if (!Array.isArray(body.options) || body.options.length !== expectedLen || !body.options.every((o: unknown) => typeof o === "string")) {
-        return apiError(400, `options must be an array of exactly ${expectedLen} strings`);
+      if (!Array.isArray(body.options) || body.options.length !== 4 || !body.options.every((o: unknown) => typeof o === "string")) {
+        return apiError(400, `options must be an array of exactly 4 strings`);
       }
       // Pad to 4 for DB storage consistency
       const opts = body.options.length < 4 ? [...body.options, ...Array(4 - body.options.length).fill("")] : body.options;

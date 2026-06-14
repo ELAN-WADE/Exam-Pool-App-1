@@ -276,9 +276,14 @@ function ExamContent() {
       if (document.activeElement?.tagName === "TEXTAREA" || document.activeElement?.tagName === "INPUT") return;
       const key = e.key.toLowerCase();
       const q   = questions[currentIndex];
-      if (q && q.question_type !== "essay" && ["1","2","3","4"].includes(key)) {
-        if (q.question_type === "true_false" && ["3","4"].includes(key)) return;
-        setAnswers((prev) => ({ ...prev, [q.id]: Number(key) - 1 }));
+      if (q && q.question_type !== "essay") {
+        if (["1","2","3","4"].includes(key)) {
+          if (q.question_type === "true_false" && ["3","4"].includes(key)) return;
+          setAnswers((prev) => ({ ...prev, [q.id]: Number(key) - 1 }));
+        } else if (q.question_type === "true_false") {
+          if (key === "t") setAnswers((prev) => ({ ...prev, [q.id]: 0 }));
+          if (key === "f") setAnswers((prev) => ({ ...prev, [q.id]: 1 }));
+        }
       } else if (e.key === "ArrowRight") {
         setCurrentIndex((v) => Math.min(questions.length - 1, v + 1));
       } else if (e.key === "ArrowLeft") {
@@ -502,10 +507,9 @@ function ExamContent() {
                     />
                   ) : (
                     <div className={styles.options}>
-                      {safeOptions(current.options_json)
-                        .slice(0, current.question_type === "true_false" ? 2 : 4)
+                      {(current.question_type === "true_false" ? ["True", "False"] : safeOptions(current.options_json).slice(0, 4))
                         .map((option, idx) =>
-                          option || current.question_type !== "objective" ? (
+                          option ? (
                             <button
                               key={idx}
                               className={answers[current.id] === idx ? styles.optionActive : styles.option}
@@ -514,9 +518,7 @@ function ExamContent() {
                               <span className={styles.optionLabel}>
                                 {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
                               </span>
-                              {current.question_type === "true_false"
-                                ? ["True", "False"][idx]
-                                : option}
+                              {option}
                             </button>
                           ) : null
                         )}
@@ -561,15 +563,15 @@ function ExamContent() {
           {/* Stats row */}
           <div className={styles.sidePanelStats}>
             <div className={styles.sideStat}>
-              <div className={styles.sideStatVal} style={{ color: "var(--color-success)" }}>{answeredCount}</div>
+              <div className={styles.sideStatVal} style={{ color: "var(--color-primary)" }}>{answeredCount}</div>
               <div className={styles.sideStatLbl}>Answered</div>
             </div>
             <div className={styles.sideStat}>
-              <div className={styles.sideStatVal} style={{ color: "var(--color-danger)" }}>{questions.length - answeredCount}</div>
+              <div className={styles.sideStatVal} style={{ color: "var(--color-text)" }}>{questions.length - answeredCount}</div>
               <div className={styles.sideStatLbl}>Remaining</div>
             </div>
             <div className={styles.sideStat}>
-              <div className={styles.sideStatVal} style={{ color: "var(--color-warning)" }}>{flaggedCount}</div>
+              <div className={styles.sideStatVal} style={{ color: "var(--color-text)" }}>{flaggedCount}</div>
               <div className={styles.sideStatLbl}>Flagged</div>
             </div>
             <div className={styles.sideStat}>
@@ -597,8 +599,8 @@ function ExamContent() {
           {/* Legend */}
           <div className={styles.gridLegend}>
             {[
-              { label: "Answered",  color: "rgba(16,185,129,0.4)" },
-              { label: "Flagged",   color: "rgba(245,158,11,0.4)" },
+              { label: "Answered",  color: "var(--color-primary)" },
+              { label: "Flagged",   color: "var(--color-text)" },
               { label: "Current",   color: "var(--color-primary)" },
               { label: "Skipped",   color: "var(--color-border)" },
             ].map((l) => (

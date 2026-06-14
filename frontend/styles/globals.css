@@ -113,6 +113,7 @@
 .animated-gradient-text {
   background: var(--accent-gradient);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   background-size: 200% auto;
   animation: shimmer 3s linear infinite;
@@ -438,18 +439,12 @@ button, [role="button"], input, select { min-height: 40px; }
 .toast-success {
   background: var(--color-surface);
   color: var(--color-text);
-  border-left: 3px solid var(--color-success);
-  border-top: 1px solid var(--color-border);
-  border-right: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
 }
 .toast-error {
   background: var(--color-surface);
   color: var(--color-text);
-  border-left: 3px solid var(--color-danger);
-  border-top: 1px solid var(--color-border);
-  border-right: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  border: 1px solid var(--color-border);
 }
 
 /* ─── Spinner ────────────────────────────────────── */
