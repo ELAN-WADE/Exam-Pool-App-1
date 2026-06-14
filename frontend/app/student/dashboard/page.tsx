@@ -94,6 +94,18 @@ function DashboardContent() {
 
   const firstName = user?.name?.split(" ")[0] ?? "Student";
 
+  // Auto-route instantly when the local clock hits the start time
+  useEffect(() => {
+    const activeOne = subjects.find(s => {
+      const start = new Date(s.exam_datetime).getTime();
+      const end = start + Number(s.window_duration || 120) * 60_000;
+      return !takenIds.has(Number(s.id)) && s.is_published === 1 && currentTime >= start && currentTime < end;
+    });
+    if (activeOne) {
+      router.replace(`/student/exam?subjectId=${activeOne.id}`);
+    }
+  }, [currentTime, subjects, takenIds, router]);
+
   if (loading) return (
     <div>
       <Skeleton height={130} borderRadius="var(--radius-xl)" className="animate-enter" style={{ marginBottom: "2rem" }} />
@@ -109,19 +121,6 @@ function DashboardContent() {
       </div>
     </div>
   );
-
-  // Auto-route instantly when the local clock hits the start time
-  useEffect(() => {
-    const activeOne = subjects.find(s => {
-      const start = new Date(s.exam_datetime).getTime();
-      const end = start + Number(s.window_duration || 120) * 60_000;
-      return !takenIds.has(Number(s.id)) && s.is_published === 1 && currentTime >= start && currentTime < end;
-    });
-    if (activeOne) {
-      router.replace(`/student/exam?subjectId=${activeOne.id}`);
-    }
-  }, [currentTime, subjects, takenIds, router]);
-
   if (error) return <p className={styles.error}>{error}</p>;
 
   return (
