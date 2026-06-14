@@ -110,18 +110,6 @@ function DashboardContent() {
     </div>
   );
 
-  if (error) return <p className={styles.error}>{error}</p>;
-
-  return (
-    <div>
-      {/* Welcome Banner */}
-      <div className={`${styles.welcomeBanner} animate-enter`}>
-        <div className={styles.welcomeText}>
-          <h1 className={styles.greeting}>Hello, {firstName}! 👋</h1>
-          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} exam{stats.available !== 1 ? "s" : ""} pending</p>
-        </div>
-      </div>
-
   // Auto-route instantly when the local clock hits the start time
   useEffect(() => {
     const activeOne = subjects.find(s => {
@@ -133,6 +121,18 @@ function DashboardContent() {
       router.replace(`/student/exam?subjectId=${activeOne.id}`);
     }
   }, [currentTime, subjects, takenIds, router]);
+
+  if (error) return <p className={styles.error}>{error}</p>;
+
+  return (
+    <div>
+      {/* Welcome Banner */}
+      <div className={`${styles.welcomeBanner} animate-enter`}>
+        <div className={styles.welcomeText}>
+          <h1 className={styles.greeting}>Hello, {firstName}! 👋</h1>
+          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} exam{stats.available !== 1 ? "s" : ""} pending</p>
+        </div>
+      </div>
 
       {/* Stats Row */}
       <div className={styles.statsRow}>
