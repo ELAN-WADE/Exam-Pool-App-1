@@ -40,6 +40,7 @@ function DashboardContent() {
       
       const now = Date.now();
       const activeOne = (subjectsData as any[]).find(s => {
+        if (!s.exam_datetime) return false;
         const start = new Date(s.exam_datetime).getTime();
         const end = start + Number(s.window_duration || 120) * 60_000;
         const isTaken = (resultsData as any[]).some(r => Number(r.subject_id) === Number(s.id));
@@ -97,6 +98,7 @@ function DashboardContent() {
   // Auto-route instantly when the local clock hits the start time
   useEffect(() => {
     const activeOne = subjects.find(s => {
+      if (!s.exam_datetime) return false;
       const start = new Date(s.exam_datetime).getTime();
       const end = start + Number(s.window_duration || 120) * 60_000;
       return !takenIds.has(Number(s.id)) && s.is_published === 1 && currentTime >= start && currentTime < end;
@@ -159,15 +161,18 @@ function DashboardContent() {
         <div className={styles.categories}>
           {["active", "upcoming"].map((category) => {
             const categorySubjects = subjects.filter((s: any) => {
-              if (!s.exam_datetime) return false;
+              const isTaken = takenIds.has(Number(s.id));
+              if (!s.exam_datetime) {
+                if (category === "active") return !isTaken && s.is_published === 1;
+                return false;
+              }
               const examDate = new Date(s.exam_datetime);
               const now = currentTime;
               const start = examDate.getTime();
               const end = start + Number(s.window_duration || 120) * 60_000;
-              const isTaken = takenIds.has(Number(s.id));
               
-              if (category === "active") return !isTaken && now >= start && now < end;
-              if (category === "upcoming") return !isTaken && now < start;
+              if (category === "active") return !isTaken && s.is_published === 1 && now >= start && now < end;
+              if (category === "upcoming") return !isTaken && s.is_published === 1 && now < start;
               if (category === "past") return isTaken || now >= end;
               return false;
             });
@@ -190,15 +195,16 @@ function DashboardContent() {
 
                 <div className={styles.grid}>
                   {categorySubjects.map((s: any, i: number) => {
-                    const examDate   = new Date(s.exam_datetime);
+                    const isUnscheduled = !s.exam_datetime;
+                    const examDate   = isUnscheduled ? new Date() : new Date(s.exam_datetime);
                     const now        = currentTime;
-                    const start      = examDate.getTime();
-                    const end        = start + Number(s.duration) * 60_000;
+                    const start      = isUnscheduled ? 0 : examDate.getTime();
+                    const end        = isUnscheduled ? Infinity : start + Number(s.window_duration || 120) * 60_000;
                     const isTaken    = takenIds.has(Number(s.id));
                     const isActive   = activeIds.has(Number(s.id));
-                    const isOpen     = now >= start && now < end;
-                    const isClosed   = now >= end;
-                    const isUpcoming = now < start;
+                    const isOpen     = isUnscheduled ? true : (now >= start && now < end);
+                    const isClosed   = isUnscheduled ? false : (now >= end);
+                    const isUpcoming = isUnscheduled ? false : (now < start);
                     
                     let countdownText = "";
                     if (isUpcoming) {
@@ -234,10 +240,17 @@ function DashboardContent() {
                           <code className={styles.code}>{s.code}</code>
 
                           <div className={styles.meta}>
-                            <div className={styles.metaRow}>
-                              <CalendarIcon width="12" height="12" />
-                              {examDate.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                            </div>
+                            {isUnscheduled ? (
+                              <div className={styles.metaRow} style={{ color: "var(--color-primary)", fontWeight: 600 }}>
+                                <CalendarIcon width="12" height="12" />
+                                Available Anytime
+                              </div>
+                            ) : (
+                              <div className={styles.metaRow}>
+                                <CalendarIcon width="12" height="12" />
+                                {examDate.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                              </div>
+                            )}
                             <div className={styles.metaRow}>
                               <ClockIcon width="12" height="12" />
                               {s.duration} minutes

@@ -44,6 +44,7 @@ function SubjectsContent() {
   const [form,      setForm]      = useState<typeof emptyForm>(emptyForm);
   const [search,    setSearch]    = useState("");
   const [saving,    setSaving]    = useState(false);
+  const [isScheduled, setIsScheduled] = useState(true);
 
   // Enrollment panel state
   const [enrollSubject,   setEnrollSubject]   = useState<Subject | null>(null);
@@ -91,7 +92,7 @@ function SubjectsContent() {
     );
   }, [subjects, search]);
 
-  const openCreate = () => { setEditing(null); setForm(emptyForm); setModalOpen(true); };
+  const openCreate = () => { setEditing(null); setForm(emptyForm); setIsScheduled(true); setModalOpen(true); };
   const openEdit   = (s: Subject) => {
     setEditing(s);
     setForm({
@@ -106,13 +107,18 @@ function SubjectsContent() {
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
     });
+    setIsScheduled(!!s.exam_datetime && s.exam_datetime !== "");
     setModalOpen(true);
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!form.name || !form.code || !form.term || !form.duration || !form.exam_datetime || !form.teacher_id) {
+    if (!form.name || !form.code || !form.term || !form.duration || !form.teacher_id) {
       showToast("error", "Please complete all required fields.");
+      return;
+    }
+    if (isScheduled && !form.exam_datetime) {
+      showToast("error", "Please provide the Exam Date & Time.");
       return;
     }
     setSaving(true);
@@ -122,7 +128,7 @@ function SubjectsContent() {
         code:          form.code,
         term:          form.term,
         duration:      Number(form.duration),
-        exam_datetime: form.exam_datetime,
+        exam_datetime: isScheduled ? form.exam_datetime : "",
         teacher_id:    Number(form.teacher_id),
         description:   form.description || null,
         class:         form.class || null,
@@ -474,9 +480,24 @@ function SubjectsContent() {
             </div>
           </div>
           <div className="field">
-            <label>Exam Date & Time *</label>
-            <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
+            <label>Scheduling Mode</label>
+            <div style={{ display: "flex", gap: "1.5rem", marginTop: "0.25rem", marginBottom: "0.5rem" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", textTransform: "none", fontWeight: 500 }}>
+                <input type="radio" name="schedule_mode" checked={isScheduled} onChange={() => setIsScheduled(true)} />
+                Scheduled Exam
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", textTransform: "none", fontWeight: 500 }}>
+                <input type="radio" name="schedule_mode" checked={!isScheduled} onChange={() => setIsScheduled(false)} />
+                Available Anytime
+              </label>
+            </div>
           </div>
+          {isScheduled && (
+            <div className="field">
+              <label>Exam Date & Time *</label>
+              <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
+            </div>
+          )}
           <div className={styles.formGrid}>
             <div className="field"><label>Class / Grade</label><input className="input" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })} /></div>
             <div className="field"><label>Session</label><input className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })} /></div>

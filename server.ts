@@ -696,10 +696,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const duration = Number(body?.duration);
     const exam_datetime = trimStr(body?.exam_datetime);
     const teacher_id = body?.teacher_id;
-    if (!name || !code || !term || !exam_datetime) return apiError(400, "Invalid subject payload");
+    if (!name || !code || !term) return apiError(400, "Invalid subject payload");
     if (!isValidSubjectDuration(duration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
-    if (!isValidExamDateTime(exam_datetime)) return apiError(400, "exam_datetime must be a valid date/time");
-    if (!isExamDatetimeInFuture(exam_datetime)) return apiError(400, "exam_datetime must be in the future");
+    if (exam_datetime !== "" && !isValidExamDateTime(exam_datetime)) return apiError(400, "exam_datetime must be a valid date/time");
+    if (exam_datetime !== "" && !isExamDatetimeInFuture(exam_datetime)) return apiError(400, "exam_datetime must be in the future");
     const teacherId = auth.role === "teacher" ? auth.userId : Number(teacher_id);
     if (auth.role === "operator") {
       if (!isPositiveIntId(teacherId)) return apiError(400, "teacher_id is required for operator-created subjects");
@@ -730,11 +730,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (auth.role === "teacher" && subject.is_published) return apiError(403, "Cannot edit a published subject");
     const body = await readJson(req);
     const nextDuration = Number(body.duration ?? subject.duration);
-    const nextExamAt = trimStr(body.exam_datetime) || subject.exam_datetime;
+    const nextExamAt = body.exam_datetime !== undefined ? trimStr(body.exam_datetime) : subject.exam_datetime;
     if (body.duration !== undefined && !isValidSubjectDuration(nextDuration)) {
       return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
     }
-    if (body.exam_datetime !== undefined && !isValidExamDateTime(nextExamAt)) {
+    if (nextExamAt !== "" && !isValidExamDateTime(nextExamAt)) {
       return apiError(400, "exam_datetime must be a valid date/time");
     }
     let nextTeacherId = Number(body.teacher_id ?? subject.teacher_id);
@@ -809,12 +809,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         "SELECT id, status FROM exams WHERE student_id = ? AND subject_id = ?"
       ).get(auth.userId, subjectId) as any;
       if (!existingExam) {
-        // No exam yet — only allow if window is open
-        const now   = Date.now();
-        const start = Date.parse(subject.exam_datetime);
-        const end   = start + Number(subject.duration) * 60_000;
-        if (!Number.isFinite(start) || now < start) return apiError(403, "Exam window not open yet");
-        if (now >= end)                              return apiError(403, "Exam window has closed");
+        if (subject.exam_datetime) {
+          // No exam yet — only allow if window is open
+          const now   = Date.now();
+          const start = Date.parse(subject.exam_datetime);
+          const end   = start + Number(subject.window_duration || 120) * 60_000;
+          if (!Number.isFinite(start) || now < start) return apiError(403, "Exam window not open yet");
+          if (now >= end)                              return apiError(403, "Exam window has closed");
+        }
       }
       // existingExam (in-progress or completed) → allow fetch (needed for resume + review)
     }
@@ -1088,12 +1090,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       "SELECT id FROM subject_enrollments WHERE subject_id = ? AND student_id = ?"
     ).get(subjectId, auth.userId);
     if (!enrollment) return apiError(403, "You are not enrolled in this subject");
-    const now = Date.now();
-    const start = Date.parse(subject.exam_datetime);
-    if (!Number.isFinite(start)) return apiError(500, "Invalid subject schedule");
-    const end = start + Number(subject.window_duration || 120) * 60_000;
-    if (now < start) return apiError(403, "Exam window not open yet");
-    if (now >= end) return apiError(403, "Exam window has closed");
+    if (subject.exam_datetime) {
+      const now = Date.now();
+      const start = Date.parse(subject.exam_datetime);
+      if (!Number.isFinite(start)) return apiError(500, "Invalid subject schedule");
+      const end = start + Number(subject.window_duration || 120) * 60_000;
+      if (now < start) return apiError(403, "Exam window not open yet");
+      if (now >= end) return apiError(403, "Exam window has closed");
+    }
     const currentTerm = (queries.getSetting.get("CURRENT_TERM") as any)?.value || "";
     try {
       queries.createExam.run(auth.userId, subjectId, new Date().toISOString(), "[]", null, currentTerm, subject.mode || "exam");
