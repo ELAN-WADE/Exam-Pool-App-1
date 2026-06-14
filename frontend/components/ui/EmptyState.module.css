@@ -35,7 +35,6 @@
   content: '';
   position: absolute; inset: 0;
   border-radius: inherit;
-  background: linear-gradient(135deg, rgba(255,255,255,0.4), transparent);
   pointer-events: none;
 }
 

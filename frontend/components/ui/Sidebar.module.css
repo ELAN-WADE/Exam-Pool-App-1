@@ -105,8 +105,7 @@
   background: rgba(20, 184, 166, 0.12);
   color: var(--sidebar-text-active, #14b8a6);
   font-weight: 650;
-  border-left: 3px solid var(--color-primary);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  border-radius: var(--radius-md);
 }
 .active .navIcon { opacity: 1; color: var(--sidebar-text-active, #14b8a6); }
 

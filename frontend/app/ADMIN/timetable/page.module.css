@@ -126,7 +126,7 @@
 }
 .teacherAvatar {
   width: 30px; height: 30px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--color-primary-glow-2), var(--color-primary-glow));
+  background: var(--color-primary-glow);
   color: var(--color-primary);
   display: flex; align-items: center; justify-content: center;
   font-weight: 800; font-size: 0.75rem; flex-shrink: 0;

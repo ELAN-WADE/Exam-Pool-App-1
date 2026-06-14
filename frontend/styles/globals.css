@@ -99,7 +99,7 @@
   --glass-border:       rgba(255, 255, 255, 0.4);
   --glass-shadow:       0 8px 32px 0 rgba(15, 23, 42, 0.05);
   --glass-blur:         blur(16px);
-  --accent-gradient:    linear-gradient(135deg, var(--color-primary), var(--color-primary-light));
+  --accent-gradient:    var(--color-primary);
 }
 
 /* ── Premium Utility Classes ── */
@@ -472,8 +472,7 @@ button, [role="button"], input, select { min-height: 40px; }
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  /* Premium side border accent for the dashboard content */
-  border-left: 1px solid rgba(20, 184, 166, 0.2);
+  border: none;
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.02);
 }
 .shellContent {
@@ -580,8 +579,8 @@ button, [role="button"], input, select { min-height: 40px; }
 
 /* ─── Skeleton ───────────────────────────────────── */
 .skeleton {
-  background: linear-gradient(90deg, var(--color-surface-3) 0%, var(--color-surface-2) 50%, var(--color-surface-3) 100%);
-  background-size: 200% 100%;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
   animation: shimmer 1.5s infinite;
   border-radius: var(--radius-sm);
 }
