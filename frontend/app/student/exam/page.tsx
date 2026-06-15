@@ -408,23 +408,6 @@ function ExamContent() {
 
   return (
     <main className={`${styles.page} ${!isTabFocused ? styles.blurred : ""}`}>
-        <div className={styles.modal}>
-          <div className={styles.modalBox}>
-            <h3>Resume your exam?</h3>
-            <p style={{ fontSize: "0.875rem", color: "var(--color-muted)", lineHeight: 1.6 }}>
-              You have <strong>{Object.keys(answers).length}</strong> answered question(s) saved.<br />
-              Time remaining: <strong style={{ color: "var(--color-primary)" }}>{formatTime(remaining)}</strong>
-            </p>
-            <div className={styles.modalActions}>
-              <button className="btn btn-primary" onClick={handleResumeContinue}>Continue</button>
-              <button className="btn btn-ghost" onClick={handleResumeReset}>Start fresh</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-
-
 
       {/* ── Top bar ── */}
       <header className={styles.topbar}>
