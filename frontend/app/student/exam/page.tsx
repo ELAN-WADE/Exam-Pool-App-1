@@ -160,8 +160,8 @@ function ExamContent() {
         );
         if (inProgress) {
           setExamId(Number(inProgress.id));
+          let mapped: Record<number, number | string> = {};
           try {
-            let mapped: Record<number, number | string> = {};
             let lsMapped: Record<number, number | string> = {};
             let serverMapped: Record<number, number | string> = {};
 

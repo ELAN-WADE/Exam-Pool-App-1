@@ -268,7 +268,7 @@ function DashboardContent() {
                           {isTaken ? (
                             <button className={`btn btn-ghost ${styles.fullBtn}`} disabled>Exam Completed</button>
                           ) : isActive ? (
-                            <Link href={`/student/exam?subjectId=${s.id}`} className={`btn btn-warning ${styles.fullBtn}`}>
+                            <Link href={`/student/exam?subjectId=${s.id}`} className={`btn ${styles.resumeBtn} ${styles.fullBtn}`}>
                               <PlayIcon width="13" height="13" /> Resume
                             </Link>
                           ) : isOpen ? (

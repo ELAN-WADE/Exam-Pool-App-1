@@ -219,6 +219,20 @@
 }
 .fullBtn { width: 100%; justify-content: center; font-size: 0.8125rem; }
 
+.resumeBtn {
+  background: var(--color-text);
+  color: var(--color-surface);
+  border: none;
+  font-weight: 600;
+  transition: all 250ms ease;
+  box-shadow: var(--shadow-sm);
+}
+.resumeBtn:hover:not(:disabled) {
+  background: var(--color-text-2);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
 /* ── Animations ──────────────────────────────────────── */
 @keyframes pulse      { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 @keyframes pulseRing  { 0% { transform: scale(1); opacity: 0.65; } 100% { transform: scale(1.75); opacity: 0; } }
