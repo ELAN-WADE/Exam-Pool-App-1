@@ -150,3 +150,31 @@
   border-radius: var(--radius-xl);
   color: var(--color-muted);
 }
+
+.retakeBtn {
+  background: var(--color-text);
+  color: var(--color-surface);
+  border: none;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+  border-radius: var(--radius-xl);
+  padding: 0.45rem 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.retakeBtn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.2);
+  background: var(--color-text-2);
+}
+
+.retakeBtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

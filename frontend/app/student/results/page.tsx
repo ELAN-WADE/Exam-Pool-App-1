@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
 import { BookIcon } from "../../../components/icons/Icons";
@@ -21,6 +22,7 @@ function StudentResults() {
   const [subjects, setSubjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [retaking, setRetaking] = useState<number | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     Promise.all([api.getResults(), api.getSubjects()])
@@ -31,12 +33,13 @@ function StudentResults() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleRetake = async (examId: number) => {
+  const handleRetake = async (examId: number, subjectId: number) => {
     if (!confirm("Are you sure you want to retake this exam? Your previous attempt will be overwritten and your score will be reset.")) return;
     setRetaking(examId);
     try {
       await api.retakeExam(examId);
-      window.location.href = "/student/dashboard";
+      localStorage.removeItem(`exam_answers_${examId}`);
+      router.push(`/student/exam?subjectId=${subjectId}`);
     } catch (err: any) {
       alert(err.message || "Failed to retake exam.");
       setRetaking(null);
@@ -101,11 +104,11 @@ function StudentResults() {
                 {subject.can_retake === 1 && (
                   <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end" }}>
                     <button 
-                      className="btn btn-warning btn-sm" 
-                      onClick={() => handleRetake(r.id)}
+                      className={styles.retakeBtn}
+                      onClick={() => handleRetake(r.id, subject.id)}
                       disabled={retaking === r.id}
                     >
-                      {retaking === r.id ? "Resetting..." : "Retake Exam"}
+                      {retaking === r.id ? "Opening..." : "Retake Exam"}
                     </button>
                   </div>
                 )}

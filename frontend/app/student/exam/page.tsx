@@ -195,7 +195,15 @@ function ExamContent() {
           if (!mounted) return;
           setQuestions(qs);
           seedTimer(inProgress.start_time, Number(s.duration), serverTime);
-          setShowResume(true);
+          
+          if (Object.keys(mapped).length === 0) {
+            if (!document.fullscreenElement) {
+              document.documentElement.requestFullscreen().catch(() => {});
+            }
+            setMode("in-progress");
+          } else {
+            setShowResume(true);
+          }
         } else {
           setShowInstructions(true);
         }
