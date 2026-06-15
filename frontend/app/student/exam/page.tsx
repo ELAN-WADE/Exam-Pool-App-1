@@ -392,9 +392,16 @@ function ExamContent() {
     <main className={styles.errorState}>
       <div style={{ textAlign: "center", padding: "3rem", background: "var(--color-surface)", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-md)", minWidth: "360px" }}>
         <h2 style={{ fontSize: "1.5rem", color: "var(--color-success)", marginBottom: "1.5rem" }}>Exam Completed Successfully</h2>
-        {scoreResult && <DonutChart score={scoreResult.score} total={scoreResult.total_score} />}
-        <p style={{ color: "var(--color-muted)", marginBottom: "2rem" }}>Your answers have been saved and graded.</p>
-        <button className="btn btn-primary" onClick={() => router.replace("/student/dashboard")} style={{ width: "100%" }}>Return to Dashboard</button>
+        {scoreResult && (
+          <div style={{ marginBottom: "2rem" }}>
+            <DonutChart score={scoreResult.score} total={scoreResult.total_score} />
+            <div style={{ fontSize: "1.25rem", fontWeight: 800, marginTop: "1rem", color: "var(--color-text)" }}>
+              Score: <span style={{ color: "var(--color-primary)" }}>{scoreResult.score}</span> / {scoreResult.total_score}
+            </div>
+          </div>
+        )}
+        <p style={{ color: "var(--color-muted)", marginBottom: "2.5rem" }}>Your answers have been saved and graded.</p>
+        <button className="btn btn-primary" onClick={() => router.replace("/student/dashboard")} style={{ width: "100%", padding: "1rem" }}>Return to Dashboard</button>
       </div>
     </main>
   );
@@ -411,22 +418,26 @@ function ExamContent() {
 
       {/* ── Top bar ── */}
       <header className={styles.topbar}>
-        <h2>{subject?.name || "Exam"}</h2>
-        <p className={timerClass} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.95rem", flexShrink: 0 }}>
-          <ClockIcon width="15" height="15" /> {formatTime(remaining)}
-        </p>
-
-        {/* Auto-Save Indicator */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.75rem", flexShrink: 0, minWidth: "100px", justifyContent: "center" }}>
-          {saveStatus === "syncing" && <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> <span style={{ color: "var(--color-muted)" }}>Syncing...</span></>}
-          {saveStatus === "saved" && <><CheckCircleIcon width="14" height="14" style={{ color: "var(--color-success)" }} /> <span style={{ color: "var(--color-success)" }}>Saved to Server</span></>}
-          {saveStatus === "offline" && <><WarningIcon width="14" height="14" style={{ color: "var(--color-warning)" }} /> <span style={{ color: "var(--color-warning)" }}>Queued Offline</span></>}
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <h2 style={{ margin: 0 }}>{subject?.name || "Exam"}</h2>
+          {/* Status Badges */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", background: "var(--color-surface-2)", padding: "0.25rem 0.5rem", borderRadius: "100px", border: "1px solid var(--color-border)" }}>
+            <p className={timerClass} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", fontWeight: 700, margin: 0, padding: "0 0.25rem" }}>
+              <ClockIcon width="14" height="14" /> {formatTime(remaining)}
+            </p>
+            <div style={{ width: "1px", height: "14px", background: "var(--color-border)" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.75rem", fontWeight: 600, minWidth: "90px", justifyContent: "center" }}>
+              {saveStatus === "syncing" && <><div className="spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> <span style={{ color: "var(--color-muted)" }}>Syncing...</span></>}
+              {saveStatus === "saved" && <><CheckCircleIcon width="14" height="14" style={{ color: "var(--color-success)" }} /> <span style={{ color: "var(--color-success)" }}>Saved</span></>}
+              {saveStatus === "offline" && <><WarningIcon width="14" height="14" style={{ color: "var(--color-warning)" }} /> <span style={{ color: "var(--color-warning)" }}>Queued</span></>}
+            </div>
+            <div style={{ width: "1px", height: "14px", background: "var(--color-border)" }} />
+            <p style={{ fontSize: "0.75rem", fontWeight: 600, margin: 0, padding: "0 0.25rem", display: "flex", alignItems: "center", gap: "0.35rem", color: online ? "var(--color-success)" : "var(--color-error)" }}>
+              <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "50%", background: "currentColor", boxShadow: online ? "0 0 6px rgba(34, 197, 94, 0.6)" : "none" }}></span>
+              {online ? "Live" : "Offline"}
+            </p>
+          </div>
         </div>
-
-        <p style={{ fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.25rem", flexShrink: 0 }}>
-          <span style={{ color: online ? "#22c55e" : "#ef4444", fontSize: "1.1rem" }}>●</span>
-          <span style={{ color: "var(--color-muted)" }}>{online ? "Live" : "Offline"}</span>
-        </p>
         <div className={styles.topbarRight}>
           <button className="btn btn-ghost" style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem" }} onClick={() => setShowScratchpad(!showScratchpad)}>
             Scratchpad
