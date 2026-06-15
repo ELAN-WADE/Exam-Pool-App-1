@@ -182,8 +182,12 @@ function DashboardContent() {
             return (
               <div key={category} className={styles.categorySection} style={{ marginBottom: "3rem" }}>
                 <div className={styles.sectionHeader}>
-                  <span className={styles.sectionLabel}>
-                    {category === "active" ? "🔥 Open Now" : "📅 Upcoming Timetable"}
+                  <span className={styles.sectionLabel} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {category === "active" ? (
+                      <><PlayIcon width="16" height="16" style={{ color: "var(--color-primary)" }} /> Open Now</>
+                    ) : (
+                      <><CalendarIcon width="16" height="16" style={{ color: "var(--color-info)" }} /> Upcoming Timetable</>
+                    )}
                   </span>
                   {category === "active" && (
                     <div className={styles.refreshIndicator}>
@@ -228,9 +232,9 @@ function DashboardContent() {
                             <div className={styles.subjectIconBox}>
                               <SubjectIcon width="16" height="16" />
                             </div>
-                            <div>
-                              {isTaken    && <span className="badge badge-success">✓ Done</span>}
-                              {!isTaken && isOpen     && <span className="badge badge-success">● Open</span>}
+                            <div style={{ display: "flex", gap: "0.4rem" }}>
+                              {isTaken    && <span className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}><CheckCircleIcon width="12" height="12" /> Done</span>}
+                              {!isTaken && isOpen     && <span className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}><PlayIcon width="12" height="12" /> Open</span>}
                               {!isTaken && isClosed   && <span className="badge badge-muted">Closed</span>}
                               {!isTaken && isUpcoming && <span className="badge badge-info">Upcoming</span>}
                             </div>

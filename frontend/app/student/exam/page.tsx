@@ -387,11 +387,26 @@ function ExamContent() {
   const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
   const flaggedCount  = questions.filter((q) => flags[q.id]).length;
 
+  if (showResume) {
+    return (
+      <main className={`${styles.page} ${styles.errorState}`}>
+        <div className={styles.modalBox} style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-lg)" }}>
+          <h3 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: "0.5rem" }}>Resume your exam?</h3>
+          <p style={{ fontSize: "0.95rem", color: "var(--color-muted)", lineHeight: 1.6, marginBottom: "1.5rem" }}>
+            You have <strong>{Object.keys(answers).length}</strong> answered question(s) saved.<br />
+            Time remaining: <strong style={{ color: "var(--color-primary)" }}>{formatTime(remaining)}</strong>
+          </p>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeContinue}>Continue</button>
+            <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeReset}>Start fresh</button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className={`${styles.page} ${!isTabFocused ? styles.blurred : ""}`}>
-
-      {/* ── Resume modal ── */}
-      {showResume && (
         <div className={styles.modal}>
           <div className={styles.modalBox}>
             <h3>Resume your exam?</h3>
@@ -476,87 +491,88 @@ function ExamContent() {
 
         {/* ── Question panel ── */}
         <div className={styles.questionPanel}>
-
-          {/* Question card */}
-          {current ? (
-            <div className={styles.questionCard}>
-              <div className={styles.questionMeta}>
-                <span className={styles.questionNumber}>
-                  Q{currentIndex + 1} of {questions.length}
-                  {current.marks && <> · {current.marks} mark{current.marks > 1 ? "s" : ""}</>}
-                </span>
-                {flags[current.id] && (
-                  <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "var(--color-warning)", fontSize: "0.8rem", fontWeight: 700 }}>
-                    <FlagIcon width="13" height="13" /> Flagged
+          <div className={styles.questionScrollArea}>
+            {/* Question card */}
+            {current ? (
+              <div className={styles.questionCard}>
+                <div className={styles.questionMeta}>
+                  <span className={styles.questionNumber}>
+                    Q{currentIndex + 1} of {questions.length}
+                    {current.marks && <> · {current.marks} mark{current.marks > 1 ? "s" : ""}</>}
                   </span>
-                )}
-              </div>
-
-              <div className={current.image_url ? styles.questionSplitLayout : ""}>
-                {current.image_url && (
-                  <div className={styles.imageWrapper}>
-                    <img
-                      src={current.image_url}
-                      alt="Question diagram"
-                      className={styles.questionImg}
-                    />
-                  </div>
-                )}
-
-                <div className={current.image_url ? styles.questionContentRight : ""}>
-                  <p className={styles.questionText}>{current.question_text}</p>
-
-                  {current.question_type === "essay" ? (
-                    <textarea
-                      className={styles.essayTextarea}
-                      placeholder="Write your answer here…"
-                      value={(answers[current.id] as string) || ""}
-                      onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
-                    />
-                  ) : (
-                    (() => {
-                      const opts = current.question_type === "true_false" ? ["True", "False"] : safeOptions(current.options_json).slice(0, 4);
-                      const validOpts = opts.filter(Boolean);
-                      if (validOpts.length === 0) {
-                        return (
-                          <input
-                            type="text"
-                            className="input"
-                            style={{ width: "100%", padding: "1rem", fontSize: "1rem", borderRadius: "var(--radius-lg)" }}
-                            placeholder="Type your short answer..."
-                            value={(answers[current.id] as string) || ""}
-                            onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
-                          />
-                        );
-                      }
-                      return (
-                        <div className={styles.options}>
-                          {opts.map((option, idx) =>
-                            option ? (
-                              <button
-                                key={idx}
-                                className={answers[current.id] === idx ? styles.optionActive : styles.option}
-                                onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
-                              >
-                                <span className={styles.optionLabel}>
-                                  {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
-                                </span>
-                                {option}
-                              </button>
-                            ) : null
-                          )}
-                        </div>
-                      );
-                    })()
+                  {flags[current.id] && (
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "var(--color-warning)", fontSize: "0.8rem", fontWeight: 700 }}>
+                      <FlagIcon width="13" height="13" /> Flagged
+                    </span>
                   )}
                 </div>
+
+                <div className={current.image_url ? styles.questionSplitLayout : ""}>
+                  {current.image_url && (
+                    <div className={styles.imageWrapper}>
+                      <img
+                        src={current.image_url}
+                        alt="Question diagram"
+                        className={styles.questionImg}
+                      />
+                    </div>
+                  )}
+
+                  <div className={current.image_url ? styles.questionContentRight : ""}>
+                    <p className={styles.questionText}>{current.question_text}</p>
+
+                    {current.question_type === "essay" ? (
+                      <textarea
+                        className={styles.essayTextarea}
+                        placeholder="Write your answer here…"
+                        value={(answers[current.id] as string) || ""}
+                        onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                      />
+                    ) : (
+                      (() => {
+                        const opts = current.question_type === "true_false" ? ["True", "False"] : safeOptions(current.options_json).slice(0, 4);
+                        const validOpts = opts.filter(Boolean);
+                        if (validOpts.length === 0) {
+                          return (
+                            <input
+                              type="text"
+                              className="input"
+                              style={{ width: "100%", padding: "1rem", fontSize: "1rem", borderRadius: "var(--radius-lg)" }}
+                              placeholder="Type your short answer..."
+                              value={(answers[current.id] as string) || ""}
+                              onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                            />
+                          );
+                        }
+                        return (
+                          <div className={styles.options}>
+                            {opts.map((option, idx) =>
+                              option ? (
+                                <button
+                                  key={idx}
+                                  className={answers[current.id] === idx ? styles.optionActive : styles.option}
+                                  onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
+                                >
+                                  <span className={styles.optionLabel}>
+                                    {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
+                                  </span>
+                                  {option}
+                                </button>
+                              ) : null
+                            )}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className={styles.questionCard}>
-              <p style={{ color: "var(--color-danger)" }}>No questions found. Please contact your teacher.</p>
-            </div>
-          )}
+            ) : (
+              <div className={styles.questionCard}>
+                <p style={{ color: "var(--color-danger)" }}>No questions found. Please contact your teacher.</p>
+              </div>
+            )}
+          </div>
 
           {/* Navigation row */}
           <div className={styles.navRow}>
