@@ -40,7 +40,6 @@ function ExamContent() {
   const [flags,             setFlags]             = useState<Record<number, boolean>>({});
   const [currentIndex,      setCurrentIndex]      = useState(0);
   const [showResume,        setShowResume]        = useState(false);
-  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [online,            setOnline]            = useState(true);
   const [timerSeed,         setTimerSeed]         = useState(0);
   const [isFocusMode,       setIsFocusMode]       = useState(false);
@@ -425,29 +424,7 @@ function ExamContent() {
       )}
 
 
-      {/* ── Submit confirm modal ── */}
-      {showSubmitConfirm && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.6)", backdropFilter: "blur(6px)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem" }}>
-          <div className="animate-enter" style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", width: "100%", maxWidth: "460px", boxShadow: "0 20px 40px rgba(0,0,0,0.15)", border: "1px solid var(--color-border)" }}>
-            <h3 style={{ fontSize: "1.35rem", fontWeight: 800, margin: 0, color: "var(--color-text)" }}>Submit Exam?</h3>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.95rem", marginTop: "0.5rem" }}>
-              Answered: <strong style={{ color: "var(--color-text)", fontWeight: 700 }}>{answeredCount}</strong> / {questions.length}
-            </p>
-            {questions.length - answeredCount > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "1.25rem", padding: "1rem", background: "var(--color-warning-bg)", borderRadius: "var(--radius-md)", color: "var(--color-warning)", fontSize: "0.9rem", fontWeight: 600, border: "1px solid rgba(245, 158, 11, 0.2)" }}>
-                <WarningIcon width="20" height="20" style={{ flexShrink: 0 }} />
-                You still have {questions.length - answeredCount} unanswered question(s).
-              </div>
-            )}
-            <div style={{ display: "flex", gap: "1rem", marginTop: "2rem", width: "100%" }}>
-              <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center", padding: "0.875rem", fontSize: "1rem" }} onClick={() => setShowSubmitConfirm(false)}>Review Exam</button>
-              <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center", padding: "0.875rem", fontSize: "1rem" }} onClick={() => { setShowSubmitConfirm(false); handleSubmit(); }}>
-                Confirm Submit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* ── Top bar ── */}
       <header className={styles.topbar}>
@@ -590,7 +567,7 @@ function ExamContent() {
             <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.min(questions.length - 1, v + 1))}>Next →</button>
             <button
               className="btn btn-primary"
-              onClick={() => setShowSubmitConfirm(true)}
+              onClick={() => handleSubmit()}
               disabled={mode === "submitting"}
               style={{ fontWeight: 700 }}
             >

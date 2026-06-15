@@ -218,7 +218,7 @@
 
 /* ── Essay textarea ─────────────────────────────────── */
 .essayTextarea {
-  width: 100%; min-height: 200px;
+  width: 50%; min-width: 300px; min-height: 200px;
   padding: 1rem 1.25rem;
   border-radius: var(--radius-md);
   border: 1.5px solid var(--color-border);
@@ -335,6 +335,7 @@
   .questionScrollArea { padding: 1rem; gap: 1rem; }
   .questionCard  { padding: 1.125rem; }
   .questionText  { font-size: 0.9375rem; margin-bottom: 1.125rem; }
+  .essayTextarea { width: 100%; min-width: unset; }
   .option        { padding: 0.75rem 1rem; font-size: 0.9rem; }
   .optionLabel   { width: 26px; height: 26px; }
   .sidePanel     { max-height: 240px; overflow-y: auto; border-top: 1px solid var(--color-border); border-left: none; }

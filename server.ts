@@ -1196,13 +1196,22 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
         // ── Grace period: allow submit up to 30s after window closes ────────────
         const deadline = Date.parse(exam.start_time) + Number(subject.duration) * 60_000 + 30_000;
-        if (Date.now() > deadline) throw new HttpError(409, "Exam time has expired");
-
+        
         let usedAnswers: unknown[];
-        try {
-          usedAnswers = (answers ?? JSON.parse(exam.answers_json || "[]")) as unknown[];
-        } catch {
-          throw new HttpError(400, "Invalid saved answers");
+        if (Date.now() > deadline) {
+          // Time expired: force use the last securely saved answers from DB to prevent late cheating
+          try {
+            usedAnswers = JSON.parse(exam.answers_json || "[]");
+          } catch {
+            usedAnswers = [];
+          }
+        } else {
+          // Within time: use client payload or fallback to DB
+          try {
+            usedAnswers = (answers ?? JSON.parse(exam.answers_json || "[]")) as unknown[];
+          } catch {
+            throw new HttpError(400, "Invalid saved answers");
+          }
         }
         if (!Array.isArray(usedAnswers)) throw new HttpError(400, "Invalid saved answers");
 
