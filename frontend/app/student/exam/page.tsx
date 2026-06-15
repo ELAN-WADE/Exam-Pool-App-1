@@ -364,6 +364,24 @@ function ExamContent() {
     );
   }
 
+  if (showResume) {
+    return (
+      <main className={`${styles.page} ${styles.errorState}`}>
+        <div className={styles.modalBox} style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-lg)" }}>
+          <h3 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: "0.5rem" }}>Resume your exam?</h3>
+          <p style={{ fontSize: "0.95rem", color: "var(--color-muted)", lineHeight: 1.6, marginBottom: "1.5rem" }}>
+            You have <strong>{Object.keys(answers).length}</strong> answered question(s) saved.<br />
+            Time remaining: <strong style={{ color: "var(--color-primary)" }}>{formatTime(remaining)}</strong>
+          </p>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeContinue}>Continue</button>
+            <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeReset}>Start fresh</button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   if (mode === "loading" || mode === "starting") return (
     <main className={styles.errorState}>
       <div className="spinner" />
@@ -387,23 +405,7 @@ function ExamContent() {
   const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
   const flaggedCount  = questions.filter((q) => flags[q.id]).length;
 
-  if (showResume) {
-    return (
-      <main className={`${styles.page} ${styles.errorState}`}>
-        <div className={styles.modalBox} style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-lg)" }}>
-          <h3 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: "0.5rem" }}>Resume your exam?</h3>
-          <p style={{ fontSize: "0.95rem", color: "var(--color-muted)", lineHeight: 1.6, marginBottom: "1.5rem" }}>
-            You have <strong>{Object.keys(answers).length}</strong> answered question(s) saved.<br />
-            Time remaining: <strong style={{ color: "var(--color-primary)" }}>{formatTime(remaining)}</strong>
-          </p>
-          <div style={{ display: "flex", gap: "1rem" }}>
-            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeContinue}>Continue</button>
-            <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center" }} onClick={handleResumeReset}>Start fresh</button>
-          </div>
-        </div>
-      </main>
-    );
-  }
+
 
   return (
     <main className={`${styles.page} ${!isTabFocused ? styles.blurred : ""}`}>
