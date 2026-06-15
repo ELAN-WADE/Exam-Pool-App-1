@@ -65,6 +65,7 @@ function QuestionsContent() {
   const [subjDatetime, setSubjDatetime] = useState("");
   const [subjDuration, setSubjDuration] = useState(60);
   const [subjInstructions, setSubjInstructions] = useState("");
+  const [subjCanRetake, setSubjCanRetake] = useState(true);
 
   const subject  = useMemo(() => subjects.find((s) => Number(s.id) === subjectId), [subjects, subjectId]);
   const isLocked = Boolean(subject?.is_published);
@@ -173,6 +174,7 @@ function QuestionsContent() {
     setSubjDatetime(subject.exam_datetime ? new Date(subject.exam_datetime).toISOString().slice(0, 16) : "");
     setSubjDuration(subject.duration ?? 60);
     setSubjInstructions(subject.instructions ?? "");
+    setSubjCanRetake(subject.can_retake !== 0);
     setEditSubjectOpen(true);
   };
 
@@ -184,6 +186,7 @@ function QuestionsContent() {
         exam_datetime: new Date(subjDatetime).toISOString(),
         duration: Number(subjDuration),
         instructions: subjInstructions,
+        can_retake: subjCanRetake ? 1 : 0,
       });
       showToast("success", "Subject settings saved.");
       setEditSubjectOpen(false);
@@ -619,6 +622,10 @@ function QuestionsContent() {
               value={subjInstructions}
               onChange={(e) => setSubjInstructions(e.target.value)}
             />
+          </div>
+          <div className="field" style={{ marginTop: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <input type="checkbox" checked={subjCanRetake} onChange={(e) => setSubjCanRetake(e.target.checked)} id="teacherCanRetakeToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="teacherCanRetakeToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
           </div>
           <div className="modal-actions">
             <button type="button" className="btn btn-ghost" onClick={() => setEditSubjectOpen(false)}>Cancel</button>

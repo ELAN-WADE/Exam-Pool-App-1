@@ -506,23 +506,40 @@ function ExamContent() {
                       onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
                     />
                   ) : (
-                    <div className={styles.options}>
-                      {(current.question_type === "true_false" ? ["True", "False"] : safeOptions(current.options_json).slice(0, 4))
-                        .map((option, idx) =>
-                          option ? (
-                            <button
-                              key={idx}
-                              className={answers[current.id] === idx ? styles.optionActive : styles.option}
-                              onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
-                            >
-                              <span className={styles.optionLabel}>
-                                {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
-                              </span>
-                              {option}
-                            </button>
-                          ) : null
-                        )}
-                    </div>
+                    (() => {
+                      const opts = current.question_type === "true_false" ? ["True", "False"] : safeOptions(current.options_json).slice(0, 4);
+                      const validOpts = opts.filter(Boolean);
+                      if (validOpts.length === 0) {
+                        return (
+                          <input
+                            type="text"
+                            className="input"
+                            style={{ width: "100%", padding: "1rem", fontSize: "1rem", borderRadius: "var(--radius-lg)" }}
+                            placeholder="Type your short answer..."
+                            value={(answers[current.id] as string) || ""}
+                            onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                          />
+                        );
+                      }
+                      return (
+                        <div className={styles.options}>
+                          {opts.map((option, idx) =>
+                            option ? (
+                              <button
+                                key={idx}
+                                className={answers[current.id] === idx ? styles.optionActive : styles.option}
+                                onClick={() => setAnswers((prev) => ({ ...prev, [current.id]: idx }))}
+                              >
+                                <span className={styles.optionLabel}>
+                                  {current.question_type === "true_false" ? (idx === 0 ? "T" : "F") : String.fromCharCode(65 + idx)}
+                                </span>
+                                {option}
+                              </button>
+                            ) : null
+                          )}
+                        </div>
+                      );
+                    })()
                   )}
                 </div>
               </div>

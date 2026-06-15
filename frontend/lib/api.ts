@@ -123,6 +123,7 @@ export const api = {
   /** @deprecated Use submitExamWithAnswers instead */
   submitExam: (examId: number) => fetchWithAuth(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers: [] }) }),
   getResults: () => fetchWithAuth("/api/exams/results"),
+  retakeExam: (examId: number) => fetchWithAuth(`/api/exams/${examId}/retake`, { method: "POST" }),
   /** Get in-progress exams for the current student (for resume detection) */
   getActiveExams: () => fetchWithAuth("/api/exams/active"),
   getUsers: () => fetchWithAuth("/api/users"),

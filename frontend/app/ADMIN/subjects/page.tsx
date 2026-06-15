@@ -14,6 +14,7 @@ type Subject = {
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
   description?: string; class?: string; session?: string; mode?: string;
+  can_retake?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
 type EnrolledStudent = {
@@ -21,7 +22,7 @@ type EnrolledStudent = {
   enrolled_at: string; score?: number; total_score?: number; exam_status?: string;
 };
 
-const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam" };
+const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", can_retake: true };
 
 export default function OperatorSubjectsPage() {
   return (
@@ -106,6 +107,7 @@ function SubjectsContent() {
       class:         s.class ?? "",
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
+      can_retake:    s.can_retake !== 0,
     });
     setIsScheduled(!!s.exam_datetime && s.exam_datetime !== "");
     setModalOpen(true);
@@ -134,6 +136,7 @@ function SubjectsContent() {
         class:         form.class || null,
         session:       form.session || null,
         mode:          form.mode || "exam",
+        can_retake:    form.can_retake ? 1 : 0,
       };
       if (editing) {
         await api.updateSubject(editing.id, payload);
@@ -511,6 +514,10 @@ function SubjectsContent() {
           <div className="field">
             <label>Description</label>
             <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </div>
+          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+            <input type="checkbox" checked={form.can_retake} onChange={(e) => setForm({ ...form, can_retake: e.target.checked })} id="canRetakeToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="canRetakeToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
           </div>
           <div className={`field ${styles.teacherField}`}>
             <label>Assign Teacher *</label>

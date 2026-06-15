@@ -621,6 +621,29 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ exam_id: examId, teacher_remark: remark || null });
   }
 
+  // ── Retake Exam ─────────────────────────────────────────────────────────────
+  const examRetakeMatch = pathname.match(/^\/api\/exams\/(\d+)\/retake$/);
+  if (examRetakeMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["student"]);
+    const examId = Number(examRetakeMatch[1]);
+    if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
+    
+    // Begin Transaction manually via db object? Since we are doing two writes, we can just run them sequentially.
+    const exam = queries.getExamById.get(examId) as any;
+    if (!exam || exam.student_id !== auth.userId) return apiError(404, "Exam not found");
+    if (exam.status !== "completed") return apiError(400, "Exam is not yet completed");
+    
+    const subject = queries.getSubjectById.get(exam.subject_id) as any;
+    if (!subject || subject.can_retake !== 1) return apiError(403, "Retaking is not allowed for this subject");
+    
+    queries.deleteStudentAnswersForExam.run(examId);
+    queries.resetExam.run(examId, auth.userId);
+    
+    auditLog(auth.userId, "EXAM_RETAKE", "exam", examId, "{}");
+    return apiSuccess({ success: true, message: "Exam reset for retake." });
+  }
+
   // ── Save principal/admin remark for a specific completed exam ────────────────
   const examPrincipalRemarkMatch = pathname.match(/^\/api\/exams\/(\d+)\/principal-remark$/);
   if (examPrincipalRemarkMatch && method === "PUT") {
@@ -712,7 +735,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const mode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : "exam";
     const instructions = trimStr(body?.instructions) || null;
     const window_duration = Number(body?.window_duration) || 120;
-    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration) as {
+    const can_retake = body?.can_retake !== undefined ? Number(body.can_retake) : 1;
+    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake) as {
       lastInsertRowid: number | bigint;
     };
     auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
@@ -767,6 +791,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       nextInstructions,
       body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0),
       body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120),
+      body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
       subjectId,
     );
     return apiSuccess(queries.getSubjectById.get(subjectId));
