@@ -1292,19 +1292,19 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     if (auth.role === "student") {
       return apiSuccess(
-        db.prepare("SELECT e.*, s.name as subject_name, s.total_score FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'").all(auth.userId)
+        db.prepare("SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'").all(auth.userId)
       );
     }
     if (auth.role === "teacher") {
       return apiSuccess(
         db.prepare(
-          "SELECT e.*, s.name as subject_name, s.total_score, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC",
+          "SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC",
         ).all(auth.userId),
       );
     }
     return apiSuccess(
       db.prepare(
-        "SELECT e.*, s.name as subject_name, s.total_score, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY e.end_time DESC",
+        "SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY e.end_time DESC",
       ).all(),
     );
   }
@@ -1358,8 +1358,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator"]);
     const rows: any[] = auth.role === "teacher"
-      ? db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, s.total_score, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY s.name, u.grade, u.name").all(auth.userId)
-      : db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, s.total_score, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY s.name, u.grade, u.name").all();
+      ? db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY s.name, u.grade, u.name").all(auth.userId)
+      : db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY s.name, u.grade, u.name").all();
     // Build CSV
     const headers = ["Reg ID", "Student Name", "Grade", "Subject", "Subject Code", "Score", "Total", "Percentage", "Letter Grade", "Submitted At"];
     const csvRows = rows.map((r) => {

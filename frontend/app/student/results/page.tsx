@@ -107,8 +107,8 @@ function StudentResults() {
                     <div className={styles.statLabel}>Marks</div>
                   </div>
                   <div className={styles.statItem}>
-                    <div className={styles.statValue}>{r.total_questions || 0}</div>
-                    <div className={styles.statLabel}>Questions</div>
+                    <div className={styles.statValue}>{r.answered_questions || 0} / {r.total_questions || 0}</div>
+                    <div className={styles.statLabel}>Questions Answered</div>
                   </div>
                 </div>
 
