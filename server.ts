@@ -1333,25 +1333,6 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   // ── Exam delete/reset (operator + owning teacher) ───────────────────────
-  const examRetakeMatch = pathname.match(/^\/api\/exams\/(\d+)\/retake$/);
-  if (examRetakeMatch && method === "POST") {
-    const auth = requireAuth(req);
-    requireRole(auth.role, ["student"]);
-    const examId = Number(examRetakeMatch[1]);
-    if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
-    const exam = queries.getExamById.get(examId) as any;
-    if (!exam || exam.student_id !== auth.userId) return apiError(403, "Forbidden");
-    const subject = queries.getSubjectById.get(exam.subject_id) as any;
-    if (!subject || subject.can_retake === 0) return apiError(403, "Retakes are not allowed for this subject");
-
-    db.transaction(() => {
-      db.prepare("DELETE FROM student_answers WHERE exam_id = ?").run(examId);
-      db.prepare("UPDATE exams SET status = 'in-progress', score = NULL, total_score = 0, answers_json = '[]', start_time = ?, end_time = NULL WHERE id = ?").run(new Date().toISOString(), examId);
-    })();
-    auditLog(auth.userId, "EXAM_RETAKE", "exam", examId, "{}");
-    return apiSuccess({ success: true });
-  }
-
   const examDeleteMatch = pathname.match(/^\/api\/exams\/(\d+)$/);
   if (examDeleteMatch && method === "DELETE") {
     const auth = requireAuth(req);
