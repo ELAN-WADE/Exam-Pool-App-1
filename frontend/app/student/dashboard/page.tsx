@@ -204,12 +204,6 @@ function DashboardContent() {
                       <><CalendarIcon width="16" height="16" style={{ color: "var(--color-info)" }} /> Upcoming Timetable</>
                     )}
                   </span>
-                  {category === "active" && (
-                    <div className={styles.refreshIndicator}>
-                      <span className={styles.refreshDot} />
-                      Auto-refreshing
-                    </div>
-                  )}
                 </div>
 
                 <div className={styles.grid}>
