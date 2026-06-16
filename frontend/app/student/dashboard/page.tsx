@@ -146,7 +146,7 @@ function DashboardContent() {
       <div className={`${styles.welcomeBanner} animate-enter`}>
         <div className={styles.welcomeText}>
           <h1 className={styles.greeting}>Hello, {firstName}! 👋</h1>
-          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} exam{stats.available !== 1 ? "s" : ""} pending</p>
+          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} pending · {stats.examsTaken} completed</p>
         </div>
       </div>
 
