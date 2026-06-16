@@ -101,6 +101,17 @@ function StudentResults() {
                   </div>
                 </div>
 
+                <div className={styles.statsRow}>
+                  <div className={styles.statItem}>
+                    <div className={styles.statValue}>{score} / {total}</div>
+                    <div className={styles.statLabel}>Marks</div>
+                  </div>
+                  <div className={styles.statItem}>
+                    <div className={styles.statValue}>{r.total_questions || 0}</div>
+                    <div className={styles.statLabel}>Questions</div>
+                  </div>
+                </div>
+
                 {subject.can_retake === 1 && (
                   <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end" }}>
                     <button 
@@ -112,17 +123,6 @@ function StudentResults() {
                     </button>
                   </div>
                 )}
-
-                <div className={styles.statsRow}>
-                  <div className={styles.statItem}>
-                    <div className={styles.statValue}>{score} / {total}</div>
-                    <div className={styles.statLabel}>Marks</div>
-                  </div>
-                  <div className={styles.statItem}>
-                    <div className={styles.statValue}>{r.total_questions || 0}</div>
-                    <div className={styles.statLabel}>Questions</div>
-                  </div>
-                </div>
 
                 {r.teacher_remark && (
                   <div className={styles.teacherRemark}>

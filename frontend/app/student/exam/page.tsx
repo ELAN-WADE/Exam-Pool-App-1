@@ -50,6 +50,7 @@ function ExamContent() {
   const [scoreResult,       setScoreResult]       = useState<{score: number, total_score: number} | null>(null);
   const [showScratchpad,    setShowScratchpad]    = useState(false);
   const [showCalculator,    setShowCalculator]    = useState(false);
+  const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
   const answersRef = useRef(answers);
   useEffect(() => { answersRef.current = answers; }, [answers]);
@@ -406,9 +407,30 @@ function ExamContent() {
     </main>
   );
 
+  const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
+
+  if (showSubmitConfirm) {
+    return (
+      <main className={`${styles.page} ${styles.errorState}`}>
+        <div className={styles.modalBox} style={{ background: "var(--color-surface)", padding: "2rem", borderRadius: "var(--radius-xl)", border: "1px solid var(--color-border)", boxShadow: "var(--shadow-lg)", textAlign: "center", minWidth: "320px" }}>
+          <h3 style={{ fontSize: "1.4rem", fontWeight: 800, marginBottom: "0.5rem" }}>Confirm Submission</h3>
+          <p style={{ fontSize: "0.95rem", color: "var(--color-muted)", lineHeight: 1.6, marginBottom: "1.5rem" }}>
+            You have answered <strong>{answeredCount}</strong> out of <strong>{questions.length}</strong> questions.<br />
+            Are you sure you want to submit your exam now?
+          </p>
+          <div style={{ display: "flex", gap: "1rem" }}>
+            <button className="btn btn-ghost" style={{ flex: 1, justifyContent: "center" }} onClick={() => setShowSubmitConfirm(false)} disabled={mode === "submitting"}>Cancel</button>
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: "center" }} onClick={() => handleSubmit()} disabled={mode === "submitting"}>
+              {mode === "submitting" ? "Submitting…" : "Yes, Submit"}
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   const current       = questions[currentIndex];
   const timerClass    = remaining > 300 ? styles.green : remaining > 60 ? styles.yellow : styles.red;
-  const answeredCount = questions.filter((q) => answers[q.id] !== undefined).length;
   const flaggedCount  = questions.filter((q) => flags[q.id]).length;
 
 
@@ -561,7 +583,7 @@ function ExamContent() {
             <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.min(questions.length - 1, v + 1))}>Next →</button>
             <button
               className="btn btn-primary"
-              onClick={() => handleSubmit()}
+              onClick={() => setShowSubmitConfirm(true)}
               disabled={mode === "submitting"}
               style={{ fontWeight: 700 }}
             >

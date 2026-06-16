@@ -95,6 +95,21 @@ function DashboardContent() {
 
   const firstName = user?.name?.split(" ")[0] ?? "Student";
 
+  const [retaking, setRetaking] = useState<number | null>(null);
+
+  const handleRetake = async (examId: number, subjectId: number) => {
+    if (!confirm("Are you sure you want to retake this exam? Your previous attempt will be overwritten and your score will be reset.")) return;
+    setRetaking(examId);
+    try {
+      await api.retakeExam(examId);
+      localStorage.removeItem(`exam_answers_${examId}`);
+      router.push(`/student/exam?subjectId=${subjectId}`);
+    } catch (err: any) {
+      alert(err.message || "Failed to retake exam.");
+      setRetaking(null);
+    }
+  };
+
   // Auto-route instantly when the local clock hits the start time
   useEffect(() => {
     const activeOne = subjects.find(s => {
@@ -270,7 +285,18 @@ function DashboardContent() {
 
                         <div className={styles.cardAction}>
                           {isTaken ? (
-                            <button className={`btn btn-ghost ${styles.fullBtn}`} disabled>Exam Completed</button>
+                            s.can_retake === 1 ? (
+                              <button 
+                                className={`btn btn-primary ${styles.fullBtn}`} 
+                                onClick={() => handleRetake(s.exam_id, s.id)}
+                                disabled={retaking === s.exam_id}
+                                style={{ transform: "scale(1.02)", boxShadow: "0 4px 12px rgba(var(--color-primary-rgb), 0.3)" }}
+                              >
+                                {retaking === s.exam_id ? "Opening..." : "Retake Exam"}
+                              </button>
+                            ) : (
+                              <button className={`btn btn-ghost ${styles.fullBtn}`} disabled>Exam Completed</button>
+                            )
                           ) : isActive ? (
                             <Link href={`/student/exam?subjectId=${s.id}`} className={`btn ${styles.resumeBtn} ${styles.fullBtn}`}>
                               <PlayIcon width="13" height="13" /> Resume

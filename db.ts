@@ -422,8 +422,8 @@ export const queries = {
   getStudentsByGrade:      db.prepare("SELECT id FROM users WHERE role = 'student' AND grade = ? AND is_active = 1"),
   getStudentEnrolledSubjects: db.prepare(`
     SELECT s.id, s.name, s.code, s.term, s.duration, s.total_score,
-           s.exam_datetime, s.is_published, s.mode,
-           e.status as exam_status, e.score, e.end_time
+           s.exam_datetime, s.is_published, s.mode, s.can_retake,
+           e.id as exam_id, e.status as exam_status, e.score, e.end_time
     FROM subject_enrollments se
     JOIN subjects s ON s.id = se.subject_id
     LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
