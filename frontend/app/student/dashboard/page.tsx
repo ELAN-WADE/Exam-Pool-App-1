@@ -280,6 +280,12 @@ function DashboardContent() {
                                 Starts in: {countdownText}
                               </div>
                             )}
+                            {s.retake_count > 0 && (
+                              <div className={styles.metaRow} style={{ color: "var(--color-warning)", fontWeight: 600 }}>
+                                <CheckCircleIcon width="12" height="12" />
+                                Retaken {s.retake_count} time{s.retake_count !== 1 ? "s" : ""}
+                              </div>
+                            )}
                           </div>
                         </div>
 

@@ -146,6 +146,7 @@ export function initializeDatabase(): void {
   addColumnIfMissing("exams", "term",              "TEXT");
   addColumnIfMissing("exams", "mode",              "TEXT");
   addColumnIfMissing("exams", "total_score",       "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("exams", "retake_count",      "INTEGER NOT NULL DEFAULT 0");
   // v6: backfill any legacy NULL total_score rows to 0 to prevent NULL arithmetic in score % calculations
   db.run("UPDATE exams SET total_score = 0 WHERE total_score IS NULL");
   // v4: denormalised reg_id for fast result lookup
@@ -363,7 +364,7 @@ export const queries = {
   getExamByStudentSubject: db.prepare("SELECT * FROM exams WHERE student_id = ? AND subject_id = ?"),
   saveExam:                db.prepare("UPDATE exams SET answers_json = ? WHERE id = ? AND student_id = ?"),
   submitExam:              db.prepare("UPDATE exams SET answers_json=?, end_time=?, score=?, total_score=?, status='completed' WHERE id=? AND student_id=? AND status='in-progress'"),
-  resetExam:               db.prepare("UPDATE exams SET answers_json='[]', score=NULL, total_score=0, end_time=NULL, start_time=(strftime('%Y-%m-%dT%H:%M:%SZ','now')), status='in-progress' WHERE id=? AND student_id=?"),
+  resetExam:               db.prepare("UPDATE exams SET answers_json='[]', score=NULL, total_score=0, end_time=NULL, start_time=(strftime('%Y-%m-%dT%H:%M:%SZ','now')), retake_count = retake_count + 1, status='in-progress' WHERE id=? AND student_id=?"),
   deleteStudentAnswersForExam: db.prepare("DELETE FROM student_answers WHERE exam_id=?"),
   getExamsByStudent:       db.prepare("SELECT * FROM exams WHERE student_id = ? AND status = 'completed'"),
   getExamsBySubject:       db.prepare("SELECT * FROM exams WHERE subject_id = ? AND status = 'completed'"),
@@ -423,7 +424,7 @@ export const queries = {
   getStudentEnrolledSubjects: db.prepare(`
     SELECT s.id, s.name, s.code, s.term, s.duration, s.total_score,
            s.exam_datetime, s.is_published, s.mode, s.can_retake,
-           e.id as exam_id, e.status as exam_status, e.score, e.end_time
+           e.id as exam_id, e.status as exam_status, e.score, e.end_time, e.retake_count
     FROM subject_enrollments se
     JOIN subjects s ON s.id = se.subject_id
     LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
