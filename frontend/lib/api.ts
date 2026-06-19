@@ -61,7 +61,7 @@ type FetchAuthBehavior = {
   redirectOn503?: boolean;
 };
 
-async function fetchWithAuth(url: string, options: RequestInit = {}, behavior: FetchAuthBehavior = {}) {
+export async function fetchWithAuth(url: string, options: RequestInit = {}, behavior: FetchAuthBehavior = {}) {
   const redirectOn401 = behavior.redirectOn401 ?? true;
   const redirectOn503 = behavior.redirectOn503 ?? true;
   const res = await fetch(API_BASE + url, {

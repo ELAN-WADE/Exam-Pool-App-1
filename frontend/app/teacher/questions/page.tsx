@@ -8,6 +8,7 @@ import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
 import { SettingsIcon, PlusIcon, TrashIcon, EditIcon, CheckCircleIcon, DocumentIcon, LockIcon } from "../../../components/icons/Icons";
+import { BulkUploadModal } from "../../../components/teacher/BulkUploadModal";
 import styles from "./page.module.css";
 
 export default function TeacherQuestionsPage() {
@@ -44,6 +45,7 @@ function QuestionsContent() {
 
   const [editorMode,      setEditorMode]      = useState<EditorMode>("list");
   const [editSubjectOpen, setEditSubjectOpen] = useState(false);
+  const [bulkUploadOpen,  setBulkUploadOpen]  = useState(false);
   const [editing,         setEditing]         = useState<any | null>(null);
   const [deleting,        setDeleting]        = useState<any | null>(null);
   const [saving,          setSaving]          = useState(false);
@@ -500,6 +502,9 @@ function QuestionsContent() {
           <button className="btn btn-ghost btn-sm inline" onClick={openEditSubject} disabled={isLocked} title={isLocked ? "Unpublish to edit" : "Exam settings"}>
             <SettingsIcon width="15" height="15" /> Settings
           </button>
+          <button className="btn btn-ghost btn-sm inline" onClick={() => setBulkUploadOpen(true)} disabled={isLocked} style={{ border: "1px solid #e2e8f0", background: "#ffffff" }}>
+            <DocumentIcon width="15" height="15" /> Bulk Upload
+          </button>
           <button className="btn btn-primary btn-sm inline" onClick={openCreate} disabled={isLocked}>
             <PlusIcon width="15" height="15" /> Add Question
           </button>
@@ -524,9 +529,14 @@ function QuestionsContent() {
           <h3>No Questions Yet</h3>
           <p>Click "Add Question" to open the editor and build your exam.</p>
           {!isLocked && (
-            <button className="btn btn-primary" onClick={openCreate} style={{ marginTop: "0.75rem" }}>
-              <PlusIcon width="16" height="16" /> Create First Question
-            </button>
+            <div style={{ display: "flex", gap: "1rem", marginTop: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
+              <button className="btn btn-ghost" onClick={() => setBulkUploadOpen(true)} style={{ border: "1px solid #e2e8f0", background: "#ffffff" }}>
+                <DocumentIcon width="16" height="16" /> Bulk Upload
+              </button>
+              <button className="btn btn-primary" onClick={openCreate}>
+                <PlusIcon width="16" height="16" /> Create First Question
+              </button>
+            </div>
           )}
         </div>
       ) : (
@@ -598,6 +608,14 @@ function QuestionsContent() {
           <button className="btn btn-danger" onClick={() => onDeleteQuestion(deleting)}>Delete</button>
         </div>
       </Modal>
+
+      {bulkUploadOpen && (
+        <BulkUploadModal 
+          subjectId={subjectId} 
+          onClose={() => setBulkUploadOpen(false)} 
+          onSuccess={() => { setBulkUploadOpen(false); showToast("success", "Questions uploaded successfully!"); loadQuestions(); }}
+        />
+      )}
 
       <Modal open={editSubjectOpen} onClose={() => setEditSubjectOpen(false)} size="md">
         <h2>Subject Settings & Instructions</h2>

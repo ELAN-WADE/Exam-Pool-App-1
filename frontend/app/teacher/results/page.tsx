@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { api } from "../../../lib/api";
@@ -37,7 +37,7 @@ function TeacherResults() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const data = (await api.getResults()) as any[];
       setRows(data ?? []);
@@ -46,9 +46,21 @@ function TeacherResults() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // ── Live-update: re-fetch table when a student submits an exam ──
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (notif?.type === "exam_submitted") {
+        load();
+      }
+    };
+    window.addEventListener("notification_received", handler);
+    return () => window.removeEventListener("notification_received", handler);
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
@@ -123,7 +135,13 @@ function TeacherResults() {
       {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
 
       <div className="pageHeader" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
-        <h1 className="pageTitle">Exam Results</h1>
+        <div>
+          <h1 className="pageTitle">Exam Results</h1>
+          <p style={{ color: "var(--color-muted)", fontSize: "0.8rem", marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px rgba(34,197,94,0.7)" }} />
+            Live — updates automatically when students submit
+          </p>
+        </div>
         <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
           <button className="btn btn-ghost" onClick={handleCsvExport}>
             <DocumentIcon width="14" height="14" />

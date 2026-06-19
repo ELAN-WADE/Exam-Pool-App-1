@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
 import { api } from "../../../lib/api";
@@ -29,11 +29,35 @@ function TeacherDashboard() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportCardStudent, setReportCardStudent] = useState<any | null>(null);
 
+  // ── Fetch report-card students (re-used on live refresh) ──────────────
+  const loadReportStudents = useCallback(async (subs: any[]) => {
+    setReportLoading(true);
+    const allStudentMap: Record<number, any> = {};
+    await Promise.all(
+      subs.map(async (s: any) => {
+        try {
+          const students = (await api.getSubjectStudents(Number(s.id))) as any[];
+          for (const st of students ?? []) {
+            if (st.exam_status === "completed" && !allStudentMap[st.id]) {
+              allStudentMap[st.id] = st;
+            }
+          }
+        } catch { /* ignore */ }
+      })
+    );
+    setReportStudents(Object.values(allStudentMap));
+    setReportLoading(false);
+  }, []);
+
+  // ── Initial data load ──────────────────────────────────────────────
+  const subjectsRef = React.useRef<any[]>([]);
+
   useEffect(() => {
     (async () => {
       try {
         const data = (await api.getSubjects()) as any[];
         const subs = data ?? [];
+        subjectsRef.current = subs;
         setSubjects(subs);
         const counts: Record<number, number> = {};
         await Promise.all(
@@ -47,31 +71,27 @@ function TeacherDashboard() {
           })
         );
         setQuestionCounts(counts);
-
-        // Load students with completed exams across all subjects
-        setReportLoading(true);
-        const allStudentMap: Record<number, any> = {};
-        await Promise.all(
-          subs.map(async (s: any) => {
-            try {
-              const students = (await api.getSubjectStudents(Number(s.id))) as any[];
-              for (const st of students ?? []) {
-                if (st.exam_status === "completed" && !allStudentMap[st.id]) {
-                  allStudentMap[st.id] = st;
-                }
-              }
-            } catch { /* ignore */ }
-          })
-        );
-        setReportStudents(Object.values(allStudentMap));
-        setReportLoading(false);
+        await loadReportStudents(subs);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load subjects");
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [loadReportStudents]);
+
+  // ── Live-update: listen for exam_submitted SSE events ─────────────
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (notif?.type === "exam_submitted") {
+        // Silently refresh the report card section
+        loadReportStudents(subjectsRef.current);
+      }
+    };
+    window.addEventListener("notification_received", handler);
+    return () => window.removeEventListener("notification_received", handler);
+  }, [loadReportStudents]);
 
   if (loading) return (
     <>
@@ -226,7 +246,7 @@ function TeacherDashboard() {
           </div>
           <button
             className="btn btn-ghost btn-sm"
-            onClick={() => window.location.reload()}
+            onClick={() => loadReportStudents(subjectsRef.current)}
             title="Refresh to see newly completed exams"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">

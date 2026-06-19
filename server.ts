@@ -137,6 +137,40 @@ function checkRateLimit(ip: string, limit: number, windowMs: number) {
   if (record.count > limit) throw new HttpError(429, "Too Many Requests");
 }
 
+// ── Server-Sent Events (SSE) Manager ───────────────────────────────────────
+const sseClients = new Map<number, Set<ReadableStreamDefaultController>>();
+
+function notifyUser(userId: number, eventData: any) {
+  try {
+    const record = queries.createNotification.get(
+      userId,
+      eventData.type || "info",
+      eventData.message,
+      eventData.link || null
+    ) as any;
+
+    const clients = sseClients.get(userId);
+    if (clients) {
+      const payload = `data: ${jsonSafeStringify(record)}\n\n`;
+      for (const client of clients) {
+        try { client.enqueue(payload); } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.error("[exampool] Failed to send notification", err);
+  }
+}
+
+function notifyOperators(eventData: any) {
+  const operators = queries.getAllUsers.all() as any[];
+  for (const user of operators) {
+    if (user.role === "operator") {
+      notifyUser(user.id, eventData);
+    }
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────
+
 function apiSuccess(data: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(jsonSafeStringify({ data }), {
     status,
@@ -356,6 +390,92 @@ function normalizeApiPathname(raw: string): string {
 async function handleApi(req: Request, url: URL): Promise<Response> {
   const method = req.method.toUpperCase();
   const pathname = normalizeApiPathname(url.pathname);
+
+  // ── Notifications Endpoints ──────────────────────────────────────────────
+  if (pathname === "/api/notifications/stream" && method === "GET") {
+    let auth;
+    try { auth = requireAuth(req); } catch (e) { return new Response("Unauthorized", { status: 401 }); }
+    return new Response(new ReadableStream({
+      start(controller) {
+        let clients = sseClients.get(auth.userId);
+        if (!clients) {
+          clients = new Set();
+          sseClients.set(auth.userId, clients);
+        }
+        clients.add(controller);
+        const keepAlive = setInterval(() => {
+          try { controller.enqueue(": keepalive\n\n"); } catch {}
+        }, 15000);
+        req.signal.addEventListener("abort", () => {
+          clearInterval(keepAlive);
+          clients?.delete(controller);
+          if (clients?.size === 0) sseClients.delete(auth.userId);
+        });
+      }
+    }), {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        ...corsHeaders,
+      }
+    });
+  }
+
+  if (pathname === "/api/notifications" && method === "GET") {
+    const auth = requireAuth(req);
+    const notifications = queries.getNotifications.all(auth.userId);
+    const unreadRow = queries.getUnreadNotificationCount.get(auth.userId) as any;
+    return apiSuccess({ items: notifications, unreadCount: sqlInt(unreadRow?.count) });
+  }
+
+  if (pathname === "/api/notifications/read" && method === "PUT") {
+    const auth = requireAuth(req);
+    queries.markNotificationsRead.run(auth.userId);
+    return apiMessage("Marked all as read");
+  }
+  
+  // ── Exam Sync Stream (Secure Timer) ──────────────────────────────────────
+  const examStreamMatch = pathname.match(/^\/api\/exams\/(\d+)\/stream$/);
+  if (examStreamMatch && method === "GET") {
+    let auth;
+    try { auth = requireAuth(req); } catch (e) { return new Response("Unauthorized", { status: 401 }); }
+    const examId = Number(examStreamMatch[1]);
+    const exam = queries.getExamByIdAndStudent.get(examId, auth.userId) as any;
+    if (!exam) return new Response("Not found", { status: 404 });
+
+    return new Response(new ReadableStream({
+      start(controller) {
+        const sendTimeSync = () => {
+          const e = queries.getExamById.get(examId) as any;
+          if (e && e.status === "in-progress") {
+             const s = queries.getSubjectById.get(e.subject_id) as any;
+             const elapsed = Math.floor((Date.now() - Date.parse(e.start_time)) / 1000);
+             const remaining = Math.max(0, s.duration * 60 - elapsed);
+             if (remaining === 0) {
+               try { controller.enqueue(`data: ${JSON.stringify({type: "force_submit"})}\n\n`); } catch {}
+             } else {
+               try { controller.enqueue(`data: ${JSON.stringify({type: "sync", remaining})}\n\n`); } catch {}
+             }
+          } else {
+             try { controller.enqueue(`data: ${JSON.stringify({type: "force_submit"})}\n\n`); } catch {}
+          }
+        };
+
+        sendTimeSync();
+        const keepAlive = setInterval(() => { sendTimeSync(); }, 15000);
+        req.signal.addEventListener("abort", () => { clearInterval(keepAlive); });
+      }
+    }), {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        ...corsHeaders,
+      }
+    });
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   if (setupRequired && !isApiExemptWhileSetup(pathname, method)) {
     return apiSetupRequired();
@@ -618,6 +738,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
     queries.updateExamTeacherRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_REMARK", "exam", examId, JSON.stringify({ type: "teacher" }));
+    
+    // Notify admin
+    const subjectRow = queries.getSubjectById.get(exam.subject_id) as any;
+    notifyOperators({
+      type: "remark_added",
+      message: `Teacher added a remark for ${subjectRow?.code || 'an exam'}`,
+      link: `/ADMIN/report-card`
+    });
+
     return apiSuccess({ exam_id: examId, teacher_remark: remark || null });
   }
 
@@ -689,6 +818,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     
     auditLog(auth.userId, "TERM_REMARK", "user", studentId, JSON.stringify({ term, role: auth.role }));
+
+    // Notify admin when a teacher writes a report-card remark
+    if (auth.role === "teacher") {
+      const teacherRow = queries.getUserById.get(auth.userId) as any;
+      const studentRow = queries.getUserById.get(studentId) as any;
+      notifyOperators({
+        type: "remark_added",
+        message: `${teacherRow?.name || 'Teacher'} added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
+        link: `/ADMIN/report-card`
+      });
+    }
+
     return apiSuccess(queries.getTermRemark.get(studentId, term));
   }
 
@@ -794,6 +935,16 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
       subjectId,
     );
+    
+    const nextPublished = Number(body.is_published ?? subject.is_published);
+    if (nextPublished === 1 && subject.is_published === 0) {
+      notifyOperators({
+        type: "subject_published",
+        message: `A teacher has published ${trimStr(body.code) || subject.code} (Questions are ready)`,
+        link: `/ADMIN/subjects`
+      });
+    }
+
     return apiSuccess(queries.getSubjectById.get(subjectId));
   }
 
@@ -1236,9 +1387,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         const questions = queries.getQuestionsBySubject.all(exam.subject_id) as any[];
         let score = 0;
         let total = 0;
+        let answered = 0;
         for (const q of questions) {
+          const qid = Number(q.id);
           total += Number(q.marks);
-          if (answerMap.get(Number(q.id)) === Number(q.correct_answer)) score += Number(q.marks);
+          if (answerMap.get(qid) === Number(q.correct_answer)) score += Number(q.marks);
+          if (answerMap.get(qid) !== null || (essayMap.has(qid) && essayMap.get(qid) !== null)) {
+            answered++;
+          }
         }
 
         const changes = queries.submitExam.run(
@@ -1273,7 +1429,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         queries.updateExamAnswersJson.run(examId);
 
         return {
-          exam_id: examId, score, total_score: total,
+          exam_id: examId, score, total_score: total, subject_id: exam.subject_id,
+          answered_questions: answered, total_questions: questions.length,
           time_taken_seconds: Math.max(0, Math.floor((Date.now() - Date.parse(exam.start_time)) / 1000)),
         };
       });
@@ -1285,7 +1442,21 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
 
     auditLog(auth.userId, "EXAM_SUBMIT", "exam", result.exam_id, JSON.stringify({ score: result.score, total: result.total_score }));
-    return apiSuccess(result);
+    
+    // Notify the owning teacher in real-time via SSE
+    const subjectRow = queries.getSubjectById.get(result.subject_id) as any;
+    if (subjectRow?.teacher_id) {
+      const student = queries.getUserById.get(auth.userId) as any;
+      notifyUser(sqlInt(subjectRow.teacher_id), {
+        type: "exam_submitted",
+        message: `${student?.name || 'A student'} submitted ${subjectRow.code} — Score: ${result.score}/${result.total_score}`,
+        link: `/teacher/results?subject_id=${subjectRow.id}`
+      });
+    }
+
+    // Return result WITHOUT subject_id (internal field, not needed by client)
+    const { subject_id: _sid, ...clientResult } = result;
+    return apiSuccess(clientResult);
   }
 
   if (method === "GET" && pathname === "/api/exams/results") {

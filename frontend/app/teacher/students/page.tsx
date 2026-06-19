@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, Suspense } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
@@ -44,6 +44,8 @@ function StudentRoster() {
   const [reviewLoading, setReviewLoading] = useState(false);
 
   const activeSubjectId = subjectId > 0 ? subjectId : (subjects[0]?.id ?? 0);
+  const activeSubjectIdRef = useRef(activeSubjectId);
+  useEffect(() => { activeSubjectIdRef.current = activeSubjectId; }, [activeSubjectId]);
 
   const showToast = (type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -77,6 +79,19 @@ function StudentRoster() {
     })();
     return () => { mounted = false; };
   }, [subjectId, loadStudents]);
+
+  // ── Live-update: re-fetch roster when a student submits an exam ──
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const notif = (e as CustomEvent).detail;
+      if (notif?.type === "exam_submitted") {
+        const sid = activeSubjectIdRef.current;
+        if (sid) loadStudents(sid);
+      }
+    };
+    window.addEventListener("notification_received", handler);
+    return () => window.removeEventListener("notification_received", handler);
+  }, [loadStudents]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();

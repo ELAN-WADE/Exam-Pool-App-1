@@ -275,6 +275,21 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // ── notifications ──────────────────────────────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      type       TEXT NOT NULL,
+      message    TEXT NOT NULL,
+      link       TEXT,
+      is_read    INTEGER NOT NULL DEFAULT 0 CHECK(is_read IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC)");
+
   // ── Seed defaults ─────────────────────────────────────────────────────────
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run("SCHEMA_VERSION", "3");
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)").run("REGISTRATION_OPEN", "true");
@@ -447,6 +462,12 @@ export const queries = {
     WHERE e.student_id = ? AND e.status = 'completed'
     ORDER BY e.end_time DESC
   `),
+  
+  // ── Notifications ─────────────────────────────────────────────────────────
+  getNotifications: db.prepare("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"),
+  createNotification: db.prepare("INSERT INTO notifications (user_id, type, message, link) VALUES (?, ?, ?, ?) RETURNING *"),
+  markNotificationsRead: db.prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0"),
+  getUnreadNotificationCount: db.prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0"),
 };
 
 export default db;

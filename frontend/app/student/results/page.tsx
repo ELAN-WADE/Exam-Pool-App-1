@@ -7,6 +7,7 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
 import { BookIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
+import { StudentReviewModal } from "../../../components/student/StudentReviewModal";
 import styles from "./page.module.css";
 
 export default function StudentResultsPage() {
@@ -22,6 +23,7 @@ function StudentResults() {
   const [subjects, setSubjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [retaking, setRetaking] = useState<number | null>(null);
+  const [reviewingExam, setReviewingExam] = useState<{ id: number, subjectName: string } | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -112,8 +114,15 @@ function StudentResults() {
                   </div>
                 </div>
 
-                {subject.can_retake === 1 && (
-                  <div style={{ marginTop: "0.5rem", display: "flex", justifyContent: "flex-end" }}>
+                <div style={{ marginTop: "1rem", display: "flex", gap: "0.75rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                  <button 
+                    className="btn btn-ghost"
+                    onClick={() => setReviewingExam({ id: r.id, subjectName: subject.name })}
+                    style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", fontWeight: 600, border: "1px solid #e2e8f0", background: "#ffffff" }}
+                  >
+                    Review Exam
+                  </button>
+                  {subject.can_retake === 1 && (
                     <button 
                       className={styles.retakeBtn}
                       onClick={() => handleRetake(r.id, subject.id)}
@@ -121,8 +130,8 @@ function StudentResults() {
                     >
                       {retaking === r.id ? "Opening..." : "Retake Exam"}
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {r.teacher_remark && (
                   <div className={styles.teacherRemark}>
@@ -141,6 +150,14 @@ function StudentResults() {
             );
           })}
         </div>
+      )}
+
+      {reviewingExam && (
+        <StudentReviewModal 
+          examId={reviewingExam.id} 
+          subjectName={reviewingExam.subjectName} 
+          onClose={() => setReviewingExam(null)} 
+        />
       )}
     </div>
   );

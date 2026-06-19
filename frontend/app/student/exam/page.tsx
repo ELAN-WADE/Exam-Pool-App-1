@@ -47,7 +47,7 @@ function ExamContent() {
   const [saveStatus,        setSaveStatus]        = useState<"idle" | "syncing" | "saved" | "offline">("idle");
   const [cheatWarnings,     setCheatWarnings]     = useState(0);
   const [isTabFocused,      setIsTabFocused]      = useState(true);
-  const [scoreResult,       setScoreResult]       = useState<{score: number, total_score: number} | null>(null);
+  const [scoreResult,       setScoreResult]       = useState<{score: number, total_score: number, answered_questions?: number, total_questions?: number} | null>(null);
   const [showScratchpad,    setShowScratchpad]    = useState(false);
   const [showCalculator,    setShowCalculator]    = useState(false);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
@@ -221,6 +221,47 @@ function ExamContent() {
 
   useEffect(() => {
     if (mode !== "in-progress" || !examId) return;
+    
+    const token = localStorage.getItem("exampool_token");
+    if (!token) return;
+
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+    let abortController = new AbortController();
+
+    const connectSSE = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/exams/${examId}/stream`, {
+          headers: { "Authorization": `Bearer ${token}` },
+          signal: abortController.signal
+        });
+        if (!response.ok) return;
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder("utf-8");
+        if (reader) {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            if (chunk.includes("force_submit")) {
+              handleSubmit(true);
+              break;
+            } else if (chunk.includes("sync")) {
+              try {
+                const match = chunk.match(/data:\s*({.*})/);
+                if (match) {
+                  const data = JSON.parse(match[1]);
+                  if (typeof data.remaining === "number") {
+                    setTimerSeed(data.remaining);
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (err) {}
+    };
+    connectSSE();
+
     const id = setInterval(() => {
       if (!navigator.onLine) {
         setSaveStatus("offline");
@@ -234,7 +275,11 @@ function ExamContent() {
         })
         .catch(() => setSaveStatus("offline"));
     }, 30_000 + Math.floor(Math.random() * 5000));
-    return () => clearInterval(id);
+    
+    return () => {
+      clearInterval(id);
+      abortController.abort();
+    };
   }, [mode, examId, buildAnswerPayload]);
 
   useEffect(() => {
@@ -397,8 +442,13 @@ function ExamContent() {
           <div style={{ marginBottom: "2rem" }}>
             <DonutChart score={scoreResult.score} total={scoreResult.total_score} />
             <div style={{ fontSize: "1.25rem", fontWeight: 800, marginTop: "1rem", color: "var(--color-text)" }}>
-              Score: <span style={{ color: "var(--color-primary)" }}>{scoreResult.score}</span> / {scoreResult.total_score}
+              Score: <span style={{ color: "var(--color-primary)" }}>{scoreResult.score}</span> / {scoreResult.total_score} marks
             </div>
+            {(scoreResult.answered_questions !== undefined && scoreResult.total_questions !== undefined) && (
+              <div style={{ fontSize: "1rem", color: "var(--color-muted)", marginTop: "0.5rem" }}>
+                Answered: <span style={{ color: "var(--color-text)", fontWeight: 600 }}>{scoreResult.answered_questions}</span> / {scoreResult.total_questions} questions
+              </div>
+            )}
           </div>
         )}
         <p style={{ color: "var(--color-muted)", marginBottom: "2.5rem" }}>Your answers have been saved and graded.</p>

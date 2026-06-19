@@ -4,15 +4,17 @@
   "private": true,
   "scripts": {
     "clean": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
-    "predev": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"" ,
+    "predev": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"",
     "dev": "next dev",
     "prebuild": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
     "build": "next build"
   },
   "dependencies": {
+    "mammoth": "^1.12.0",
     "next": "15.1.0",
     "react": "19.0.0",
-    "react-dom": "19.0.0"
+    "react-dom": "19.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
