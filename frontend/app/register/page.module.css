@@ -134,11 +134,27 @@
 }
 .errorBanner svg { flex-shrink: 0; margin-top: 1px; }
 
+.mobileBrand {
+  display: none;
+  align-items: center; gap: 0.75rem;
+  margin-bottom: 2rem;
+  font-size: 1.1875rem; font-weight: 800;
+  letter-spacing: -0.02em; color: var(--color-text);
+}
+.brandIconMobile {
+  width: 36px; height: 36px;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: var(--radius-md);
+  display: flex; align-items: center; justify-content: center;
+}
+
 /* ── Responsive ──────────────────────────────────── */
 @media (max-width: 960px) {
   .container   { grid-template-columns: 1fr; max-width: 540px; }
   .leftPane    { display: none; }
   .rightPane   { padding: 3rem; }
+  .mobileBrand { display: flex; }
 }
 @media (max-width: 520px) {
   .page        { padding: 1rem; }

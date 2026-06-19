@@ -52,6 +52,14 @@ export default function HomePage() {
       <main className={styles.page}>
         <StudentLoginHero />
         <div className={styles.formPanl}>
+          <div className={styles.mobileBrand}>
+            <div className={styles.heroBrandIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+              </svg>
+            </div>
+            <span className={styles.heroBrandName}>ExamPool</span>
+          </div>
           <LoginForm expectedRole="student" />
         </div>
       </main>
