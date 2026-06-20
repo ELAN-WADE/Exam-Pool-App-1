@@ -28,6 +28,9 @@ const nextConfig: NextConfig = {
   experimental: {
     cpus: 1,
     workerThreads: false,
+    turbo: {
+      useSwcCss: false,
+    },
   },
   // Proxy API calls to Bun backend in dev mode
   ...(!isProd && {

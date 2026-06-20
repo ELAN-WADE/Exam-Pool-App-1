@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "clean": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
-    "predev": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"" ,
+    "predev": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"",
     "dev": "next dev",
     "prebuild": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
     "build": "next build"
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/react": "19.0.1",
+    "@types/react": "19.2.17",
     "@types/react-dom": "19.0.1",
     "typescript": "5.7.2"
   }

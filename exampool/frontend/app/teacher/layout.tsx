@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Sidebar } from "../../components/ui/Sidebar";
-import { TopBar } from "../../components/ui/TopBar";
+import { Header } from "../../components/ui/Header";
 
 const teacherNav = [
   {
@@ -69,6 +69,7 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell">
+      <Header onMenuClick={() => setSidebarOpen((v) => !v)} showMenu={sidebarOpen} />
       <Sidebar
         items={teacherNav}
         title="Teacher"
@@ -76,7 +77,6 @@ export default function TeacherLayout({ children }: { children: ReactNode }) {
         onClose={() => setSidebarOpen(false)}
       />
       <div className="shellMain">
-        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
         <main className="shellContent">
           {children}
         </main>

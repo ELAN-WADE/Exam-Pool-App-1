@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Sidebar } from "../../components/ui/Sidebar";
-import { TopBar } from "../../components/ui/TopBar";
+import { Header } from "../../components/ui/Header";
 
 const operatorNav = [
   {
@@ -57,6 +57,7 @@ export default function OperatorLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="shell">
+      <Header onMenuClick={() => setSidebarOpen((v) => !v)} showMenu={sidebarOpen} />
       <Sidebar 
         items={operatorNav} 
         title="Operator" 
@@ -65,7 +66,6 @@ export default function OperatorLayout({ children }: { children: ReactNode }) {
         onClose={() => setSidebarOpen(false)}
       />
       <div className="shellMain">
-        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
         <main className="shellContent">
           {children}
         </main>
