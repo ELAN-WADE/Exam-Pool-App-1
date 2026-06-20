@@ -165,7 +165,7 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
           </div>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "flex-start", marginTop: "0.25rem" }}>
+        <div className={styles.submitWrapper}>
           <button type="submit" className={styles.submitBtn} disabled={submitting} style={{ width: "30%", minWidth: "120px" }}>
             {submitting ? (
               <>
