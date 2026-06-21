@@ -1,0 +1,21 @@
+{
+  "name": "ExamPool LAN CBT",
+  "short_name": "ExamPool",
+  "description": "Offline-first LAN examination platform for Nigerian schools",
+  "start_url": "/student/practice",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0D9488",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/icons/icon-512x512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

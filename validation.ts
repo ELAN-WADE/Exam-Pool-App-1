@@ -33,12 +33,22 @@ export function isValidExamDateTime(isoOrDate: string): boolean {
 }
 
 /**
- * Ensure the scheduled datetime is at least 1 minute in the future.
- * Use this when CREATING a new subject, not when editing existing ones.
+ * Ensure the scheduled datetime is strictly in the future (with a small
+ * network-latency grace of 30s). Use ONLY when CREATING a new subject.
  */
 export function isExamDatetimeInFuture(isoOrDate: string): boolean {
   const t = Date.parse(isoOrDate);
-  return Number.isFinite(t) && t > Date.now() - 60_000; // 1-min grace
+  // 30-second grace for form submission latency; NOT 60s in the past
+  return Number.isFinite(t) && t >= Date.now() - 30_000;
+}
+
+/**
+ * Allow any valid date when EDITING an existing subject.
+ * The date may already be in the past (subject was live, now being reviewed).
+ * We only require it to parse correctly.
+ */
+export function isExamDatetimeEditValid(isoOrDate: string): boolean {
+  return isValidExamDateTime(isoOrDate);
 }
 
 export function isValidRoleParam(role: string): role is "student" | "teacher" | "operator" {

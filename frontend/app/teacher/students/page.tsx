@@ -6,6 +6,7 @@ import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { api } from "../../../lib/api";
+import type { EnrolledStudent, Subject } from "../../../lib/types";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib/gradeUtils";
 import { UsersIcon, SearchIcon, ArrowUpIcon, EyeIcon, DocumentIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
@@ -30,8 +31,8 @@ function StudentRoster() {
   const params = useSearchParams();
   const subjectId = Number(params.get("subjectId") ?? 0);
 
-  const [students,    setStudents]    = useState<any[]>([]);
-  const [subjects,    setSubjects]    = useState<any[]>([]);
+  const [students,    setStudents]    = useState<EnrolledStudent[]>([]);
+  const [subjects,    setSubjects]    = useState<Subject[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState("");
   const [query,       setQuery]       = useState("");
@@ -52,32 +53,35 @@ function StudentRoster() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const loadStudents = useCallback(async (sid: number) => {
+  const loadStudents = useCallback(async (sid: number, signal?: AbortSignal) => {
     if (!sid) return;
     try {
-      const data = (await api.getSubjectStudents(sid)) as any[];
+      const data = (await api.getSubjectStudents(sid)) as EnrolledStudent[];
+      if (signal?.aborted) return;
       setStudents(data ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load students");
+      if (!signal?.aborted) setError(err instanceof Error ? err.message : "Failed to load students");
     }
   }, []);
 
   useEffect(() => {
-    let mounted = true;
+    const controller = new AbortController();
+    const signal = controller.signal;
+
     (async () => {
       try {
-        const subs = (await api.getSubjects()) as any[];
-        if (!mounted) return;
+        const subs = (await api.getSubjects()) as Subject[];
+        if (signal.aborted) return;
         setSubjects(subs ?? []);
         const sid = subjectId > 0 ? subjectId : Number(subs[0]?.id ?? 0);
-        if (sid) await loadStudents(sid);
+        if (sid) await loadStudents(sid, signal);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load");
+        if (!signal.aborted) setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
-        if (mounted) setLoading(false);
+        if (!signal.aborted) setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => controller.abort();
   }, [subjectId, loadStudents]);
 
   // ── Live-update: re-fetch roster when a student submits an exam ──

@@ -21,8 +21,66 @@ db.run("PRAGMA busy_timeout = 5000");
 db.run("PRAGMA synchronous = NORMAL");
 db.run("PRAGMA cache_size = -8000");
 
+// Attach auxiliary databases for ExamPool v4.1 Naija Hybrid
+const contentBankPath = path.join(dbDir, "content_bank.db");
+const practiceLogsPath = path.join(dbDir, "practice_logs.db");
+
+// Create files if they don't exist to ensure ATTACH works predictably
+if (!fs.existsSync(practiceLogsPath)) fs.writeFileSync(practiceLogsPath, "");
+if (!fs.existsSync(contentBankPath)) fs.writeFileSync(contentBankPath, "");
+
+db.run(`ATTACH DATABASE '${contentBankPath.replace(/'/g, "''")}' AS content_bank`);
+db.run(`ATTACH DATABASE '${practiceLogsPath.replace(/'/g, "''")}' AS practice_logs`);
+db.run(`PRAGMA practice_logs.journal_mode = WAL`);
+db.run(`PRAGMA practice_logs.synchronous = NORMAL`);
+
+// Create content_bank schemas before making it read-only
+db.run(`
+  CREATE TABLE IF NOT EXISTS content_bank.content_bank (
+      id INTEGER PRIMARY KEY,
+      exam_body TEXT CHECK(exam_body IN ('JAMB','WAEC','NECO','NABTEB')),
+      year INTEGER,
+      subject_code TEXT,
+      paper_type TEXT,
+      question_text TEXT,
+      question_text_local TEXT,
+      options_json TEXT,
+      correct_answer TEXT,
+      solution_text TEXT,
+      difficulty INTEGER CHECK(difficulty BETWEEN 1 AND 5),
+      topic_tag TEXT,
+      diagram_path TEXT,
+      fts_document TEXT
+  )
+`);
+db.run(`
+  CREATE VIRTUAL TABLE IF NOT EXISTS content_bank.content_bank_fts USING fts5(
+      question_text,
+      topic_tag,
+      content='content_bank',
+      content_rowid='id'
+  )
+`);
+
+// content_bank is restricted by application logic (practiceFirewall)
+
+/**
+ * Allowlist of tables that may be altered via safe migration.
+ * Prevents SQL injection if this function is ever called with dynamic input.
+ */
+const ALTERABLE_TABLES = new Set([
+  "users", "subjects", "questions", "exams", "config",
+  "subject_enrollments", "student_answers", "audit_logs",
+  "student_term_remarks", "notifications", "kiosk_sessions",
+  "license_registry", "content_manifest", "question_map",
+]);
+
 /** Run ALTER TABLE only if the column doesn't exist yet (idempotent migration). */
 function addColumnIfMissing(table: string, column: string, definition: string): void {
+  if (!ALTERABLE_TABLES.has(table)) {
+    throw new Error(`[db] addColumnIfMissing: table '${table}' is not in the alterable allowlist`);
+  }
+  // Column names are validated by PRAGMA — never interpolate user input here
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   if (!cols.some((c) => c.name === column)) {
     db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -97,6 +155,8 @@ export function initializeDatabase(): void {
   addColumnIfMissing("subjects", "is_timetable_published", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing("subjects", "window_duration", "INTEGER NOT NULL DEFAULT 120");
   addColumnIfMissing("subjects", "can_retake", "INTEGER NOT NULL DEFAULT 1");
+  // Offline assignments
+  addColumnIfMissing("subjects", "is_assignment", "INTEGER NOT NULL DEFAULT 0");
 
   // ── questions ────────────────────────────────────────────────────────────
   db.run(`
@@ -122,6 +182,9 @@ export function initializeDatabase(): void {
   addColumnIfMissing("questions", "teacher_answer",  "TEXT");
   // v4 extensions — image support for CBT
   addColumnIfMissing("questions", "image_url",       "TEXT");
+  // Offline assignments
+  addColumnIfMissing("questions", "is_file_upload",  "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("questions", "attached_file_url", "TEXT");
 
   // ── exams (result table) ─────────────────────────────────────────────────
   db.run(`
@@ -154,6 +217,31 @@ export function initializeDatabase(): void {
   // v5: per-student per-exam remarks
   addColumnIfMissing("exams", "teacher_remark",    "TEXT");
   addColumnIfMissing("exams", "principal_remark",  "TEXT");
+
+  // ── exam_attempts — historical archive of every completed attempt (retakes) ──
+  // The `exams` table only holds the CURRENT/LATEST attempt per student+subject.
+  // Before a retake resets that row, it is archived here for audit & history.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS exam_attempts (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      exam_id       INTEGER NOT NULL,
+      student_id    INTEGER NOT NULL,
+      subject_id    INTEGER NOT NULL,
+      attempt_number INTEGER NOT NULL DEFAULT 1,
+      start_time    TEXT NOT NULL,
+      end_time      TEXT,
+      answers_json  TEXT NOT NULL DEFAULT '[]',
+      score         REAL,
+      total_score   INTEGER NOT NULL DEFAULT 0,
+      status        TEXT NOT NULL DEFAULT 'completed',
+      archived_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE RESTRICT,
+      FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE RESTRICT
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_attempts_student  ON exam_attempts(student_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_attempts_subject  ON exam_attempts(subject_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_attempts_exam     ON exam_attempts(exam_id)");
 
   // ── config ───────────────────────────────────────────────────────────────
   // Full Config table as per data structure diagram
@@ -195,6 +283,9 @@ export function initializeDatabase(): void {
       UNIQUE(exam_id, question_id)
     )
   `);
+
+  // Offline assignments
+  addColumnIfMissing("student_answers", "file_url", "TEXT");
 
   // v4: safe migration — add admin_password_hash to config
   addColumnIfMissing("config", "admin_password_hash", "TEXT");
@@ -300,6 +391,79 @@ export function initializeDatabase(): void {
 
   // Ensure at least one config row exists
   db.prepare("INSERT OR IGNORE INTO config (id, org_name, version) VALUES (1, 'ExamPool School', '1.0.0')").run();
+
+  // ── v4.1 Operational Tables (core_exampool.db) ───────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS question_map (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      exam_id INTEGER NOT NULL,
+      display_order INTEGER NOT NULL,
+      question_id INTEGER NOT NULL,
+      shuffle_seed TEXT NOT NULL,
+      FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+      FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS kiosk_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pc_id TEXT NOT NULL,
+      seat_number INTEGER,
+      student_id INTEGER NOT NULL,
+      exam_id INTEGER,
+      login_time INTEGER NOT NULL,
+      logout_time INTEGER,
+      status TEXT NOT NULL CHECK(status IN ('active','suspended','completed')),
+      hardware_fingerprint TEXT,
+      FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE SET NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS license_registry (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      license_key TEXT UNIQUE NOT NULL,
+      license_type TEXT NOT NULL CHECK(license_type IN ('core','practice_lan','practice_home','full_bundle')),
+      hardware_fingerprint TEXT,
+      activated_at INTEGER,
+      expires_at INTEGER,
+      max_pcs INTEGER,
+      max_devices INTEGER,
+      content_packs TEXT NOT NULL DEFAULT '[]',
+      device_whitelist TEXT,
+      public_key_pem TEXT
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS content_manifest (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      package_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      exam_body TEXT NOT NULL,
+      import_date INTEGER NOT NULL,
+      signature_valid INTEGER NOT NULL DEFAULT 0 CHECK(signature_valid IN (0,1)),
+      file_size_bytes INTEGER NOT NULL
+    )
+  `);
+
+  // ── v4.1 Practice Logs (practice_logs.db) ────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS practice_logs.practice_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL,
+      question_id INTEGER NOT NULL,
+      selected_answer TEXT,
+      is_correct INTEGER NOT NULL DEFAULT 0 CHECK(is_correct IN (0,1)),
+      time_spent_seconds INTEGER NOT NULL DEFAULT 0,
+      session_date INTEGER NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('lan','home_synced','home_local')),
+      device_fingerprint TEXT,
+      log_signature TEXT NOT NULL
+    )
+  `);
 }
 
 // Initialize schema before preparing statements so new tables exist.
@@ -319,6 +483,8 @@ export const queries = {
   deactivateUser: db.prepare("UPDATE users SET is_active = 0 WHERE id = ?"),
   activateUser:   db.prepare("UPDATE users SET is_active = 1 WHERE id = ?"),
   countOperators: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'operator' AND is_active = 1"),
+  /** Targeted operator fetch — avoids scanning all users in notifyOperators. */
+  getOperators:   db.prepare("SELECT id FROM users WHERE role = 'operator' AND is_active = 1"),
 
   // ── Subjects ──────────────────────────────────────────────────────────
   getSubjectsByTeacher: db.prepare("SELECT * FROM subjects WHERE teacher_id = ?"),
@@ -344,23 +510,24 @@ export const queries = {
   `),
   countEnrollments: db.prepare("SELECT COUNT(*) as count FROM subject_enrollments WHERE subject_id = ?"),
   createSubject:             db.prepare(`
-    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, session, mode, instructions, is_timetable_published, window_duration, can_retake)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, session, mode, instructions, is_timetable_published, window_duration, can_retake, is_assignment)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateSubject: db.prepare(`
-    UPDATE subjects SET name=?, code=?, term=?, duration=?, total_score=?, exam_datetime=?, is_published=?, teacher_id=?, description=?, class=?, session=?, mode=?, instructions=?, is_timetable_published=?, window_duration=?, can_retake=?
+    UPDATE subjects SET name=?, code=?, term=?, duration=?, total_score=?, exam_datetime=?, is_published=?, teacher_id=?, description=?, class=?, session=?, mode=?, instructions=?, is_timetable_published=?, window_duration=?, can_retake=?, is_assignment=?
     WHERE id=?
   `),
   deleteSubject: db.prepare("DELETE FROM subjects WHERE id = ?"),
 
   // ── Questions ─────────────────────────────────────────────────────────
+  getQuestionById:       db.prepare("SELECT * FROM questions WHERE id = ?"),
   getQuestionsBySubject: db.prepare("SELECT * FROM questions WHERE subject_id = ? ORDER BY order_index"),
   createQuestion:        db.prepare(`
-    INSERT INTO questions (subject_id, question_text, options_json, correct_answer, marks, order_index, question_type, session, term, mode, teacher_answer, image_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO questions (subject_id, question_text, options_json, correct_answer, marks, order_index, question_type, session, term, mode, teacher_answer, image_url, is_file_upload, attached_file_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateQuestion: db.prepare(`
-    UPDATE questions SET question_text=?, options_json=?, correct_answer=?, marks=?, question_type=?, teacher_answer=?, image_url=?,
+    UPDATE questions SET question_text=?, options_json=?, correct_answer=?, marks=?, question_type=?, teacher_answer=?, image_url=?, is_file_upload=?, attached_file_url=?,
     updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?
   `),
   deleteQuestion: db.prepare("DELETE FROM questions WHERE id = ?"),
@@ -368,8 +535,8 @@ export const queries = {
   // ── Student Answers ───────────────────────────────────────────────────
   insertStudentAnswer: db.prepare(`
     INSERT OR REPLACE INTO student_answers
-      (exam_id, question_id, student_id, subject_id, selected_option, essay_response, is_correct, marks_awarded)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (exam_id, question_id, student_id, subject_id, selected_option, essay_response, is_correct, marks_awarded, file_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getStudentAnswersByExam: db.prepare("SELECT sa.*, q.question_text, q.question_type, q.correct_answer, q.teacher_answer, q.options_json, q.marks FROM student_answers sa JOIN questions q ON q.id = sa.question_id WHERE sa.exam_id = ?"),
 
@@ -381,6 +548,13 @@ export const queries = {
   submitExam:              db.prepare("UPDATE exams SET answers_json=?, end_time=?, score=?, total_score=?, status='completed' WHERE id=? AND student_id=? AND status='in-progress'"),
   resetExam:               db.prepare("UPDATE exams SET answers_json='[]', score=NULL, total_score=0, end_time=NULL, start_time=(strftime('%Y-%m-%dT%H:%M:%SZ','now')), retake_count = retake_count + 1, status='in-progress' WHERE id=? AND student_id=?"),
   deleteStudentAnswersForExam: db.prepare("DELETE FROM student_answers WHERE exam_id=?"),
+  /** Archive the current exam row before resetting for retake. */
+  archiveExamAttempt: db.prepare(`
+    INSERT INTO exam_attempts (exam_id, student_id, subject_id, attempt_number, start_time, end_time, answers_json, score, total_score, status)
+    SELECT id, student_id, subject_id, retake_count + 1, start_time, end_time, answers_json, score, total_score, status
+    FROM exams WHERE id = ?
+  `),
+  getExamAttemptsByStudent: db.prepare("SELECT * FROM exam_attempts WHERE student_id = ? ORDER BY archived_at DESC"),
   getExamsByStudent:       db.prepare("SELECT * FROM exams WHERE student_id = ? AND status = 'completed'"),
   getExamsBySubject:       db.prepare("SELECT * FROM exams WHERE subject_id = ? AND status = 'completed'"),
 
@@ -421,7 +595,6 @@ export const queries = {
 
   // ── Hot-path pre-compiled statements (prevents repeated query plan compilation) ─
   getExamByIdAndStudent:   db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?"),
-  getQuestionById:         db.prepare("SELECT * FROM questions WHERE id = ?"),
   getQuestionByIdAndSubject: db.prepare("SELECT * FROM questions WHERE id = ? AND subject_id = ?"),
   getCompletedExamsByStudent: db.prepare("SELECT e.*, s.name as subject_name FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'"),
   getCompletedExamsByTeacher: db.prepare("SELECT e.*, s.name as subject_name, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC"),
@@ -468,6 +641,28 @@ export const queries = {
   createNotification: db.prepare("INSERT INTO notifications (user_id, type, message, link) VALUES (?, ?, ?, ?) RETURNING *"),
   markNotificationsRead: db.prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0"),
   getUnreadNotificationCount: db.prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0"),
+
+  // ── v4.1 Kiosk & License ──────────────────────────────────────────────────
+  insertKioskSession: db.prepare(
+    "INSERT INTO kiosk_sessions (pc_id, seat_number, student_id, login_time, status) VALUES (?, ?, ?, ?, 'active')"
+  ),
+  verifyLicense: db.prepare("SELECT * FROM license_registry WHERE license_key = ?"),
+
+  // ── v4.1 Practice Sandbox ─────────────────────────────────────────────────
+  insertPracticeLog: db.prepare(`
+    INSERT INTO practice_logs.practice_logs (
+      student_id, question_id, selected_answer, is_correct, time_spent_seconds, 
+      session_date, mode, device_fingerprint, log_signature
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+
+  // ── v4.1 Content Bank ─────────────────────────────────────────────────────
+  searchContentBank: db.prepare(`
+    SELECT c.* FROM content_bank.content_bank c
+    JOIN content_bank.content_bank_fts fts ON c.id = fts.rowid
+    WHERE content_bank_fts MATCH ?
+  `),
+  getContentBankQuestionById: db.prepare("SELECT * FROM content_bank.content_bank WHERE id = ?"),
 };
 
 export default db;

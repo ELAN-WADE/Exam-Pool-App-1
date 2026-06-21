@@ -1,0 +1,66 @@
+.kioskLoginContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background-color: var(--color-bg-elevated);
+  position: relative;
+}
+
+.kioskSeatBadge {
+  position: absolute;
+  top: 2rem;
+  right: 2rem;
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--color-primary);
+  padding: 1rem 2rem;
+  background: white;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.authPromptBox {
+  padding: 3rem;
+  background: white;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  width: 100%;
+  max-width: 500px;
+}
+
+.formInput {
+  width: 100%;
+  padding: 1rem;
+  font-size: 1.5rem;
+  text-align: center;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-top: 1rem;
+  margin-bottom: 1.5rem;
+  letter-spacing: 2px;
+}
+
+.formInput:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.submitBtn {
+  width: 100%;
+  padding: 1rem;
+  background-color: var(--color-primary);
+  color: white;
+  font-size: 1.25rem;
+  font-weight: bold;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.submitBtn:hover {
+  opacity: 0.9;
+}

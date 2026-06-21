@@ -243,7 +243,7 @@ function ExamContent() {
             if (done) break;
             const chunk = decoder.decode(value, { stream: true });
             if (chunk.includes("force_submit")) {
-              handleSubmit(true);
+              handleSubmit();
               break;
             } else if (chunk.includes("sync")) {
               try {
@@ -346,6 +346,7 @@ function ExamContent() {
         setFlags((prev) => ({ ...prev, [q.id]: !prev[q.id] }));
       }
     };
+    window.history.pushState({}, "", window.location.href);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, questions, currentIndex]);

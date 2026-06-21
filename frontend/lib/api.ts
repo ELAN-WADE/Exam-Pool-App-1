@@ -1,3 +1,5 @@
+import type { User, Subject, Question, ExamResult, ActiveExamData, Config, AuditLog, EnrolledStudent } from "./types";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || ""; // Supports external backends on Vercel
 
 /** Next.js `trailingSlash: true` uses `/setup/`; avoid full-page redirects that reload the SPA while already on setup. */
@@ -61,7 +63,7 @@ type FetchAuthBehavior = {
   redirectOn503?: boolean;
 };
 
-export async function fetchWithAuth(url: string, options: RequestInit = {}, behavior: FetchAuthBehavior = {}) {
+export async function fetchWithAuth<T = any>(url: string, options: RequestInit = {}, behavior: FetchAuthBehavior = {}): Promise<T> {
   const redirectOn401 = behavior.redirectOn401 ?? true;
   const redirectOn503 = behavior.redirectOn503 ?? true;
   const res = await fetch(API_BASE + url, {
@@ -77,13 +79,13 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, beha
   if (res.status === 401) {
     if (redirectOn401) {
       if (!isSetupRoute()) window.location.href = "/";
-      return null;
+      return null as unknown as T;
     }
   }
 
   if (res.status === 503) {
     if (redirectOn503 && !isSetupRoute()) window.location.href = "/setup/";
-    return null;
+    return null as unknown as T;
   }
 
   if (!res.ok) {
@@ -98,114 +100,138 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}, beha
 }
 
 export const api = {
-  setup: (data: any) => fetchWithAuth("/api/setup", { method: "POST", body: JSON.stringify(data) }),
-  register: (data: any) => fetchWithAuth("/api/auth/register", { method: "POST", body: JSON.stringify(data) }),
-  login: (data: any) => fetchWithAuth("/api/auth/login", { method: "POST", body: JSON.stringify(data) }, { redirectOn401: false }),
+  setup: (data: any) => fetchWithAuth<any>("/api/setup", { method: "POST", body: JSON.stringify(data) }),
+  register: (data: any) => fetchWithAuth<any>("/api/auth/register", { method: "POST", body: JSON.stringify(data) }),
+  login: (data: any) => fetchWithAuth<any>("/api/auth/login", { method: "POST", body: JSON.stringify(data) }, { redirectOn401: false }),
   me: () => getSession().then((s) => s.user),
-  logout: () => fetchWithAuth("/api/auth/logout", { method: "POST" }),
-  getSubjects: () => fetchWithAuth("/api/subjects"),
-  createSubject: (data: any) => fetchWithAuth("/api/subjects", { method: "POST", body: JSON.stringify(data) }),
+  logout: () => fetchWithAuth<any>("/api/auth/logout", { method: "POST" }),
+  getSubjects: () => fetchWithAuth<Subject[]>("/api/subjects"),
+  createSubject: (data: any) => fetchWithAuth<Subject>("/api/subjects", { method: "POST", body: JSON.stringify(data) }),
   updateSubject: (id: number, data: any) =>
-    fetchWithAuth(`/api/subjects/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteSubject: (id: number) => fetchWithAuth(`/api/subjects/${id}`, { method: "DELETE" }),
-  getQuestions: (subjectId: number) => fetchWithAuth(`/api/subjects/${subjectId}/questions`),
-  createQuestion: (data: any) => fetchWithAuth("/api/questions", { method: "POST", body: JSON.stringify(data) }),
+    fetchWithAuth<Subject>(`/api/subjects/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteSubject: (id: number) => fetchWithAuth<any>(`/api/subjects/${id}`, { method: "DELETE" }),
+  getQuestions: (subjectId: number) => fetchWithAuth<Question[]>(`/api/subjects/${subjectId}/questions`),
+  createQuestion: (data: any) => fetchWithAuth<Question>("/api/questions", { method: "POST", body: JSON.stringify(data) }),
   updateQuestion: (id: number, data: any) =>
-    fetchWithAuth(`/api/questions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
-  deleteQuestion: (id: number) => fetchWithAuth(`/api/questions/${id}`, { method: "DELETE" }),
+    fetchWithAuth<Question>(`/api/questions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteQuestion: (id: number) => fetchWithAuth<any>(`/api/questions/${id}`, { method: "DELETE" }),
   startExam: (subjectId: number) =>
-    fetchWithAuth("/api/exams/start", { method: "POST", body: JSON.stringify({ subject_id: subjectId }) }),
+    fetchWithAuth<any>("/api/exams/start", { method: "POST", body: JSON.stringify({ subject_id: subjectId }) }),
   saveExam: (examId: number, answers: any[]) =>
-    fetchWithAuth(`/api/exams/${examId}/save`, { method: "POST", body: JSON.stringify({ answers }) }),
+    fetchWithAuth<any>(`/api/exams/${examId}/save`, { method: "POST", body: JSON.stringify({ answers }) }),
   /** Submit exam and send all answers in the same request (ensures scoring even if auto-save failed) */
   submitExamWithAnswers: (examId: number, answers: any[]) =>
-    fetchWithAuth(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers }) }),
+    fetchWithAuth<any>(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers }) }),
+  startPractice: (practiceId: string) =>
+    fetchWithAuth<any>(`/api/practice/start?practiceId=${practiceId}`, { method: "POST" }),
+  submitPractice: (practiceId: string, answers: any[]) =>
+    fetchWithAuth<any>(`/api/practice/submit?practiceId=${practiceId}`, { method: "POST", body: JSON.stringify({ answers }) }),
+  getContentManifest: () => fetchWithAuth<any>("/api/sync/content/manifest"),
   /** @deprecated Use submitExamWithAnswers instead */
-  submitExam: (examId: number) => fetchWithAuth(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers: [] }) }),
-  getResults: () => fetchWithAuth("/api/exams/results"),
-  retakeExam: (examId: number) => fetchWithAuth(`/api/exams/${examId}/retake`, { method: "POST" }),
+  submitExam: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers: [] }) }),
+  getResults: () => fetchWithAuth<ExamResult[]>("/api/exams/results"),
+  retakeExam: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/retake`, { method: "POST" }),
   /** Get in-progress exams for the current student (for resume detection) */
-  getActiveExams: () => fetchWithAuth("/api/exams/active"),
-  getUsers: () => fetchWithAuth("/api/users"),
-  deleteUser: (id: number) => fetchWithAuth(`/api/users/${id}`, { method: "DELETE" }),
-  createOperator: (data: any) => fetchWithAuth("/api/users/operator", { method: "POST", body: JSON.stringify(data) }),
-  getAuditLogs: () => fetchWithAuth("/api/audit-logs"),
+  getActiveExams: () => fetchWithAuth<ActiveExamData | Subject[]>("/api/exams/active"),
+  getUsers: () => fetchWithAuth<User[]>("/api/users"),
+  deleteUser: (id: number) => fetchWithAuth<any>(`/api/users/${id}`, { method: "DELETE" }),
+  createOperator: (data: any) => fetchWithAuth<User>("/api/users/operator", { method: "POST", body: JSON.stringify(data) }),
+  getAuditLogs: () => fetchWithAuth<AuditLog[]>("/api/audit-logs"),
   /** Export database as binary download (streams file directly — do not use fetchWithAuth which parses JSON) */
   exportDb: () => {
     window.open("/api/settings/export", "_blank");
   },
-  importDb: (data: any) => fetchWithAuth("/api/settings/import", { method: "POST", body: JSON.stringify(data) }),
+  importDb: (data: any) => fetchWithAuth<any>("/api/settings/import", { method: "POST", body: JSON.stringify(data) }),
   resetDb: (confirmation: string) =>
-    fetchWithAuth("/api/settings/reset", { method: "POST", body: JSON.stringify({ confirm: confirmation }) }),
+    fetchWithAuth<any>("/api/settings/reset", { method: "POST", body: JSON.stringify({ confirm: confirmation }) }),
   /** Get only teachers */
-  getTeachers: () => fetchWithAuth("/api/users?role=teacher"),
+  getTeachers: () => fetchWithAuth<User[]>("/api/users?role=teacher"),
   /** Update user profile fields */
   updateUser: (id: number, data: any) =>
-    fetchWithAuth(`/api/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    fetchWithAuth<User>(`/api/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   /** Activate a deactivated user */
   activateUser: (id: number) =>
-    fetchWithAuth(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ is_active: true }) }),
+    fetchWithAuth<User>(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ is_active: true }) }),
   /** Reset user password (operator only) */
   resetPassword: (id: number, newPassword: string) =>
-    fetchWithAuth(`/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }),
+    fetchWithAuth<any>(`/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }),
   /** Assign (or reassign) a teacher to a subject */
   assignTeacher: (subjectId: number, teacherId: number) =>
-    fetchWithAuth(`/api/subjects/${subjectId}`, { method: "PUT", body: JSON.stringify({ teacher_id: teacherId }) }),
+    fetchWithAuth<Subject>(`/api/subjects/${subjectId}`, { method: "PUT", body: JSON.stringify({ teacher_id: teacherId }) }),
   /** Toggle publish state of a subject */
   togglePublish: (subjectId: number, isPublished: boolean) =>
-    fetchWithAuth(`/api/subjects/${subjectId}`, { method: "PUT", body: JSON.stringify({ is_published: isPublished ? 1 : 0 }) }),
+    fetchWithAuth<Subject>(`/api/subjects/${subjectId}`, { method: "PUT", body: JSON.stringify({ is_published: isPublished ? 1 : 0 }) }),
   /** Get school config */
-  getConfig: () => fetchWithAuth("/api/config"),
+  getConfig: () => fetchWithAuth<Config>("/api/config"),
   /** Update school config */
-  updateConfig: (data: any) => fetchWithAuth("/api/config", { method: "PUT", body: JSON.stringify(data) }),
+  updateConfig: (data: any) => fetchWithAuth<Config>("/api/config", { method: "PUT", body: JSON.stringify(data) }),
   /** Change authenticated user's password */
   changePassword: (current_password: string, new_password: string) =>
-    fetchWithAuth("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
+    fetchWithAuth<any>("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
   /** Promote or demote a student's grade */
   updateStudentGrade: (studentId: number, grade: string) =>
-    fetchWithAuth(`/api/users/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ grade }) }),
+    fetchWithAuth<any>(`/api/users/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ grade }) }),
   /** Get per-question exam review detail */
-  getExamReview: (examId: number) => fetchWithAuth(`/api/exams/${examId}/review`),
+  getExamReview: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/review`),
   /** Trigger results CSV download */
   exportResultsCsv: () => {
     // Direct window navigation so the browser handles the file download
     window.open("/api/exams/results/export", "_blank");
   },
   /** Get all students enrolled in a subject (with their scores) */
-  getSubjectStudents: (subjectId: number) => fetchWithAuth(`/api/subjects/${subjectId}/students`),
+  getSubjectStudents: (subjectId: number) => fetchWithAuth<EnrolledStudent[]>(`/api/subjects/${subjectId}/students`),
   /** Enroll a student into a subject (operator only) */
   enrollStudent: (subjectId: number, studentId: number) =>
-    fetchWithAuth(`/api/subjects/${subjectId}/students`, { method: "POST", body: JSON.stringify({ student_id: studentId }) }),
+    fetchWithAuth<any>(`/api/subjects/${subjectId}/students`, { method: "POST", body: JSON.stringify({ student_id: studentId }) }),
   /** Unenroll a student from a subject (operator only) */
   unenrollStudent: (subjectId: number, studentId: number) =>
-    fetchWithAuth(`/api/subjects/${subjectId}/students/${studentId}`, { method: "DELETE" }),
+    fetchWithAuth<any>(`/api/subjects/${subjectId}/students/${studentId}`, { method: "DELETE" }),
   /** Get all students (for enrollment UI) */
-  getStudents: () => fetchWithAuth("/api/users?role=student"),
+  getStudents: () => fetchWithAuth<User[]>("/api/users?role=student"),
   /** Full student profile: enrolled subjects + exam stats */
-  getMyProfile: () => fetchWithAuth("/api/users/me/profile"),
+  getMyProfile: () => fetchWithAuth<any>("/api/users/me/profile"),
   /** Bulk-enroll all active students in a grade into a subject */
   bulkEnrollByGrade: (subjectId: number, grade: string) =>
-    fetchWithAuth(`/api/subjects/${subjectId}/students/bulk`, { method: "POST", body: JSON.stringify({ grade }) }),
+    fetchWithAuth<any>(`/api/subjects/${subjectId}/students/bulk`, { method: "POST", body: JSON.stringify({ grade }) }),
   /** Get a student's exam for a specific subject (teacher/operator use — for review lookup) */
   getExamByStudentSubject: (studentId: number, subjectId: number) =>
-    fetchWithAuth(`/api/exams/by-student-subject?student_id=${studentId}&subject_id=${subjectId}`),
+    fetchWithAuth<any>(`/api/exams/by-student-subject?student_id=${studentId}&subject_id=${subjectId}`),
   /** Get all completed exams for a student (for report card generation) */
-  getStudentExams: (studentId: number) => fetchWithAuth(`/api/users/${studentId}/exams?t=${Date.now()}`),
+  getStudentExams: (studentId: number) => fetchWithAuth<ExamResult[]>(`/api/users/${studentId}/exams?t=${Date.now()}`),
   /** Save teacher's remark for a specific completed exam */
   saveTeacherRemark: (examId: number, remark: string) =>
-    fetchWithAuth(`/api/exams/${examId}/remarks`, { method: "PUT", body: JSON.stringify({ remark }) }),
+    fetchWithAuth<any>(`/api/exams/${examId}/remarks`, { method: "PUT", body: JSON.stringify({ remark }) }),
   /** Save principal/admin remark for a specific completed exam */
   savePrincipalRemark: (examId: number, remark: string) =>
-    fetchWithAuth(`/api/exams/${examId}/principal-remark`, { method: "PUT", body: JSON.stringify({ remark }) }),
+    fetchWithAuth<any>(`/api/exams/${examId}/principal-remark`, { method: "PUT", body: JSON.stringify({ remark }) }),
   /** Grade an essay answer (teacher/operator) */
   gradeEssay: (examId: number, questionId: number, marksAwarded: number, feedback?: string) =>
-    fetchWithAuth(`/api/exams/${examId}/grade`, { method: "POST", body: JSON.stringify({ question_id: questionId, marks_awarded: marksAwarded, feedback }) }),
+    fetchWithAuth<any>(`/api/exams/${examId}/grade`, { method: "POST", body: JSON.stringify({ question_id: questionId, marks_awarded: marksAwarded, feedback }) }),
   /** Get term remark for a student */
   getTermRemark: (studentId: number, term: string) =>
-    fetchWithAuth(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`),
+    fetchWithAuth<any>(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`),
   /** Save term remark for a student (role determines if it's teacher or principal) */
   saveTermRemark: (studentId: number, term: string, remark: string) =>
-    fetchWithAuth(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`, { method: "PUT", body: JSON.stringify({ remark }) }),
+    fetchWithAuth<any>(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`, { method: "PUT", body: JSON.stringify({ remark }) }),
   /** Get public school settings: name, current term, admin name, logo — accessible to all roles */
-  getPublicSettings: () => fetchWithAuth("/api/settings/public"),
+  getPublicSettings: () => fetchWithAuth<Config>("/api/settings/public"),
+  /** Upload a file (PDF) */
+  uploadFile: async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    // Uses native fetch directly because fetchWithAuth defaults to application/json
+    const token = localStorage.getItem("exampool_token");
+    const res = await fetch(process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/api/upload` : "/api/upload", {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) throw new Error("Upload failed");
+    const json = await res.json();
+    return json.data as { url: string };
+  },
+  /** Get assignments for offline caching */
+  getOfflineAssignments: () => fetchWithAuth<{ assignments: any[] }>("/api/offline/assignments"),
+  /** Sync offline answers */
+  syncOfflineAssignments: (exams: any[]) => fetchWithAuth<{ synced: number }>("/api/offline/sync", { method: "POST", body: JSON.stringify({ exams }) }),
 };

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ChangePasswordModal } from "../../../components/auth/ChangePasswordModal";
 import { useAuth } from "../../../hooks/useAuth";
@@ -20,6 +21,7 @@ export default function StudentSettingsPage() {
 
 function StudentSettings() {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [showPwModal, setShowPwModal] = useState(false);
   const [profile, setProfile]         = useState<any>(null);
   const [loading, setLoading]         = useState(true);
@@ -76,9 +78,9 @@ function StudentSettings() {
             {([
               ["Full Name",   user?.name],
               ["Email",       user?.email],
-              ["Class/Grade", (user as any)?.grade ?? "—"],
-              ["Reg ID",      (profile?.user as any)?.reg_id ?? "—"],
-              ["Phone",       (profile?.user as any)?.phone ?? "—"],
+              ["Class/Grade", user?.grade ?? "—"],
+              ["Reg ID",      profile?.user?.reg_id ?? "—"],
+              ["Phone",       profile?.user?.phone ?? "—"],
             ] as [string, string | null | undefined][]).map(([label, val]) => (
               <React.Fragment key={label}>
                 <div className={styles.fieldLabel}>{label}</div>
@@ -111,7 +113,7 @@ function StudentSettings() {
             <button
               className="btn btn-ghost btn-sm"
               style={{ color: "var(--color-danger)" }}
-              onClick={async () => { await logout(); window.location.href = "/"; }}
+              onClick={async () => { await logout(); router.replace("/"); }}
             >
               Logout
             </button>

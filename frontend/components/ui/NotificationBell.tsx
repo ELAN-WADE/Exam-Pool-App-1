@@ -14,7 +14,7 @@ type NotificationItem = {
 };
 
 /* ── Type → icon/colour mapping ─────────────────────────── */
-const TYPE_META: Record<string, { icon: JSX.Element; colour: string; label: string }> = {
+const TYPE_META: Record<string, { icon: React.ReactNode; colour: string; label: string }> = {
   exam_submitted: {
     label: "Exam Submitted",
     colour: "#4f7cff",
@@ -108,8 +108,8 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
     // ── 1. Initial fetch ──────────────────────────────────────────────
     fetchWithAuth("/api/notifications")
       .then((res) => {
-        if (res?.data?.unreadCount !== undefined) {
-          setUnreadCount(res.data.unreadCount);
+        if (res?.unreadCount !== undefined) {
+          setUnreadCount(res.unreadCount);
         }
       })
       .catch((e) => console.error("Failed to fetch notifications:", e));
@@ -187,7 +187,7 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
     if (isOpen) {
       fetchWithAuth("/api/notifications")
         .then((res) => {
-          setItems(res?.data?.items || []);
+          setItems(res?.items || []);
           setUnreadCount(0); // optimistically reset badge
           fetchWithAuth("/api/notifications/read", { method: "PUT" }).catch(() => {});
         })

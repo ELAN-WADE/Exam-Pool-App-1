@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { api } from "../../../lib/api";
+import type { ExamResult } from "../../../lib/types";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor, fmtDate } from "../../../lib/gradeUtils";
 import { BarChartIcon, SearchIcon, EyeIcon, ArrowUpIcon, DocumentIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
@@ -19,7 +20,7 @@ export default function TeacherResultsPage() {
 const GRADE_OPTIONS = ["JSS1","JSS2","JSS3","SS1","SS2","SS3","Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6","Grade 7","Grade 8","Grade 9","Grade 10","Grade 11","Grade 12"];
 
 function TeacherResults() {
-  const [rows,            setRows]            = useState<any[]>([]);
+  const [rows,            setRows]            = useState<ExamResult[]>([]);
   const [query,           setQuery]           = useState("");
   const [loading,         setLoading]         = useState(true);
   const [error,           setError]           = useState("");
@@ -37,18 +38,23 @@ function TeacherResults() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = (await api.getResults()) as any[];
+      const data = (await api.getResults()) as ExamResult[];
+      if (signal?.aborted) return;
       setRows(data ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load results");
+      if (!signal?.aborted) setError(err instanceof Error ? err.message : "Failed to load results");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   // ── Live-update: re-fetch table when a student submits an exam ──
   useEffect(() => {

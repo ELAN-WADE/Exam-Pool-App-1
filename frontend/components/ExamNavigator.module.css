@@ -1,0 +1,71 @@
+.navContainer {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  background-color: white;
+  border-top: 1px solid var(--color-border);
+  gap: 1rem;
+}
+
+.navGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  gap: 0.5rem;
+}
+
+.navButton {
+  min-height: var(--touch-target-min);
+  min-width: var(--touch-target-min);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-spring);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+}
+
+.navUnvisited {
+  background-color: var(--color-bg-elevated);
+  color: #333;
+}
+
+.navAnswered {
+  background-color: var(--color-success);
+  color: white;
+  border-color: var(--color-success);
+}
+
+.navMarked {
+  background-color: var(--color-warning);
+  color: black;
+  border-color: var(--color-warning);
+}
+
+.navCurrent {
+  border: 2px solid var(--color-exam-primary);
+  transform: scale(1.05);
+  box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2);
+}
+
+.legend {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.legendDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}

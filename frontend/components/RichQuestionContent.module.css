@@ -1,0 +1,70 @@
+.richContentContainer {
+  font-family: var(--font-body, inherit);
+  line-height: 1.6;
+  color: #1f2937;
+  /* Logical properties for RTL support */
+  text-align: start;
+}
+
+.questionTable {
+  width: 100%;
+  overflow-x: auto;
+  display: block;
+  white-space: nowrap;
+  margin: 1rem 0;
+  border-collapse: collapse;
+}
+
+.questionTable th,
+.questionTable td {
+  border: 1px solid var(--color-border);
+  padding: 0.5rem 1rem;
+}
+
+.questionTable th {
+  background-color: var(--color-bg-elevated);
+  font-weight: 600;
+}
+
+.imageWrapper {
+  margin: 1rem 0;
+  display: flex;
+  justify-content: center;
+  position: relative;
+  min-height: 100px;
+}
+
+.imagePlaceholder {
+  background-color: var(--color-bg-elevated);
+  width: 100%;
+  height: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.shimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.5),
+    transparent
+  );
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.audioPlayer {
+  margin: 1rem 0;
+  width: 100%;
+  max-width: 400px;
+}

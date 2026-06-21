@@ -49,7 +49,15 @@ export type ExamWindowStatus =
 export function examWindowStatus(subject: {
   is_published?: number | boolean;
   exam_datetime?: string | null;
+  /** Exam sitting time in minutes (how long the exam itself lasts). */
   duration?: number | string | null;
+  /**
+   * Portal window duration in minutes (how long the login portal is open).
+   * Students must START their exam within this window.
+   * Distinct from `duration` which controls the per-student countdown.
+   * Defaults to 120 min if not set.
+   */
+  window_duration?: number | string | null;
   exam_status?: string | null;
 }): ExamWindowStatus {
   if (subject.exam_status === "completed")   return "completed";
@@ -58,7 +66,9 @@ export function examWindowStatus(subject: {
 
   const now   = Date.now();
   const start = subject.exam_datetime ? Date.parse(subject.exam_datetime) : 0;
-  const end   = start + Number(subject.duration ?? 0) * 60_000;
+  // Use window_duration (portal-open window), NOT duration (exam sitting time)
+  const windowMins = Number(subject.window_duration ?? 120);
+  const end   = start + windowMins * 60_000;
 
   if (!start)          return "unpublished";
   if (now >= start && now < end) return "open";

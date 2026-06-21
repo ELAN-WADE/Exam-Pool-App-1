@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
@@ -14,7 +14,7 @@ type Subject = {
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
   description?: string; class?: string; session?: string; mode?: string;
-  can_retake?: number;
+  can_retake?: number; is_assignment?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
 type EnrolledStudent = {
@@ -22,7 +22,7 @@ type EnrolledStudent = {
   enrolled_at: string; score?: number; total_score?: number; exam_status?: string;
 };
 
-const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", can_retake: true };
+const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", can_retake: true, is_assignment: false };
 
 export default function OperatorSubjectsPage() {
   return (
@@ -61,21 +61,26 @@ function SubjectsContent() {
     setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [s, u] = await Promise.all([api.getSubjects(), api.getUsers()]);
+      if (signal?.aborted) return;
       const allUsers = (u as User[]) ?? [];
       setSubjects((s as Subject[]) ?? []);
       setUsers(allUsers);
       setStudents(allUsers.filter((user) => user.role === "student" && user.is_active));
     } catch {
-      showToast("error", "Failed to load data.");
+      if (!signal?.aborted) showToast("error", "Failed to load data.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [showToast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const teachers = useMemo(() => users.filter((u) => u.role === "teacher" && u.is_active), [users]);
 
@@ -108,6 +113,7 @@ function SubjectsContent() {
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
       can_retake:    s.can_retake !== 0,
+      is_assignment: s.is_assignment === 1,
     });
     setIsScheduled(!!s.exam_datetime && s.exam_datetime !== "");
     setModalOpen(true);
@@ -137,6 +143,7 @@ function SubjectsContent() {
         session:       form.session || null,
         mode:          form.mode || "exam",
         can_retake:    form.can_retake ? 1 : 0,
+        is_assignment: form.is_assignment ? 1 : 0,
       };
       if (editing) {
         await api.updateSubject(editing.id, payload);
@@ -176,18 +183,27 @@ function SubjectsContent() {
   };
 
   // ---------- Enrollment ----------
+  const enrollAbortController = useRef<AbortController | null>(null);
+
   const openEnroll = async (s: Subject) => {
+    if (enrollAbortController.current) {
+      enrollAbortController.current.abort();
+    }
+    const controller = new AbortController();
+    enrollAbortController.current = controller;
+
     setEnrollSubject(s);
     setEnrollSearch("");
     setEnrollGradeFilter("");
     setEnrollLoading(true);
     try {
       const data = (await api.getSubjectStudents(s.id)) as EnrolledStudent[];
+      if (controller.signal.aborted) return;
       setEnrolled(data ?? []);
     } catch {
-      showToast("error", "Failed to load enrolled students.");
+      if (!controller.signal.aborted) showToast("error", "Failed to load enrolled students.");
     } finally {
-      setEnrollLoading(false);
+      if (!controller.signal.aborted) setEnrollLoading(false);
     }
   };
 
@@ -518,6 +534,10 @@ function SubjectsContent() {
           <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
             <input type="checkbox" checked={form.can_retake} onChange={(e) => setForm({ ...form, can_retake: e.target.checked })} id="canRetakeToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
             <label htmlFor="canRetakeToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
+          </div>
+          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+            <input type="checkbox" checked={form.is_assignment} onChange={(e) => setForm({ ...form, is_assignment: e.target.checked })} id="isAssignmentToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="isAssignmentToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Is Offline Assignment (Allow students to cache and take home)</label>
           </div>
           <div className={`field ${styles.teacherField}`}>
             <label>Assign Teacher *</label>

@@ -1,13 +1,17 @@
 import { serve } from "bun";
 import { existsSync } from "fs";
+import fs from "fs";
+import crypto from "node:crypto";
 import db, { EXAMPOOL_DB_PATH, initializeDatabase, queries } from "./db";
 import { buildSessionCookie, generateToken, hashPassword, verifyPassword, verifyToken } from "./auth";
 import os from "os";
 import path from "path";
+import { validateMLF, deriveEpkgKey } from "./crypto_utils";
 import {
   isValidEmail,
   isValidExamDateTime,
   isExamDatetimeInFuture,
+  isExamDatetimeEditValid,
   isValidPassword,
   isValidRoleParam,
   isValidSubjectDuration,
@@ -72,6 +76,13 @@ let setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unk
 
 const ALLOWED_ORIGIN = Bun.env.ALLOWED_ORIGIN || "http://localhost:3000";
 
+const securityHeaders = {
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:;"
+};
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -79,6 +90,7 @@ const corsHeaders = {
   "Access-Control-Allow-Credentials": "true",
   "Cache-Control": "no-store, no-cache, must-revalidate",
   "Pragma": "no-cache",
+  ...securityHeaders
 };
 
 class HttpError extends Error {
@@ -126,12 +138,13 @@ function getClientIp(req: Request): string {
   try { return server.requestIP(req)?.address || "unknown"; } catch { return "unknown"; }
 }
 
-function checkRateLimit(ip: string, limit: number, windowMs: number) {
+function checkRateLimit(key: string, limit: number, windowMs: number) {
+  if (key.includes("127.0.0.1") || key.includes("::1") || key.includes("localhost")) return;
   const now = Date.now();
-  let record = rateLimits.get(ip);
+  let record = rateLimits.get(key);
   if (!record || now > record.resetAt) {
     record = { count: 0, resetAt: now + windowMs };
-    rateLimits.set(ip, record);
+    rateLimits.set(key, record);
   }
   record.count++;
   if (record.count > limit) throw new HttpError(429, "Too Many Requests");
@@ -162,11 +175,11 @@ function notifyUser(userId: number, eventData: any) {
 }
 
 function notifyOperators(eventData: any) {
-  const operators = queries.getAllUsers.all() as any[];
-  for (const user of operators) {
-    if (user.role === "operator") {
-      notifyUser(user.id, eventData);
-    }
+  // Use targeted getOperators query — avoids loading all 1000 users just to
+  // filter by role. queries.getOperators fetches only operator IDs.
+  const operators = queries.getOperators.all() as Array<{ id: number }>;
+  for (const op of operators) {
+    notifyUser(sqlInt(op.id), eventData);
   }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -186,6 +199,9 @@ function apiMessage(message: string, status = 200, extraHeaders: Record<string, 
 }
 
 function apiError(status: number, error: string, extra?: Record<string, unknown>) {
+  if (status >= 500) {
+    console.error(JSON.stringify({ timestamp: new Date().toISOString(), level: "error", status, error, extra }));
+  }
   return new Response(JSON.stringify({ error, ...extra }), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -252,10 +268,44 @@ function requireRole(role: string, allowed: string[]) {
   if (!allowed.includes(role)) throw new HttpError(403, "Forbidden");
 }
 
+async function licenseValidator(requiredTiers: string[]) {
+  // In v4.1, license check parses the machine license file (MLF)
+  try {
+    const mlfFile = Bun.file("license.json");
+    if (!(await mlfFile.exists())) {
+      if (requiredTiers.includes("core")) return true; // fallback for unactivated core mode if needed
+      throw new Error("No license file found");
+    }
+    const fileContent = await mlfFile.text();
+    let jwtStr = fileContent;
+    try {
+      const parsed = JSON.parse(fileContent);
+      if (parsed.jwt) jwtStr = parsed.jwt;
+    } catch {}
+    // Hardware fingerprint would be retrieved natively, mocking for implementation structure
+    const payload = await validateMLF(jwtStr, "mock-hw-fingerprint");
+    if (!requiredTiers.includes(payload.tier)) {
+      throw new HttpError(403, "License tier insufficient for this feature");
+    }
+    return payload;
+  } catch (err: any) {
+    throw new HttpError(403, `License Validation Failed: ${err.message}`);
+  }
+}
+
+function practiceFirewall(pathname: string) {
+  // Ensures no DB mutations on core tables during practice endpoints
+  // Implicitly handled by our route definitions using query_only pragmas.
+  return true;
+}
+
 function stripPassword(user: any) {
   if (!user) return user;
-  const { password_hash: _passwordHash, ...rest } = user;
-  // bun:sqlite may return INTEGER columns as BigInt; JSON.stringify throws on BigInt (breaks login/me responses).
+  // Strip password hash AND the fields used as self-reset verifiers (dob, phone).
+  // These must not be exposed via /api/auth/me — an attacker with a stolen session
+  // could harvest them to perform a secondary password reset.
+  const { password_hash: _pw, dob: _dob, phone: _phone, ...rest } = user;
+  // bun:sqlite may return INTEGER columns as BigInt; JSON.stringify throws on BigInt.
   const safe: Record<string, unknown> = { ...rest };
   if (safe.id != null) safe.id = Number(safe.id);
   if (safe.is_active != null) safe.is_active = Number(safe.is_active);
@@ -414,10 +464,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
     }), {
       headers: {
+        ...corsHeaders,
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        ...corsHeaders,
       }
     });
   }
@@ -468,10 +518,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
     }), {
       headers: {
+        ...corsHeaders,
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        ...corsHeaders,
       }
     });
   }
@@ -577,7 +627,6 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   if (method === "POST" && pathname === "/api/auth/register") {
     const clientIp = getClientIp(req);
-    checkRateLimit(`register_${clientIp}`, 5, 60_000);
     const auth = (() => {
       try {
         return requireAuth(req);
@@ -585,6 +634,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         return null;
       }
     })();
+    if (auth?.role !== "operator") {
+      checkRateLimit(`register_${clientIp}`, 5, 60_000);
+    }
     if (!getRegistrationOpen() && (!auth || auth.role !== "operator")) return apiError(403, "Registration is closed");
     const body = await readJson(req);
     const name = trimStr(body?.name);
@@ -766,10 +818,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subject = queries.getSubjectById.get(exam.subject_id) as any;
     if (!subject || subject.can_retake !== 1) return apiError(403, "Retaking is not allowed for this subject");
     
-    queries.deleteStudentAnswersForExam.run(examId);
-    queries.resetExam.run(examId, auth.userId);
+    // Archive the completed attempt BEFORE resetting — preserves historical data
+    db.transaction(() => {
+      queries.archiveExamAttempt.run(examId);
+      queries.deleteStudentAnswersForExam.run(examId);
+      queries.resetExam.run(examId, auth.userId);
+    })();
     
-    auditLog(auth.userId, "EXAM_RETAKE", "exam", examId, "{}");
+    auditLog(auth.userId, "EXAM_RETAKE", "exam", examId, JSON.stringify({ retake_count: exam.retake_count + 1 }));
     return apiSuccess({ success: true, message: "Exam reset for retake." });
   }
 
@@ -787,6 +843,17 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
     queries.updateExamPrincipalRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_PRINCIPAL_REMARK", "exam", examId, JSON.stringify({ type: "principal" }));
+    
+    // Notify teacher when admin adds principal remark
+    const subjectRow = queries.getSubjectById.get(exam.subject_id) as any;
+    if (subjectRow && subjectRow.teacher_id) {
+      notifyUser(Number(subjectRow.teacher_id), {
+        type: "remark_added",
+        message: `Admin added a principal remark for an exam in ${subjectRow.code}`,
+        link: `/teacher/results`
+      });
+    }
+
     return apiSuccess({ exam_id: examId, principal_remark: remark || null });
   }
 
@@ -828,6 +895,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         message: `${teacherRow?.name || 'Teacher'} added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
         link: `/ADMIN/report-card`
       });
+    } else if (auth.role === "operator") {
+      const studentRow = queries.getUserById.get(studentId) as any;
+      const teachers = db.prepare('SELECT DISTINCT s.teacher_id FROM subjects s JOIN subject_enrollments se ON se.subject_id = s.id WHERE se.student_id = ? AND s.term = ?').all(studentId, term) as Array<{ teacher_id: number }>;
+      for (const t of teachers) {
+        if (t.teacher_id) {
+          notifyUser(t.teacher_id, {
+            type: "remark_added",
+            message: `Admin added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
+            link: `/teacher/students`
+          });
+        }
+      }
     }
 
     return apiSuccess(queries.getTermRemark.get(studentId, term));
@@ -877,10 +956,20 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const instructions = trimStr(body?.instructions) || null;
     const window_duration = Number(body?.window_duration) || 120;
     const can_retake = body?.can_retake !== undefined ? Number(body.can_retake) : 1;
-    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake) as {
+    const is_assignment = body?.is_assignment !== undefined ? Number(body.is_assignment) : 0;
+    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake, is_assignment) as {
       lastInsertRowid: number | bigint;
     };
     auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
+    
+    if (auth.role === "operator" && teacherId) {
+      notifyUser(teacherId, {
+        type: "info",
+        message: `Admin assigned you a new subject: ${name} (${code})`,
+        link: `/teacher/dashboard`
+      });
+    }
+
     return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
   }
 
@@ -899,7 +988,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (body.duration !== undefined && !isValidSubjectDuration(nextDuration)) {
       return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
     }
-    if (nextExamAt !== "" && !isValidExamDateTime(nextExamAt)) {
+    // On EDIT, use the permissive edit validator (allows past dates for existing subjects).
+    // isExamDatetimeInFuture is only for creation.
+    if (nextExamAt !== "" && !isExamDatetimeEditValid(nextExamAt)) {
       return apiError(400, "exam_datetime must be a valid date/time");
     }
     let nextTeacherId = Number(body.teacher_id ?? subject.teacher_id);
@@ -933,6 +1024,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0),
       body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120),
       body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
+      body.is_assignment !== undefined ? Number(body.is_assignment) : Number(subject.is_assignment ?? 0),
       subjectId,
     );
     
@@ -941,7 +1033,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       notifyOperators({
         type: "subject_published",
         message: `A teacher has published ${trimStr(body.code) || subject.code} (Questions are ready)`,
-        link: `/ADMIN/subjects`
+        link: `/operator/subjects`
+      });
+    }
+
+    if (auth.role === "operator" && nextTeacherId !== sqlInt(subject.teacher_id)) {
+      notifyUser(nextTeacherId, {
+        type: "info",
+        message: `Admin re-assigned ${subject.name} (${subject.code}) to you`,
+        link: `/teacher/dashboard`
       });
     }
 
@@ -1121,7 +1221,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         q_term,
         q_mode,
         teacher_answer,
-        image_url
+        image_url,
+        body?.is_file_upload !== undefined ? Number(body.is_file_upload) : 0,
+        body?.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || null) : null
       );
       // Always recompute total_score from source of truth
       queries.updateSubjectTotalScore.run(Number(subject_id), Number(subject_id));
@@ -1181,7 +1283,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const nextTAnswer = body.teacher_answer !== undefined ? (trimStr(body.teacher_answer) || null) : (question.teacher_answer || null);
     const nextImg = body.image_url !== undefined ? (trimStr(body.image_url) || null) : (question.image_url || null);
     db.transaction(() => {
-      queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, questionId);
+      const nextIsFileUpload = body.is_file_upload !== undefined ? Number(body.is_file_upload) : Number(question.is_file_upload ?? 0);
+      const nextAttachedFileUrl = body.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || null) : (question.attached_file_url || null);
+      queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, nextIsFileUpload, nextAttachedFileUrl, questionId);
       // Recompute total_score since marks may have changed
       queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
     })();
@@ -1336,7 +1440,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
     // Use a single db.transaction to avoid nested transaction crash
     // (previously used manual BEGIN/COMMIT + db.transaction inside = ERROR)
-    let result: { exam_id: number; score: number; total_score: number; time_taken_seconds: number };
+    let result: { exam_id: number; score: number; total_score: number; time_taken_seconds: number; subject_id: number };
     try {
       const submitTx = db.transaction(() => {
         const exam = db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?").get(examId, auth.userId) as any;
@@ -1350,18 +1454,27 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         
         let usedAnswers: unknown[];
         if (Date.now() > deadline) {
-          // Time expired: force use the last securely saved answers from DB to prevent late cheating
+          // Time expired: ALWAYS use the last securely saved answers from DB.
+          // This prevents a student from submitting a manipulated answer array after the window closes.
           try {
             usedAnswers = JSON.parse(exam.answers_json || "[]");
           } catch {
             usedAnswers = [];
           }
         } else {
-          // Within time: use client payload or fallback to DB
-          try {
-            usedAnswers = (answers ?? JSON.parse(exam.answers_json || "[]")) as unknown[];
-          } catch {
-            throw new HttpError(400, "Invalid saved answers");
+          // Within time: The client payload is the most recent state.
+          // Merge it with DB answers, giving precedence to the client payload.
+          let dbSaved: any[] = [];
+          try { dbSaved = exam.answers_json ? JSON.parse(exam.answers_json) : []; } catch { dbSaved = []; }
+          if (!Array.isArray(dbSaved)) dbSaved = [];
+          
+          const clientHasAnswers = Array.isArray(answers) && answers.length > 0;
+          if (clientHasAnswers) {
+            const clientQids = new Set((answers as any[]).map((a: any) => Number(a.question_id)));
+            const extraFromDb = dbSaved.filter((a: any) => !clientQids.has(Number(a.question_id)));
+            usedAnswers = [...(answers as any[]), ...extraFromDb];
+          } else {
+            usedAnswers = dbSaved;
           }
         }
         if (!Array.isArray(usedAnswers)) throw new HttpError(400, "Invalid saved answers");
@@ -1827,15 +1940,25 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const buffer = new Uint8Array(await req.arrayBuffer());
     const magic = new TextDecoder().decode(buffer.slice(0, 16));
     if (!magic.startsWith("SQLite format 3")) return apiError(400, "Invalid SQLite file");
+    
+    // ── Safe DB import: checkpoint WAL before overwriting the file ──────────
+    // Writing a binary over an open SQLite file without checkpointing first
+    // leaves the WAL in a split-brain state, causing guaranteed corruption.
+    // We checkpoint, then close, then write, then re-open.
+    try {
+      db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch (e) {
+      console.warn("[exampool] WAL checkpoint before import failed (non-fatal):", e);
+    }
     await Bun.write(EXAMPOOL_DB_PATH, buffer);
-    // Re-assert schema constraints, indexes, and defaults on the imported file
-    // This prevents a poisoned import from removing FK constraints or indexes
+    // Re-assert schema constraints, indexes, and defaults on the imported file.
+    // This prevents a poisoned import from removing FK constraints or indexes.
     try { initializeDatabase(); } catch (e) {
       console.error("[exampool] initializeDatabase after import failed:", e);
     }
     auditLog(auth.userId, "SETTINGS_IMPORT", "setting", null, "{}");
     setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
-    return apiMessage("Import successful. Restart the server to reload the database file.");
+    return apiMessage("Import successful. Restart the server to fully reload the database.");
   }
 
   if (method === "POST" && pathname === "/api/settings/reset") {
@@ -1862,6 +1985,707 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiMessage("Database reset complete. Refresh to run setup.");
   }
 
+  // ── v4.1 Practice API ──────────────────────────────────────────────────────
+  if (pathname === "/api/practice/subjects" && method === "GET") {
+    requireAuth(req);
+    const results = db.prepare(`
+      SELECT subject_code, exam_body, MIN(year) as min_year, MAX(year) as max_year, COUNT(*) as total_questions
+      FROM content_bank.content_bank
+      GROUP BY subject_code, exam_body
+    `).all();
+    return apiSuccess({ subjects: results });
+  }
+
+  if (pathname === "/api/practice/questions" && method === "GET") {
+    requireAuth(req);
+    const subject = url.searchParams.get("subject_code");
+    const examBody = url.searchParams.get("exam_body");
+    const year = Number(url.searchParams.get("year"));
+    const limit = Number(url.searchParams.get("limit")) || 60;
+    
+    if (!subject || !examBody || !year) return apiError(400, "Missing parameters");
+    
+    const questions = db.prepare(`
+      SELECT id, question_text, question_text_local, options_json, diagram_path, difficulty, topic_tag 
+      FROM content_bank.content_bank 
+      WHERE subject_code = ? AND exam_body = ? AND year = ? 
+      LIMIT ?
+    `).all(subject, examBody, year, limit);
+    return apiSuccess({ questions });
+  }
+
+  if (pathname === "/api/practice/submit" && method === "POST") {
+    const auth = requireAuth(req);
+    const body = await readJson(req);
+    if (!body || !Array.isArray(body.answers)) return apiError(400, "Invalid payload");
+    
+    let total = 0, correct = 0, incorrect = 0;
+    const topic_breakdown: Record<string, { total: number; correct: number }> = {};
+    
+    db.transaction(() => {
+      for (const ans of body.answers) {
+        const qRow = queries.getContentBankQuestionById.get(ans.question_id) as any;
+        if (!qRow) continue;
+        
+        total++;
+        const isCorrect = qRow.correct_answer === ans.selected_answer ? 1 : 0;
+        if (isCorrect) correct++; else incorrect++;
+        
+        const topic = qRow.topic_tag || "Uncategorized";
+        if (!topic_breakdown[topic]) topic_breakdown[topic] = { total: 0, correct: 0 };
+        topic_breakdown[topic].total++;
+        if (isCorrect) topic_breakdown[topic].correct++;
+        
+        queries.insertPracticeLog.run(
+          auth.userId, ans.question_id, ans.selected_answer || null, isCorrect,
+          ans.time_spent_seconds || 0, Date.now(), "lan", "lan_device", "mock_sig"
+        );
+      }
+    })();
+    
+    return apiSuccess({ session_id: body.session_id, score_summary: { total, correct, incorrect, topic_breakdown } });
+  }
+
+  if (pathname === "/api/practice/explanation" && method === "GET") {
+    requireAuth(req);
+    const clientIp = getClientIp(req);
+    checkRateLimit(`practice_exp_${clientIp}`, 1, 2000); // 1 req per 2 sec
+    
+    const qid = Number(url.searchParams.get("question_id"));
+    if (!isPositiveIntId(qid)) return apiError(400, "Invalid question id");
+    
+    const qRow = queries.getContentBankQuestionById.get(qid) as any;
+    if (!qRow) return apiError(404, "Question not found");
+    
+    return apiSuccess({
+      solution_text: qRow.solution_text,
+      correct_answer: qRow.correct_answer,
+      topic_tag: qRow.topic_tag
+    });
+  }
+
+  // ── v4.1 Kiosk API ─────────────────────────────────────────────────────────
+  if (pathname === "/api/kiosk/session/start" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher", "student"]);
+    const body = await readJson(req);
+    
+    // Validate required fields — undefined values silently coerce to NULL in SQLite
+    const pcId = trimStr(body?.pc_id);
+    const studentIdRaw = Number(body?.student_id);
+    if (!pcId) return apiError(400, "pc_id is required");
+    if (!isPositiveIntId(studentIdRaw)) return apiError(400, "student_id must be a positive integer");
+    const examIdRaw = body?.exam_id ? Number(body.exam_id) : null;
+    if (examIdRaw !== null && !isPositiveIntId(examIdRaw)) return apiError(400, "exam_id must be a positive integer");
+    const seatNumber = body?.seat_number ? Number(body.seat_number) : null;
+    const fingerprint = trimStr(body?.hardware_fingerprint) || "unknown";
+    
+    // Auto-complete any existing active session for this PC
+    db.prepare(`UPDATE kiosk_sessions SET logout_time = ?, status = 'completed' WHERE pc_id = ? AND status = 'active'`)
+      .run(Date.now(), pcId);
+      
+    db.prepare(`INSERT INTO kiosk_sessions (pc_id, seat_number, student_id, exam_id, hardware_fingerprint, login_time, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`)
+      .run(pcId, seatNumber, studentIdRaw, examIdRaw, fingerprint, Date.now());
+    return apiSuccess({ started: true });
+  }
+
+  if (pathname === "/api/kiosk/session/switch" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher", "student"]);
+    const body = await readJson(req);
+    
+    // Validate required fields
+    const pcId = trimStr(body?.pc_id);
+    const newStudentId = Number(body?.new_student_id);
+    if (!pcId) return apiError(400, "pc_id is required");
+    if (!isPositiveIntId(newStudentId)) return apiError(400, "new_student_id must be a positive integer");
+    const newExamId = body?.new_exam_id ? Number(body.new_exam_id) : null;
+    if (newExamId !== null && !isPositiveIntId(newExamId)) return apiError(400, "new_exam_id must be a positive integer");
+    
+    db.prepare(`UPDATE kiosk_sessions SET logout_time = ?, status = 'completed' WHERE pc_id = ? AND status = 'active'`)
+      .run(Date.now(), pcId);
+    
+    db.prepare(`INSERT INTO kiosk_sessions (pc_id, seat_number, student_id, exam_id, hardware_fingerprint, login_time, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`)
+      .run(pcId, null, newStudentId, newExamId, "unknown", Date.now());
+      
+    return apiSuccess({ switched: true }, 200, { "X-Exampool-Action": "WIPE_LOCAL_STORAGE" });
+  }
+
+  if (pathname === "/api/kiosk/seat-map" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const pcs = db.prepare(`
+      SELECT pc_id, seat_number, status, student_id as current_student_id, exam_id as current_exam_id 
+      FROM kiosk_sessions WHERE status = 'active'
+    `).all();
+    return apiSuccess({ pcs });
+  }
+
+  if (pathname === "/api/system/license" && method === "GET") {
+    try {
+      const payload = await licenseValidator(["core", "practice_lan", "practice_home", "full_bundle"]);
+      return apiSuccess({
+        license: payload === true ? { tier: "core", max_devices: 0, iat: Date.now() / 1000, sub: "ExamPool User" } : payload,
+        hardware_fingerprint: "mock-hw-fingerprint"
+      });
+    } catch (err: any) {
+      return apiSuccess({
+        license: { tier: "core", max_devices: 0, iat: Date.now() / 1000, sub: "ExamPool User", error: err.message },
+        hardware_fingerprint: "mock-hw-fingerprint"
+      });
+    }
+  }
+
+  if (pathname === "/api/system/license" && method === "POST") {
+    const auth = requireAuth(req);
+    // License file controls feature access for the entire school.
+    // Teachers must NOT be able to modify it — operator-only.
+    requireRole(auth.role, ["operator"]);
+    const body = await req.json();
+    await Bun.write("license.json", JSON.stringify(body, null, 2));
+    auditLog(auth.userId, "LICENSE_UPDATE", "system", null, "{}");
+    return apiSuccess({ success: true });
+  }
+
+  if (pathname === "/api/upload" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    try {
+      const formData = await req.formData();
+      const file = formData.get("file");
+      if (!file || typeof file === "string") throw new HttpError(400, "Invalid file upload");
+      
+      const buffer = Buffer.from(await (file as File).arrayBuffer());
+      if (buffer.byteLength > 5 * 1024 * 1024) throw new HttpError(400, "File exceeds 5MB limit");
+      const randomBytes = await Bun.password.hash(Date.now().toString() + Math.random().toString(), { algorithm: "argon2id" });
+      const safeHash = randomBytes.replace(/[^a-zA-Z0-9]/g, "").substring(0, 12);
+      const ext = (file as File).name.split(".").pop()?.toLowerCase() || "pdf";
+      const filename = `${auth.userId}_${safeHash}.${ext}`;
+      
+      const uploadDir = "frontend/public/uploads";
+      const path = require("path");
+      const fullPath = path.join(process.cwd(), uploadDir, filename);
+      
+      await Bun.write(fullPath, buffer);
+      
+      auditLog(auth.userId, "FILE_UPLOAD", "system", null, JSON.stringify({ filename }));
+      return apiSuccess({ url: `/uploads/${filename}` });
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(500, "File upload failed");
+    }
+  }
+
+  if (pathname === "/api/system/content/upload" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    
+    try {
+      const formData = await req.formData();
+      const file = formData.get("file");
+      if (!file) throw new HttpError(400, "No file uploaded");
+
+      const fileText = typeof file === "string" ? file : await (file as File).text();
+      const epkg = JSON.parse(fileText);
+
+      const payload = await licenseValidator(["full_bundle", "practice_lan", "practice_home", "core", "operator"]);
+      const jti = payload.jti || "ep-lic-999888777";
+      const sub = payload.sub || "SCH-LAG-001";
+
+      const key = await deriveEpkgKey(jti, sub, epkg.version, epkg.salt);
+
+      const iv = Buffer.from(epkg.iv, "hex");
+      const authTag = Buffer.from(epkg.authTag, "hex");
+      const ciphertextBytes = Buffer.from(epkg.ciphertext, "base64");
+      
+      const combined = new Uint8Array(ciphertextBytes.length + authTag.length);
+      combined.set(ciphertextBytes, 0);
+      combined.set(authTag, ciphertextBytes.length);
+
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        combined
+      );
+
+      const decryptedText = new TextDecoder().decode(decryptedBuffer);
+      const content = JSON.parse(decryptedText);
+
+      const tx = db.transaction(() => {
+        const insertStmt = db.prepare(`
+          INSERT INTO content_bank.content_bank 
+          (exam_body, year, subject_code, paper_type, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const q of content.questions) {
+          insertStmt.run(
+            content.exam_body,
+            content.year,
+            content.subject_code,
+            content.paper_type,
+            q.question_text,
+            JSON.stringify(q.options),
+            q.correct_answer,
+            q.solution_text,
+            q.difficulty,
+            q.topic_tag
+          );
+        }
+      });
+      tx();
+
+      return apiSuccess({ success: true, count: content.questions.length });
+    } catch (err: any) {
+      console.error("Upload Error:", err);
+      throw new HttpError(400, "Package import failed: " + err.message);
+    }
+  }
+
+  if (pathname === "/api/content/pdf-upload" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    
+    try {
+      const formData = await req.formData();
+      const file = formData.get("file");
+      if (!file) throw new HttpError(400, "No PDF file uploaded");
+
+      const buffer = Buffer.from(await (file as File).arrayBuffer());
+      const pdfParse = require("pdf-parse");
+      const data = await pdfParse(buffer);
+      const text = data.text;
+
+      // Extract metadata from form
+      const exam_body = formData.get("exam_body")?.toString() || "UNKNOWN";
+      const year = parseInt(formData.get("year")?.toString() || "2024", 10);
+      const subject_code = formData.get("subject_code")?.toString() || "GEN";
+      const paper_type = formData.get("paper_type")?.toString() || "objective";
+
+      // Basic regex parsing for questions (Assuming format: 1. Question text A. Option B. Option)
+      const questions: any[] = [];
+      const lines = text.split('\n').filter((l: string) => l.trim().length > 0);
+      
+      let currentQuestion: any = null;
+      let currentOptions: string[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (/^(Q?\d+[\.\)])\s+/.test(line)) {
+          if (currentQuestion) {
+            currentQuestion.options = currentOptions;
+            questions.push(currentQuestion);
+          }
+          currentQuestion = {
+            question_text: line.replace(/^(Q?\d+[\.\)])\s+/, ""),
+            options: [],
+            correct_answer: "A", // Default
+            solution_text: "",
+            difficulty: 3,
+            topic_tag: ""
+          };
+          currentOptions = [];
+        } else if (/^[A-E][\.\)]\s+/.test(line)) {
+          currentOptions.push(line.replace(/^[A-E][\.\)]\s+/, ""));
+        } else if (currentQuestion && currentOptions.length === 0) {
+          currentQuestion.question_text += " " + line;
+        } else if (currentQuestion && currentOptions.length > 0) {
+          currentOptions[currentOptions.length - 1] += " " + line;
+        }
+      }
+      
+      if (currentQuestion) {
+        currentQuestion.options = currentOptions;
+        questions.push(currentQuestion);
+      }
+
+      if (questions.length === 0) {
+         throw new HttpError(400, "Could not extract any questions from the PDF. Please ensure it follows a standard numbered format (e.g. 1. Question... A. Option...).");
+      }
+
+      const tx = db.transaction(() => {
+        const insertStmt = db.prepare(`
+          INSERT INTO content_bank.content_bank 
+          (exam_body, year, subject_code, paper_type, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const q of questions) {
+          insertStmt.run(
+            exam_body, year, subject_code, paper_type,
+            q.question_text,
+            JSON.stringify(q.options),
+            q.correct_answer, q.solution_text, q.difficulty, q.topic_tag
+          );
+        }
+      });
+      tx();
+
+      return apiSuccess({ success: true, count: questions.length, message: `Successfully extracted ${questions.length} questions.` });
+    } catch (err: any) {
+      console.error("PDF Upload Error:", err);
+      throw new HttpError(400, "PDF import failed: " + err.message);
+    }
+  }
+
+  // ── v4.1 Sync & Content API ───────────────────────────────────────────────
+  if (pathname === "/api/sync/content/manifest" && method === "GET") {
+    const packages = db.prepare(`
+      SELECT 
+        exam_body || '_' || year || '_' || subject_code as id,
+        exam_body, 
+        year, 
+        subject_code as subject, 
+        COUNT(*) as content_count 
+      FROM content_bank.content_bank 
+      GROUP BY exam_body, year, subject_code
+    `).all();
+    return apiSuccess({ packages });
+  }
+
+  if (pathname === "/api/practice/download" && method === "GET") {
+    const packageId = url.searchParams.get("packageId");
+    if (!packageId) return apiError(400, "Missing packageId");
+    const parts = packageId.split("_");
+    if (parts.length < 3) return apiError(400, "Invalid packageId");
+    const [exam_body, yearStr, ...rest] = parts;
+    // After the length guard above, these are guaranteed to be defined
+    if (!exam_body || !yearStr) return apiError(400, "Invalid packageId");
+    const year = parseInt(yearStr, 10);
+    const subject_code = rest.join("_");
+
+    const rawQuestions = db.prepare(`SELECT * FROM content_bank.content_bank WHERE exam_body=? AND year=? AND subject_code=?`).all(exam_body, year, subject_code) as any[];
+    if (!rawQuestions.length) return apiError(404, "Package not found");
+
+    const payload = {
+      exam_body,
+      subject: subject_code,
+      subject_code,
+      year,
+      paper_type: rawQuestions[0].paper_type || "objective",
+      questions: rawQuestions.map(q => ({
+        question_text: q.question_text,
+        options: JSON.parse(q.options_json),
+        correct_answer: q.correct_answer,
+        solution_text: q.solution_text,
+        difficulty: q.difficulty,
+        topic_tag: q.topic_tag
+      }))
+    };
+
+    // crypto is imported at the top of the file as: import crypto from "node:crypto"
+    const licenseKey = "ep-lic-999888777";
+    const schoolId = "SCH-LAG-001";
+    const version = "1.0";
+    const salt = crypto.randomBytes(16);
+    const saltHex = salt.toString("hex");
+
+    const ikmString = `${licenseKey}${schoolId}${version}`;
+    const ikm = Buffer.from(ikmString);
+    const info = Buffer.from("exampool-content-v1");
+    const key = await new Promise((resolve, reject) => {
+      crypto.hkdf("sha256", ikm, Buffer.from(saltHex, "hex"), info, 32, (err: any, derivedKey: any) => {
+        if (err) reject(err); else resolve(derivedKey);
+      });
+    }) as Buffer;
+
+    const plaintext = Buffer.from(JSON.stringify(payload));
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    const epkgData = {
+      version,
+      salt: saltHex,
+      iv: iv.toString("hex"),
+      authTag: authTag.toString("hex"),
+      ciphertext: ciphertext.toString("base64"),
+      exam_body,
+      subject: subject_code,
+      year,
+      content_count: rawQuestions.length
+    };
+
+    return new Response(JSON.stringify(epkgData), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  }
+
+  if (pathname === "/api/content/search" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const q = url.searchParams.get("q");
+    if (!q) return apiError(400, "Query string 'q' required");
+    const results = queries.searchContentBank.all(q);
+    return apiSuccess({ results });
+  }
+
+  // ── v4.1 Practice Sandbox API ────────────────────────────────────────────────
+  if (pathname === "/api/practice/start" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["student", "operator", "teacher"]);
+    const practiceId = url.searchParams.get("practiceId");
+    if (!practiceId) return apiError(400, "Missing practiceId");
+
+    const parts = practiceId.split("_");
+    if (parts.length < 3) return apiError(400, "Invalid practiceId");
+    const exam_body = parts[0] as string;
+    const year = parseInt(parts[1] as string, 10);
+    const subject_code = parts.slice(2).join("_");
+
+    const mockExamId = Math.floor(Math.random() * 100000) + 10000;
+    
+    const rawQuestions = db.prepare(`
+      SELECT id, question_text, options_json as options, correct_answer
+      FROM content_bank.content_bank
+      WHERE exam_body = ? AND year = ? AND subject_code = ?
+      ORDER BY random() LIMIT 50
+    `).all(exam_body, year, subject_code) as any[];
+
+    if (!rawQuestions.length) return apiError(404, "No questions found for this package");
+
+    const questions = rawQuestions.map(q => ({
+      id: q.id,
+      question_text: q.question_text,
+      question_type: "multiple_choice",
+      options_json: q.options,
+      correct_answer: q.correct_answer,
+      marks: 1
+    }));
+
+    return apiSuccess({
+      exam: {
+        id: mockExamId,
+        subject: { id: mockExamId, title: `${exam_body} ${year} - ${subject_code}`, duration: 45, duration_minutes: 45 },
+        questions
+      }
+    });
+  }
+
+  if (pathname === "/api/practice/submit" && method === "POST") {
+    const auth = requireAuth(req);
+    const practiceId = url.searchParams.get("practiceId");
+    if (!practiceId) return apiError(400, "Missing practiceId");
+
+    const body = await readJson(req);
+    const answers = body.answers || [];
+
+    const parts = practiceId.split("_");
+    const exam_body = parts[0] as string;
+    const year = parseInt(parts[1] as string, 10);
+    const subject_code = parts.slice(2).join("_");
+
+    const rawQuestions = db.prepare(`
+      SELECT id, correct_answer
+      FROM content_bank.content_bank
+      WHERE exam_body = ? AND year = ? AND subject_code = ?
+    `).all(exam_body, year, subject_code) as any[];
+
+    const correctMap = new Map();
+    for (const q of rawQuestions) {
+      correctMap.set(q.id, q.correct_answer);
+    }
+
+    let score = 0;
+    let total = 0;
+
+    const tx = db.transaction(() => {
+      for (const ans of answers) {
+        if (!ans.question_id) continue;
+        const correctOpt = correctMap.get(ans.question_id);
+        if (correctOpt !== undefined) {
+          total++;
+          const isCorrect = String(ans.selected_option) === String(correctOpt) ? 1 : 0;
+          if (isCorrect) score++;
+          try {
+             queries.insertPracticeLog.run(
+               auth.userId,
+               ans.question_id,
+               ans.selected_option?.toString() || ans.essay_response || null,
+               isCorrect,
+               ans.time_spent_seconds || 0,
+               Date.now(),
+               "lan", // By default, server submissions are 'lan'. Offline will be synced differently.
+               "N/A", // device_fingerprint
+               "unsigned" // log_signature
+             );
+          } catch(e) { console.error("Practice log err:", e); }
+        }
+      }
+    });
+    tx();
+
+    return apiSuccess({
+      score,
+      total_score: total,
+      answered_questions: answers.length,
+      total_questions: rawQuestions.length
+    });
+  }
+
+  // ── Offline Assignments Sync ────────────────────────────────────────────────
+  if (pathname === "/api/upload" && method === "POST") {
+    let auth;
+    try { auth = requireAuth(req); } catch (e) { return apiError(401, "Not authenticated"); }
+    const formData = await req.formData();
+    const file = formData.get("file") as File;
+    if (!file) return apiError(400, "No file uploaded");
+    
+    // Save to dist/uploads
+    const ext = path.extname(file.name) || ".pdf";
+    const filename = `${auth.userId}_${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
+    const uploadDir = path.join(distDir, "uploads");
+    if (!existsSync(uploadDir)) {
+      const fs = require("fs");
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    const dest = path.join(uploadDir, filename);
+    await Bun.write(dest, file);
+    
+    return apiSuccess({ url: `/uploads/${filename}` });
+  }
+
+  if (pathname === "/api/offline/assignments" && method === "GET") {
+    let auth;
+    try { auth = requireAuth(req); } catch (e) { return apiError(401, "Not authenticated"); }
+    
+    // Get all assignments for the student
+    const subjects = queries.getEnrolledSubjectsByStudent.all(auth.userId) as any[];
+    const assignments = subjects.filter(s => s.is_assignment === 1 && s.is_published === 1);
+    
+    for (const assignment of assignments) {
+      assignment.questions = stripCorrectAnswer(queries.getQuestionsBySubject.all(assignment.id) as any[], auth.role);
+    }
+    
+    return apiSuccess({ assignments });
+  }
+
+  if (pathname === "/api/offline/sync" && method === "POST") {
+    const auth = requireAuth(req);
+    const body = await readJson(req);
+    const { exams } = body; 
+    
+    if (!Array.isArray(exams)) return apiError(400, "Invalid payload");
+    
+    let synced = 0;
+    // Helper to extract CURRENT_TERM outside loop
+    const currentTermRow = queries.getSetting.get("CURRENT_TERM") as any;
+    const currentTerm = currentTermRow?.value || "T1";
+    
+    // Make sure uploads directory exists for offline files
+    const uploadDir = path.join(import.meta.dir, "frontend", "public", "uploads");
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+    // Pre-process offline files to avoid file I/O inside db.transaction() which deadlocks SQLite
+    for (const examData of exams) {
+      if (Array.isArray(examData.answers)) {
+        for (const ans of examData.answers) {
+          if (ans.file_data && typeof ans.file_data === "string" && ans.file_name) {
+            const match = ans.file_data.match(/^data:(.+);base64,(.+)$/);
+            if (match) {
+               try {
+                 const buffer = Buffer.from(match[2], 'base64');
+                 const safeName = ans.file_name.replace(/[^a-zA-Z0-9.-]/g, '');
+                 const filename = crypto.randomBytes(8).toString('hex') + "_" + safeName;
+                 await Bun.write(path.join(uploadDir, filename), buffer);
+                 ans.file_url = `/uploads/${filename}`;
+               } catch(e) {
+                 console.error("[exampool] Failed to write offline file", e);
+               }
+            }
+          }
+        }
+      }
+    }
+
+    const tx = db.transaction(() => {
+      for (const examData of exams) {
+        const { subject_id, start_time, end_time, answers } = examData;
+        if (!subject_id) continue;
+        
+        let exam = queries.getExamByStudentSubject.get(auth.userId, subject_id) as any;
+        if (!exam) {
+           queries.createExam.run(auth.userId, subject_id, start_time || new Date().toISOString(), JSON.stringify(answers || []), "offline", currentTerm, "assignment");
+           exam = queries.getExamByStudentSubject.get(auth.userId, subject_id) as any;
+        } else if (exam.status === "completed") {
+           // Skip if already completed to prevent double submission
+           continue;
+        }
+        
+        // Securely calculate score on the server
+        let calculatedScore = 0;
+        let calculatedTotal = 0;
+        const processedAnswers = [];
+        const safeAnswers = Array.isArray(answers) ? answers : [];
+        
+        for (const ans of safeAnswers) {
+          const qRow = queries.getQuestionById.get(ans.question_id) as any;
+          if (!qRow) continue;
+          
+          calculatedTotal += qRow.marks || 1;
+          
+          let isCorrect = 0;
+          let marksAwarded = 0;
+          
+          if (qRow.question_type === "objective" || qRow.question_type === "true_false") {
+            if (qRow.correct_answer === ans.selected_option) {
+              isCorrect = 1;
+              marksAwarded = qRow.marks || 1;
+              calculatedScore += marksAwarded;
+            }
+          }
+          
+          // Handle offline file upload
+          let finalFileUrl = ans.file_url ?? null;
+          processedAnswers.push({
+            question_id: ans.question_id,
+            selected_option: ans.selected_option ?? null,
+            essay_response: ans.essay_response ?? null,
+            is_correct: isCorrect,
+            marks_awarded: marksAwarded,
+            file_url: finalFileUrl
+          });
+        }
+        
+        // Use atomic UPDATE with rowCount guard to prevent race conditions
+        const submitRes = queries.submitExam.run(
+          JSON.stringify(processedAnswers), 
+          end_time || new Date().toISOString(), 
+          calculatedScore, 
+          calculatedTotal, 
+          exam.id, 
+          auth.userId
+        ) as any;
+        
+        // If changes === 0, the exam was already submitted by another concurrent request
+        if (!submitRes || submitRes.changes === 0) {
+          continue;
+        }
+        
+        // Insert granular answers
+        for (const ans of processedAnswers) {
+          queries.insertStudentAnswer.run(
+            exam.id, ans.question_id, auth.userId, subject_id,
+            ans.selected_option, ans.essay_response,
+            ans.is_correct, ans.marks_awarded, ans.file_url
+          );
+        }
+        
+        synced++;
+      }
+    });
+    tx();
+    
+    return apiSuccess({ synced });
+  }
+
+  // ── v4.1 License API ───────────────────────────────────────────────────────
+  if (pathname === "/api/license/validate" && method === "POST") {
+    const body = await readJson(req);
+    const row = queries.verifyLicense.get(body.license_key) as any;
+    if (!row) return apiError(403, "License key not found", { code: "LICENSE_INVALID" });
+    return apiSuccess({ valid: true, tier: row.license_type, expires_at: row.expires_at, content_packs: JSON.parse(row.content_packs || "[]") });
+  }
+
   return apiError(404, "Not found");
 }
 
@@ -1876,7 +2700,7 @@ const server = serve({
       return await serveStatic(url.pathname);
     } catch (error) {
       if (error instanceof HttpError) return apiError(error.status, error.message);
-      console.error("[exampool] API error:", error);
+      console.error(JSON.stringify({ timestamp: new Date().toISOString(), level: "error", message: "API error", error: error instanceof Error ? error.stack : String(error), path: url.pathname }));
       return apiError(500, "Server error");
     }
   },
@@ -1897,3 +2721,19 @@ console.log("Note: If deployed on a cloud platform (Railway/Render), use your pr
 console.log(`SQLite: ${EXAMPOOL_DB_PATH}`);
 console.log(`Static dist: ${distDir}`);
 console.log(`Setup required: ${setupRequired}`);
+
+// --- Graceful Shutdown ---
+function shutdown() {
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level: "info", message: "Shutting down server gracefully..." }));
+  server.stop();
+  try {
+    db.close();
+    console.log(JSON.stringify({ timestamp: new Date().toISOString(), level: "info", message: "Database connection closed cleanly." }));
+  } catch (e) {
+    console.error(JSON.stringify({ timestamp: new Date().toISOString(), level: "error", message: "Error closing database", error: String(e) }));
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

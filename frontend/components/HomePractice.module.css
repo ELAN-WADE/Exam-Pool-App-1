@@ -1,0 +1,30 @@
+.homePracticeContainer {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: var(--color-bg);
+  font-family: var(--font-body);
+}
+
+.practiceHeader {
+  background-color: var(--color-practice-home);
+  color: white;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--shadow-sm);
+  z-index: 10;
+}
+
+.practiceHeader h1 {
+  font-size: 1.25rem;
+  font-weight: bold;
+}
+
+.swipeArea {
+  touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipe */
+  flex: 1;
+  display: flex;
+  overflow: hidden; /* Hide overflowing panels during swipe transition */
+}

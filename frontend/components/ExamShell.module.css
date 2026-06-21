@@ -1,0 +1,114 @@
+.shellContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: var(--color-bg);
+  font-family: var(--font-body);
+}
+
+.glassBanner {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+}
+
+.examHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.timerDisplay {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--color-exam-primary);
+}
+
+.timerUrgent {
+  color: var(--color-danger);
+  animation: pulse-danger 2s infinite;
+}
+
+.examMain {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.questionPanel {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+  background: var(--color-surface); /* Opaque for readability */
+}
+
+.diagramPanel {
+  width: 40%;
+  padding: 1rem;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  display: none; /* hidden by default, shown on desktop if diagram exists */
+}
+
+.examFooter {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+}
+
+.optionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.optionItem {
+  min-height: var(--touch-target-optimal);
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-spring);
+  font-size: 1.125rem;
+}
+
+.optionItem:hover, .optionItem:focus-within {
+  border-color: var(--color-exam-primary);
+}
+
+.optionItem:active {
+  transform: scale(0.98);
+}
+
+/* ─── Responsive ──────────────────────────────────── */
+
+@media (min-width: 768px) {
+  .optionsList {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .optionItem {
+    width: calc(50% - 0.5rem);
+  }
+}
+
+@media (min-width: 1024px) {
+  .diagramPanel {
+    display: block;
+  }
+}

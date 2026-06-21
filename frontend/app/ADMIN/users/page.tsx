@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
+import type { User } from "../../../lib/types";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
 import { UsersIcon, SearchIcon, PlusIcon } from "../../../components/icons/Icons";
@@ -20,8 +21,10 @@ const roleBadge: Record<string, string> = {
 function generateSecureCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "TCH-";
+  const randomArray = new Uint32Array(6);
+  window.crypto.getRandomValues(randomArray);
   for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += chars.charAt(randomArray[i] % chars.length);
   }
   return result;
 }
@@ -35,7 +38,7 @@ export default function OperatorUsersPage() {
 }
 
 function UsersContent() {
-  const [users,   setUsers]   = useState<any[]>([]);
+  const [users,   setUsers]   = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [search,  setSearch]  = useState("");
   const [tab,     setTab]     = useState<Tab>("all");
@@ -54,18 +57,23 @@ function UsersContent() {
     setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = (await api.getUsers()) as any[];
+      const data = (await api.getUsers()) as User[];
+      if (signal?.aborted) return;
       setUsers(data ?? []);
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to load users");
+      if (!signal?.aborted) showToast("error", err instanceof Error ? err.message : "Failed to load users");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [showToast]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal);
+    return () => controller.abort();
+  }, [refresh]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

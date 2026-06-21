@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
+import type { ExamResult, Subject } from "../../../lib/types";
 import { BookIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { StudentReviewModal } from "../../../components/student/StudentReviewModal";
@@ -19,20 +20,28 @@ export default function StudentResultsPage() {
 }
 
 function StudentResults() {
-  const [results, setResults] = useState<any[]>([]);
-  const [subjects, setSubjects] = useState<any[]>([]);
+  const [results, setResults] = useState<ExamResult[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
   const [retaking, setRetaking] = useState<number | null>(null);
   const [reviewingExam, setReviewingExam] = useState<{ id: number, subjectName: string } | null>(null);
   const router = useRouter();
 
   useEffect(() => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+
     Promise.all([api.getResults(), api.getSubjects()])
       .then(([resData, subData]) => {
-        setResults((resData as any[])?.filter(r => r.status === "completed") ?? []);
-        setSubjects((subData as any[]) ?? []);
+        if (signal.aborted) return;
+        setResults((resData as ExamResult[])?.filter(r => r.status === "completed") ?? []);
+        setSubjects((subData as Subject[]) ?? []);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
   }, []);
 
   const handleRetake = async (examId: number, subjectId: number) => {
@@ -79,8 +88,8 @@ function StudentResults() {
         </div>
       ) : (
         <div className={styles.grid}>
-          {results.map((r: any) => {
-            const subject = subjects.find((s) => s.id === r.subject_id) || { name: "Unknown Subject", code: "—" };
+          {results.map((r) => {
+            const subject = subjects.find((s) => s.id === r.subject_id) || { id: 0, name: "Unknown Subject", code: "—", can_retake: 0 } as Subject;
             const score = Number(r.score || 0);
             const total = Number(r.total_score || 1);
             const percentage = Math.round((score / total) * 100);

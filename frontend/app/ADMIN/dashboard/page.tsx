@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
+import type { Subject, User, ExamResult } from "../../../lib/types";
 import { UsersIcon, BookIcon, CheckCircleIcon, DocumentIcon, BarChartIcon, SettingsIcon, ChevronRightIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
@@ -18,19 +19,28 @@ export default function OperatorDashboardPage() {
 }
 
 function OperatorDashboard() {
-  const [users, setUsers] = useState<any[]>([]);
-  const [subjects, setSubjects] = useState<any[]>([]);
-  const [results, setResults] = useState<any[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [results, setResults] = useState<ExamResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
+    let mounted = true;
     (async () => {
-      const [u, s, r] = await Promise.all([api.getUsers(), api.getSubjects(), api.getResults()]);
-      setUsers((u as any[]) ?? []);
-      setSubjects((s as any[]) ?? []);
-      setResults((r as any[]) ?? []);
-      setLoading(false);
+      try {
+        const [u, s, r] = await Promise.all([api.getUsers(), api.getSubjects(), api.getResults()]);
+        if (!mounted) return;
+        setUsers(u ?? []);
+        setSubjects(s ?? []);
+        setResults(r ?? []);
+      } catch (err: any) {
+        if (mounted) setError(err.message || "Failed to load dashboard data");
+      } finally {
+        if (mounted) setLoading(false);
+      }
     })();
+    return () => { mounted = false; };
   }, []);
 
   const stats = useMemo(() => {
@@ -38,10 +48,12 @@ function OperatorDashboard() {
     const teachers  = users.filter((u) => u.role === "teacher").length;
     const published = subjects.filter((s) => s.is_published).length;
     const avgScore  = results.length
-      ? (results.reduce((a: number, r: any) => a + (r.score ?? 0), 0) / results.length).toFixed(1)
+      ? (results.reduce((a: number, r) => a + (r.score ?? 0), 0) / results.length).toFixed(1)
       : "—";
     return { students, teachers, subjects: subjects.length, published, exams: results.length, avgScore };
   }, [users, subjects, results]);
+
+  if (error) return <div className={styles.errorState}>{error}</div>;
 
   if (loading) {
     return (
@@ -157,7 +169,7 @@ function OperatorDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {subjects.slice(0, 6).map((s: any) => (
+                {subjects.slice(0, 6).map((s) => (
                   <tr key={s.id}>
                     <td style={{ fontWeight: 600, color: "var(--color-text)" }}>{s.name}</td>
                     <td><code style={{ fontSize: "0.75rem", color: "var(--color-muted)", background: "var(--color-surface-2)", padding: "0.15rem 0.5rem", borderRadius: "4px" }}>{s.code}</code></td>

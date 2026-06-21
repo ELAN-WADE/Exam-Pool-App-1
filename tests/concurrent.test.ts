@@ -16,7 +16,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { apiGet, apiPost, apiPut, extractToken, json } from "./helpers";
 
-const N_CLIENTS    = 50;
+const N_CLIENTS    = 200;
 const BASE_TS      = Date.now();
 const EXAM_START   = new Date(Date.now() - 60_000).toISOString(); // already started
 
@@ -37,27 +37,38 @@ beforeAll(async () => {
     name: "Concur Op", email: `op_concur_${BASE_TS}@q.test`,
     password: "Operator@123", schoolName: "Load School", currentTerm: "2026-T1",
   });
+  const setupJson = await json(setupRes);
+  if (!setupRes.ok) console.error("Setup Error:", setupJson);
+  
   if (setupRes.status === 201) {
-    operatorToken = extractToken(setupRes, await json(setupRes));
+    operatorToken = extractToken(setupRes, setupJson);
   } else {
     const lr = await apiPost("/api/auth/login", { email: `op_concur_${BASE_TS}@q.test`, password: "Operator@123" });
-    operatorToken = extractToken(lr, await json(lr));
+    const lrJson = await json(lr);
+    if (!lr.ok) console.error("Operator Login Error:", lrJson);
+    operatorToken = extractToken(lr, lrJson);
   }
+  console.log("Operator Token:", operatorToken);
 
   // Teacher
   const tReg = await apiPost("/api/auth/register", {
-    name: "Load Teacher", email: `lt_${BASE_TS}@q.test`, password: "Teacher@123", role: "teacher",
+    name: "Load Teacher", email: `lt_${BASE_TS}@q.test`, password: "Teacher@123", role: "teacher", phone: "1234567890"
   }, operatorToken);
-  teacherId = (await json(tReg))?.data?.user?.id ?? 0;
+  const tRegJson = await json(tReg);
+  if (!tReg.ok) console.error("Teacher Reg Error:", tRegJson);
+  teacherId = tRegJson?.data?.user?.id ?? 0;
+  
   const tLogin = await apiPost("/api/auth/login", { email: `lt_${BASE_TS}@q.test`, password: "Teacher@123" });
   const teacherToken = extractToken(tLogin, await json(tLogin));
 
   // Subject with open window
   const sr = await apiPost("/api/subjects", {
     name: "Load Subject", code: `LOAD_${BASE_TS}`, term: "2026-T1",
-    duration: 60, exam_datetime: EXAM_START, teacher_id: teacherId,
+    duration: 60, teacher_id: teacherId,
   }, operatorToken);
-  subjectId = (await json(sr)).data.id;
+  const srJson = await json(sr);
+  if (!sr.ok) console.error("Subject Error:", srJson);
+  subjectId = srJson.data.id;
 
   // Questions
   const opts = ["A", "B", "C", "D"];
@@ -81,9 +92,11 @@ beforeAll(async () => {
     const email = `load_stu_${BASE_TS}_${i}@q.test`;
     const regRes = await apiPost("/api/auth/register", {
       name: `Load Student ${i}`, email, password: "Student@123",
-      role: "student", grade: "SS1",
+      role: "student", grade: "SS1", dob: "2010-01-01"
     }, operatorToken);
-    const userId = (await json(regRes))?.data?.user?.id ?? 0;
+    const regResJson = await json(regRes);
+    if (!regRes.ok) console.error(`Student ${i} Reg Error:`, regResJson);
+    const userId = regResJson?.data?.user?.id ?? 0;
 
     const lr = await apiPost("/api/auth/login", { email, password: "Student@123" });
     const token = extractToken(lr, await json(lr));
@@ -142,14 +155,16 @@ describe(`T-210  ${N_CLIENTS} simultaneous exam starts`, () => {
 
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
+      if (!r) continue; // noUncheckedIndexedAccess guard
       if (r.status === "rejected") { failures++; continue; }
       const res  = (r as PromiseFulfilledResult<Response>).value;
       if (!res.ok) { failures++; continue; }
       const body = await json(res);
       const eid  = body.data?.examId ?? body.data?.exam?.id;
-      if (eid && clients[i]) {
+      const client = clients[i];
+      if (eid && client) {
         examIds.add(eid);
-        clients[i].examId = eid;
+        client.examId = eid;
       }
     }
 
@@ -287,14 +302,14 @@ describe("T-240  Mixed read/write concurrent load", () => {
     // Spin up a new subject + students for a second wave
     const email2 = `lt2_${BASE_TS}@q.test`;
     await apiPost("/api/auth/register", {
-      name: "Wave2 Teacher", email: email2, password: "Teacher@123", role: "teacher",
+      name: "Wave2 Teacher", email: email2, password: "Teacher@123", role: "teacher", phone: "9876543210"
     }, operatorToken);
     const tl = await apiPost("/api/auth/login", { email: email2, password: "Teacher@123" });
     const t2token = extractToken(tl, await json(tl));
 
     const sr = await apiPost("/api/subjects", {
       name: "Wave2 Sub", code: `W2_${BASE_TS}`, term: "2026-T1",
-      duration: 60, exam_datetime: EXAM_START, teacher_id: teacherId,
+      duration: 60, teacher_id: teacherId,
     }, operatorToken);
     const w2SubId = (await json(sr)).data.id;
     await apiPut(`/api/subjects/${w2SubId}`, { is_published: 1 }, operatorToken);

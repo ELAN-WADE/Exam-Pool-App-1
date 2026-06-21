@@ -146,7 +146,7 @@ function ReportCardPageInner() {
 
     try {
       const [examsRes, remarkRes] = await Promise.all([
-        api.getStudentExams(Number(student.id)) as Promise<ExamEntry[]>,
+        (api.getStudentExams(Number(student.id)) as unknown) as Promise<ExamEntry[]>,
         api.getTermRemark(Number(student.id), resolvedTerm) as Promise<TermRemark>,
       ]);
 

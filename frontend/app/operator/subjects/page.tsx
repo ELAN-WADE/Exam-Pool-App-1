@@ -14,6 +14,7 @@ type Subject = {
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
   description?: string; class?: string; session?: string; mode?: string;
+  is_assignment?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
 type EnrolledStudent = {
@@ -21,7 +22,7 @@ type EnrolledStudent = {
   enrolled_at: string; score?: number; total_score?: number; exam_status?: string;
 };
 
-const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam" };
+const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", is_assignment: 0 };
 
 export default function OperatorSubjectsPage() {
   return (
@@ -106,6 +107,7 @@ function SubjectsContent() {
       class:         s.class ?? "",
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
+      is_assignment: s.is_assignment ?? 0,
     });
     setIsScheduled(!!s.exam_datetime && s.exam_datetime !== "");
     setModalOpen(true);
@@ -134,6 +136,7 @@ function SubjectsContent() {
         class:         form.class || null,
         session:       form.session || null,
         mode:          form.mode || "exam",
+        is_assignment: form.is_assignment ? 1 : 0,
       };
       if (editing) {
         await api.updateSubject(editing.id, payload);
@@ -299,7 +302,8 @@ function SubjectsContent() {
                   <th>Term</th>
                   <th>Teacher</th>
                   <th>Duration</th>
-                  <th>Exam Date</th>
+                  <th>Type</th>
+                  <th>Date / Deadline</th>
                   <th>Published</th>
                   <th>Actions</th>
                 </tr>
@@ -323,6 +327,11 @@ function SubjectsContent() {
                       <span className={styles.durationCell}>
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         {s.duration} min
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge ${s.is_assignment ? "badge-primary" : "badge-muted"}`}>
+                        {s.is_assignment ? "Assignment" : "Exam"}
                       </span>
                     </td>
                     <td className={styles.dateCell}>
@@ -492,10 +501,25 @@ function SubjectsContent() {
               </label>
             </div>
           </div>
-          {isScheduled && (
+          <div className="field">
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", textTransform: "none", fontWeight: 600 }}>
+              <input type="checkbox" checked={form.is_assignment === 1} onChange={(e) => setForm({ ...form, is_assignment: e.target.checked ? 1 : 0 })} />
+              Enable Offline Assignment Mode (Homework / Take-home)
+            </label>
+          </div>
+          {isScheduled && !form.is_assignment && (
             <div className="field">
               <label>Exam Date & Time *</label>
               <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
+            </div>
+          )}
+          {form.is_assignment === 1 && (
+            <div className="field">
+              <label>Due Date & Time *</label>
+              <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
+              <p style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginTop: "0.25rem" }}>
+                Offline assignments must have a deadline for submission.
+              </p>
             </div>
           )}
           <div className={styles.formGrid}>

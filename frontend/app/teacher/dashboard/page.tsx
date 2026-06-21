@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
 import { api } from "../../../lib/api";
+import type { Subject, ExamResult, User } from "../../../lib/types";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
@@ -19,65 +20,76 @@ export default function TeacherDashboardPage() {
 }
 
 function TeacherDashboard() {
-  const [subjects, setSubjects] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [questionCounts, setQuestionCounts] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
   // Report card quick-launch: show all students with completed exams
-  const [reportStudents, setReportStudents] = useState<any[]>([]);
+  const [reportStudents, setReportStudents] = useState<ExamResult[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
-  const [reportCardStudent, setReportCardStudent] = useState<any | null>(null);
+  const [reportCardStudent, setReportCardStudent] = useState<ExamResult | null>(null);
 
   // ── Fetch report-card students (re-used on live refresh) ──────────────
-  const loadReportStudents = useCallback(async (subs: any[]) => {
+  const loadReportStudents = useCallback(async (subs: Subject[], signal?: AbortSignal) => {
     setReportLoading(true);
-    const allStudentMap: Record<number, any> = {};
+    const allStudentMap: Record<number, ExamResult> = {};
     await Promise.all(
-      subs.map(async (s: any) => {
+      subs.map(async (s) => {
         try {
-          const students = (await api.getSubjectStudents(Number(s.id))) as any[];
+          if (signal?.aborted) return;
+          const students = await api.getSubjectStudents(Number(s.id));
+          if (signal?.aborted) return;
           for (const st of students ?? []) {
-            if (st.exam_status === "completed" && !allStudentMap[st.id]) {
-              allStudentMap[st.id] = st;
+            if (st.exam_status === "completed" && st.student_user_id && !allStudentMap[st.student_user_id]) {
+              allStudentMap[st.student_user_id] = st as any;
             }
           }
         } catch { /* ignore */ }
       })
     );
+    if (signal?.aborted) return;
     setReportStudents(Object.values(allStudentMap));
     setReportLoading(false);
   }, []);
 
   // ── Initial data load ──────────────────────────────────────────────
-  const subjectsRef = React.useRef<any[]>([]);
+  const subjectsRef = useRef<Subject[]>([]);
 
   useEffect(() => {
+    const abortController = new AbortController();
+    const signal = abortController.signal;
+
     (async () => {
       try {
-        const data = (await api.getSubjects()) as any[];
-        const subs = data ?? [];
+        const subs = await api.getSubjects() ?? [];
+        if (signal.aborted) return;
+        
         subjectsRef.current = subs;
         setSubjects(subs);
         const counts: Record<number, number> = {};
         await Promise.all(
-          subs.map(async (s: any) => {
+          subs.map(async (s) => {
             try {
-              const qs = (await api.getQuestions(Number(s.id))) as any[];
+              if (signal.aborted) return;
+              const qs = await api.getQuestions(Number(s.id));
+              if (signal.aborted) return;
               counts[Number(s.id)] = Array.isArray(qs) ? qs.length : 0;
             } catch {
               counts[Number(s.id)] = 0;
             }
           })
         );
+        if (signal.aborted) return;
         setQuestionCounts(counts);
-        await loadReportStudents(subs);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load subjects");
+        await loadReportStudents(subs, signal);
+      } catch (err: any) {
+        if (!signal.aborted) setError(err.message || "Failed to load subjects");
       } finally {
-        setLoading(false);
+        if (!signal.aborted) setLoading(false);
       }
     })();
+    return () => abortController.abort();
   }, [loadReportStudents]);
 
   // ── Live-update: listen for exam_submitted SSE events ─────────────
@@ -156,7 +168,7 @@ function TeacherDashboard() {
       </div>
 
       <div className={styles.grid}>
-        {subjects.map((s: any, i: number) => {
+        {subjects.map((s, i: number) => {
           const qCount = questionCounts[Number(s.id)] ?? "…";
           const isLive = Boolean(s.is_published);
           return (
@@ -281,7 +293,7 @@ function TeacherDashboard() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.875rem" }}>
             {reportStudents.map((st) => (
               <div
-                key={st.id}
+                key={st.student_user_id}
                 style={{
                   background: "var(--color-surface)",
                   border: "1.5px solid var(--color-border)",
@@ -303,10 +315,10 @@ function TeacherDashboard() {
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontWeight: 800, fontSize: "1rem", flexShrink: 0,
                 }}>
-                  {String(st.name || "?").charAt(0).toUpperCase()}
+                  {String(st.student_name || "?").charAt(0).toUpperCase()}
                 </div>
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.name}</div>
+                  <div style={{ fontWeight: 700, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.student_name}</div>
                   <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{st.grade || "—"} · {st.reg_id || ""}</div>
                 </div>
                 <DocumentIcon width="16" height="16" style={{ color: "var(--color-primary)", flexShrink: 0 }} />

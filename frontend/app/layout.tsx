@@ -23,6 +23,23 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           httpEquiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none';"
         />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0D9488" />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js').then(function(registration) {
+                    console.log('SW registered with scope:', registration.scope);
+                  }, function(err) {
+                    console.log('SW registration failed:', err);
+                  });
+                });
+              }
+            `,
+          }}
+        />
       </head>
       <body className="font-system">
         <ToastProvider>

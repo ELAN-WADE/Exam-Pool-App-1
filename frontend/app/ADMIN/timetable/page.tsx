@@ -53,19 +53,24 @@ function TimetableContent() {
     setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const [s, u] = await Promise.all([api.getSubjects(), api.getUsers()]);
+      if (signal?.aborted) return;
       setSubjects((s as Subject[]) ?? []);
       setTeachers(((u as User[]) ?? []).filter(user => user.role === "teacher" && user.is_active));
     } catch {
-      showToast("error", "Failed to load subjects.");
+      if (!signal?.aborted) showToast("error", "Failed to load subjects.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [showToast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

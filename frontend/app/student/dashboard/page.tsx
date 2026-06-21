@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "../../../lib/api";
+import type { Subject, ExamResult, ActiveExamData } from "../../../lib/types";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { useAuth } from "../../../hooks/useAuth";
-import { BookIcon, CheckCircleIcon, EmptyBoxIcon, SubjectIcon, ClockIcon, CalendarIcon, PlayIcon } from "../../../components/icons/Icons";
+import { BookIcon, CheckCircleIcon, EmptyBoxIcon, SubjectIcon, ClockIcon, CalendarIcon, PlayIcon, DownloadIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { ProgressRing } from "../../../components/ui/ProgressRing";
+import { getCachedAssignments, cacheAssignments, getPendingSubmissions, clearPendingSubmissions, OfflineSubmission } from "../../../lib/offlineSync";
+import { DownloadAppWidget } from "../../../components/ui/DownloadAppWidget";
 import styles from "./page.module.css";
 
 export default function StudentDashboardPage() {
@@ -23,27 +26,36 @@ export default function StudentDashboardPage() {
 function DashboardContent() {
   const { user } = useAuth();
   const router = useRouter();
-  const [subjects,    setSubjects]    = useState<any[]>([]);
-  const [results,     setResults]     = useState<any[]>([]);
-  const [activeExams, setActiveExams] = useState<any[]>([]);
+  const [subjects,    setSubjects]    = useState<Subject[]>([]);
+  const [results,     setResults]     = useState<ExamResult[]>([]);
+  const [activeExams, setActiveExams] = useState<Subject[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState("");
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const timeOffsetRef                 = useRef<number>(0);
 
-  const fetchData = async (isInitial = false) => {
+  const fetchData = async (signal?: AbortSignal, isInitial = false) => {
     try {
       const [subjectsData, resultsData, activeData] = await Promise.all([
         api.getSubjects(),
         api.getResults(),
         api.getActiveExams(),
       ]);
+
+      if (signal?.aborted) return;
       
-      const now = Date.now();
-      const activeOne = (subjectsData as any[]).find(s => {
+      const payload = activeData as ActiveExamData;
+      if (payload && payload.server_time) {
+        const serverMs = new Date(payload.server_time).getTime();
+        timeOffsetRef.current = serverMs - Date.now();
+      }
+      
+      const now = Date.now() + timeOffsetRef.current;
+      const activeOne = subjectsData.find(s => {
         if (!s.exam_datetime) return false;
         const start = new Date(s.exam_datetime).getTime();
         const end = start + Number(s.window_duration || 120) * 60_000;
-        const isTaken = (resultsData as any[]).some(r => Number(r.subject_id) === Number(s.id));
+        const isTaken = resultsData.some(r => Number(r.subject_id) === Number(s.id));
         return !isTaken && s.is_published === 1 && now >= start && now < end;
       });
       
@@ -53,32 +65,37 @@ function DashboardContent() {
         return;
       }
 
-      setSubjects((subjectsData as any[]) ?? []);
-      setResults((resultsData as any[]) ?? []);
+      setSubjects(subjectsData ?? []);
+      setResults(resultsData ?? []);
       
       const activeDataPayload = (activeData as any)?.exams ?? activeData;
-      setActiveExams((activeDataPayload as any[]) ?? []);
-    } catch (err) {
-      if (isInitial) setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      setActiveExams((activeDataPayload as Subject[]) ?? []);
+    } catch (err: any) {
+      if (signal?.aborted) return;
+      if (isInitial) setError(err.message || "Failed to load dashboard");
     } finally {
-      if (isInitial) setLoading(false);
+      if (!signal?.aborted && isInitial) setLoading(false);
     }
   };
 
   useEffect(() => {
     let mounted = true;
-    fetchData(true).then(() => { if (!mounted) return; });
-    const interval = setInterval(() => { fetchData(false); }, 15000);
-    const clockInterval = setInterval(() => setCurrentTime(Date.now()), 1000);
+    const abortController = new AbortController();
+    
+    fetchData(abortController.signal, true).then(() => { if (!mounted) return; });
+    const interval = setInterval(() => { fetchData(abortController.signal, false); }, 15000);
+    const clockInterval = setInterval(() => setCurrentTime(Date.now() + timeOffsetRef.current), 1000);
+    
     return () => { 
       mounted = false; 
+      abortController.abort();
       clearInterval(interval); 
       clearInterval(clockInterval); 
     };
   }, []);
 
-  const takenIds  = useMemo(() => new Set(results.map((r: any) => Number(r.subject_id))), [results]);
-  const activeIds = useMemo(() => new Set(activeExams.map((e: any) => Number(e.subject_id))), [activeExams]);
+  const takenIds  = useMemo(() => new Set(results.map((r) => Number(r.subject_id))), [results]);
+  const activeIds = useMemo(() => new Set(activeExams.map((e: any) => Number(e.subject_id || e.id))), [activeExams]);
 
   const stats = useMemo(() => {
     const taken = results.filter((r) => r.status === "completed");
@@ -150,6 +167,8 @@ function DashboardContent() {
         </div>
       </div>
 
+      <OfflinePracticeWidget />
+
       {/* Stats Row */}
       <div className={styles.statsRow}>
         <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "50ms", "--accent": "var(--color-primary)" } as React.CSSProperties}>
@@ -175,7 +194,7 @@ function DashboardContent() {
       ) : (
         <div className={styles.categories}>
           {["active", "upcoming"].map((category) => {
-            const categorySubjects = subjects.filter((s: any) => {
+            const categorySubjects = subjects.filter((s) => {
               const isTaken = takenIds.has(Number(s.id));
               if (!s.exam_datetime) {
                 if (category === "active") return !isTaken && s.is_published === 1;
@@ -207,9 +226,9 @@ function DashboardContent() {
                 </div>
 
                 <div className={styles.grid}>
-                  {categorySubjects.map((s: any, i: number) => {
+                  {categorySubjects.map((s, i: number) => {
                     const isUnscheduled = !s.exam_datetime;
-                    const examDate   = isUnscheduled ? new Date() : new Date(s.exam_datetime);
+                    const examDate   = isUnscheduled ? new Date() : new Date(s.exam_datetime!);
                     const now        = currentTime;
                     const start      = isUnscheduled ? 0 : examDate.getTime();
                     const end        = isUnscheduled ? Infinity : start + Number(s.window_duration || 120) * 60_000;
@@ -266,7 +285,7 @@ function DashboardContent() {
                             )}
                             <div className={styles.metaRow}>
                               <ClockIcon width="12" height="12" />
-                              {s.duration} minutes
+                              {s.duration || 0} minutes
                             </div>
                             {isUpcoming && countdownText && (
                               <div className={styles.metaRow} style={{ color: "var(--color-primary)", fontWeight: 700, marginTop: "0.25rem" }}>
@@ -274,10 +293,10 @@ function DashboardContent() {
                                 Starts in: {countdownText}
                               </div>
                             )}
-                            {s.retake_count > 0 && (
+                            {(s.retake_count || 0) > 0 && (
                               <div className={styles.metaRow} style={{ color: "var(--color-warning)", fontWeight: 600 }}>
                                 <CheckCircleIcon width="12" height="12" />
-                                Retaken {s.retake_count} time{s.retake_count !== 1 ? "s" : ""}
+                                Retaken {s.retake_count || 0} time{(s.retake_count || 0) !== 1 ? "s" : ""}
                               </div>
                             )}
                           </div>
@@ -288,7 +307,7 @@ function DashboardContent() {
                             s.can_retake === 1 ? (
                               <button 
                                 className={`btn btn-primary ${styles.fullBtn}`} 
-                                onClick={() => handleRetake(s.exam_id, s.id)}
+                                onClick={() => handleRetake(s.id, s.id)}
                                 disabled={retaking === s.exam_id}
                                 style={{ transform: "scale(1.02)", boxShadow: "0 4px 12px rgba(var(--color-primary-rgb), 0.3)" }}
                               >
@@ -320,6 +339,13 @@ function DashboardContent() {
           })}
         </div>
       )}
+
+      {/* PWA Download Widget */}
+      <div className={`${styles.statsRow} animate-enter`} style={{ animationDelay: "100ms", marginTop: "1.5rem" }}>
+        <DownloadAppWidget />
+      </div>
     </div>
   );
 }
+
+

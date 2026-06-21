@@ -61,7 +61,11 @@ function QuestionsContent() {
   const [options,       setOptions]       = useState(["", "", "", ""]);
   const [correctAnswer, setCorrectAnswer] = useState(0);
   const [marks,         setMarks]         = useState(1);
+  const [isFileUpload,  setIsFileUpload]  = useState(false);
+  const [attachedFile,  setAttachedFile]  = useState<File | null>(null);
+  const [attachedFileUrl, setAttachedFileUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef  = useRef<HTMLInputElement>(null);
 
   // Subject edit fields
   const [subjDatetime, setSubjDatetime] = useState("");
@@ -123,6 +127,9 @@ function QuestionsContent() {
     setOptions(["", "", "", ""]);
     setCorrectAnswer(0);
     setMarks(1);
+    setIsFileUpload(false);
+    setAttachedFile(null);
+    setAttachedFileUrl("");
   }
 
   // ── Image handling ──────────────────────────────
@@ -155,6 +162,23 @@ function QuestionsContent() {
     if (file) handleFileSelect(file);
   };
 
+  const handleDocFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) { showToast("error", "Document must be smaller than 10MB"); return; }
+      try {
+        setSaving(true);
+        const { url } = await api.uploadFile(file);
+        setAttachedFileUrl(url);
+        showToast("success", "Document attached successfully.");
+      } catch (err) {
+        showToast("error", "Failed to upload document");
+      } finally {
+        setSaving(false);
+      }
+    }
+  };
+
   const openCreate = () => { if (isLocked) return; resetForm(); setEditorMode("create"); };
   const openEdit = (q: any) => {
     if (isLocked) return;
@@ -168,6 +192,8 @@ function QuestionsContent() {
     setOptions(parseOptions(q.options_json));
     setCorrectAnswer(Number(q.correct_answer ?? 0));
     setMarks(Number(q.marks ?? 1));
+    setIsFileUpload(q.is_file_upload === 1);
+    setAttachedFileUrl(q.attached_file_url ?? "");
     setEditorMode("edit");
   };
 
@@ -200,6 +226,20 @@ function QuestionsContent() {
     }
   };
 
+  const onPublishSubject = async () => {
+    if (!confirm("Are you sure you're done setting questions? This will lock the subject from further editing and notify the Admin.")) return;
+    setSaving(true);
+    try {
+      await api.updateSubject(subjectId, { is_published: 1 });
+      showToast("success", "Subject marked as ready!");
+      await loadSubjects();
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Failed to update status.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const onSubmitQuestion = async (e: FormEvent) => {
     e.preventDefault();
     if (!questionText.trim()) { showToast("error", "Question text is required."); return; }
@@ -220,6 +260,8 @@ function QuestionsContent() {
         options: payloadOptions,
         correct_answer: payloadCorrect,
         marks,
+        is_file_upload: isFileUpload ? 1 : 0,
+        attached_file_url: attachedFileUrl || null,
       };
       if (editing) {
         await api.updateQuestion(editing.id, payload);
@@ -448,13 +490,30 @@ function QuestionsContent() {
               </div>
             )}
 
-            {/* Essay rubric */}
+            {/* Essay rubric & File Upload */}
             {questionType === "essay" && (
               <div className={styles.sidebarSection}>
                 <div className={styles.sidebarSectionTitle}>Model Answer / Marking Rubric</div>
                 <textarea className="input" value={teacherAnswer} onChange={(e) => setTeacherAnswer(e.target.value)} placeholder="Write the expected answer or marking guide…" rows={6} />
+                <div style={{ marginTop: "1rem" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500, cursor: "pointer" }}>
+                    <input type="checkbox" checked={isFileUpload} onChange={(e) => setIsFileUpload(e.target.checked)} style={{ width: "1.25rem", height: "1.25rem" }} />
+                    Student must upload a PDF/Document
+                  </label>
+                </div>
               </div>
             )}
+            
+            <div className={styles.sidebarSection}>
+              <div className={styles.sidebarSectionTitle}>Attach Resource PDF (Optional)</div>
+              <input type="file" ref={docInputRef} accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={handleDocFileSelect} />
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => docInputRef.current?.click()} disabled={saving}>
+                  <DocumentIcon width="14" height="14" /> {attachedFileUrl ? "Change Document" : "Upload Document"}
+                </button>
+                {attachedFileUrl && <span style={{ color: "var(--color-success)", fontSize: "0.85rem" }}>✓ Attached</span>}
+              </div>
+            </div>
 
             <div className={styles.sidebarFooter}>
               <button type="submit" form="qEditorForm" className="btn btn-primary" disabled={saving}>
@@ -505,6 +564,11 @@ function QuestionsContent() {
           <button className="btn btn-ghost btn-sm inline" onClick={() => setBulkUploadOpen(true)} disabled={isLocked} style={{ border: "1px solid #e2e8f0", background: "#ffffff" }}>
             <DocumentIcon width="15" height="15" /> Bulk Upload
           </button>
+          {!isLocked && (
+            <button className="btn btn-success btn-sm inline" onClick={onPublishSubject}>
+               <CheckCircleIcon width="15" height="15" /> Done Setting Questions
+            </button>
+          )}
           <button className="btn btn-primary btn-sm inline" onClick={openCreate} disabled={isLocked}>
             <PlusIcon width="15" height="15" /> Add Question
           </button>
