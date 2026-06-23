@@ -5,7 +5,7 @@
   "scripts": {
     "clean": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
     "predev": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"" ,
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
     "prebuild": "node -e \"['dist','.next'].forEach(d=>{try{require('fs').rmSync(d,{recursive:true,force:true})}catch(e){}});\"",
     "build": "next build"
   },

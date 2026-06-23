@@ -167,8 +167,6 @@ function DashboardContent() {
         </div>
       </div>
 
-      <OfflinePracticeWidget />
-
       {/* Stats Row */}
       <div className={styles.statsRow}>
         <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "50ms", "--accent": "var(--color-primary)" } as React.CSSProperties}>
