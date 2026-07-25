@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+﻿import { Database } from "bun:sqlite";
 import path from "path";
 import fs from "fs";
 
@@ -73,6 +73,9 @@ const ALTERABLE_TABLES = new Set([
   "subject_enrollments", "student_answers", "audit_logs",
   "student_term_remarks", "notifications", "kiosk_sessions",
   "license_registry", "content_manifest", "question_map",
+  // v5 tables
+  "terms", "classes", "class_enrollments", "guardian_student_links",
+  "academic_calendar_events", "timetables",
 ]);
 
 /** Run ALTER TABLE only if the column doesn't exist yet (idempotent migration). */
@@ -464,6 +467,162 @@ export function initializeDatabase(): void {
       log_signature TEXT NOT NULL
     )
   `);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // v5.0 Phase 1A — Academic Calendar + Guardian Foundation
+  // All new tables use CREATE TABLE IF NOT EXISTS (idempotent).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const schemaRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("SCHEMA_VERSION") as { value?: string } | null;
+  const schemaVer = Number(schemaRow?.value ?? 0);
+
+  if (schemaVer < 5) {
+    // ── Upgrade users table to support 'guardian' role ─────────────────────
+    // SQLite CHECK constraints cannot be altered — requires a safe table swap.
+    // PRAGMA foreign_keys = OFF is required so FK references don't block the DROP.
+    console.log("[db v5] Upgrading users table to support guardian role...");
+    db.run("PRAGMA foreign_keys = OFF");
+    db.run("DROP TABLE IF EXISTS users_v5_new"); // clean up any half-run previous attempt
+    db.run(`
+      CREATE TABLE users_v5_new (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        email         TEXT UNIQUE NOT NULL,
+        role          TEXT NOT NULL CHECK(role IN ('student','teacher','operator','guardian')),
+        password_hash TEXT NOT NULL,
+        grade         TEXT,
+        is_active     INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+        created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        reg_id        TEXT,
+        first_name    TEXT,
+        last_name     TEXT,
+        address       TEXT,
+        phone         TEXT,
+        dob           TEXT,
+        image_url     TEXT,
+        avatar_url    TEXT
+      )
+    `);
+    db.run(`
+      INSERT INTO users_v5_new
+        (id, name, email, role, password_hash, grade, is_active, created_at, reg_id, first_name, last_name, address, phone, dob, image_url)
+      SELECT
+        id, name, email, role, password_hash, grade, is_active, created_at, reg_id, first_name, last_name, address, phone, dob, image_url
+      FROM users
+    `);
+    db.run("DROP TABLE users");
+    db.run("ALTER TABLE users_v5_new RENAME TO users");
+    db.run("PRAGMA foreign_keys = ON");
+    // Restore indexes that existed on the old table
+    db.run("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)");
+    db.run("CREATE INDEX IF NOT EXISTS idx_users_role  ON users(role)");
+    db.run("CREATE INDEX IF NOT EXISTS idx_users_reg   ON users(reg_id)");
+    db.prepare("UPDATE settings SET value = '5' WHERE key = 'SCHEMA_VERSION'").run();
+    console.log("[db v5] users table upgraded. Schema version = 5.");
+  }
+
+  // ── TERMS — The single blocking primitive. Everything scopes to a term. ──
+  db.run(`
+    CREATE TABLE IF NOT EXISTS terms (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      session           TEXT NOT NULL,
+      name              TEXT NOT NULL,
+      start_date        TEXT NOT NULL,
+      end_date          TEXT NOT NULL,
+      is_active         INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
+      registration_open INTEGER NOT NULL DEFAULT 1 CHECK(registration_open IN (0,1)),
+      created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_terms_active ON terms(is_active)");
+
+  // ── CLASSES — Grade / arm definitions ────────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS classes (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      section    TEXT,
+      level      TEXT NOT NULL DEFAULT 'junior' CHECK(level IN ('junior','senior')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(name, section)
+    )
+  `);
+
+  // ── CLASS ENROLLMENTS — student → class → term ────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS class_enrollments (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      class_id        INTEGER NOT NULL REFERENCES classes(id) ON DELETE RESTRICT,
+      term_id         INTEGER NOT NULL REFERENCES terms(id) ON DELETE RESTRICT,
+      enrollment_date TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(student_id, term_id)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_ce_student_term ON class_enrollments(student_id, term_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_ce_class_term   ON class_enrollments(class_id, term_id)");
+
+  // ── GUARDIAN–STUDENT LINKS — with extensible verification ────────────────
+  // verification_method + verified_by_data JSON allows upgrading from
+  // manual admin approval to auto-approval (DOB/PIN match) without schema changes.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS guardian_student_links (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      guardian_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      student_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      relationship        TEXT NOT NULL DEFAULT 'Parent',
+      status              TEXT NOT NULL DEFAULT 'pending'
+                            CHECK(status IN ('pending','approved','rejected','revoked')),
+      verification_method TEXT NOT NULL DEFAULT 'manual_admin'
+                            CHECK(verification_method IN ('manual_admin','dob_match','pin_match')),
+      verified_by_data    TEXT,
+      verified_by         INTEGER REFERENCES users(id),
+      verified_at         TEXT,
+      created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(guardian_id, student_id)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_gsl_guardian ON guardian_student_links(guardian_id, status)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_gsl_student  ON guardian_student_links(student_id, status)");
+
+  // ── ACADEMIC CALENDAR EVENTS ─────────────────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS academic_calendar_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      term_id     INTEGER NOT NULL REFERENCES terms(id) ON DELETE CASCADE,
+      title       TEXT NOT NULL,
+      description TEXT,
+      start_date  TEXT NOT NULL,
+      end_date    TEXT NOT NULL,
+      type        TEXT NOT NULL DEFAULT 'event'
+                    CHECK(type IN ('holiday','exam_period','resumption','event','deadline','other')),
+      created_by  INTEGER NOT NULL REFERENCES users(id),
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_cal_term ON academic_calendar_events(term_id, start_date)");
+
+  // ── TIMETABLES — with conflict-detection indexes ──────────────────────────
+  // classroom is TEXT (not FK) — allows gradual classroom management later.
+  // Teacher + classroom double-booking is validated at the API layer.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS timetables (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      subject_id  INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+      term_id     INTEGER NOT NULL REFERENCES terms(id) ON DELETE CASCADE,
+      teacher_id  INTEGER REFERENCES users(id),
+      day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+      start_time  TEXT NOT NULL,
+      end_time    TEXT NOT NULL,
+      classroom   TEXT,
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(class_id, term_id, day_of_week, start_time)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_class_term   ON timetables(class_id, term_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_teacher_slot ON timetables(teacher_id, day_of_week, start_time)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_room_slot    ON timetables(classroom, day_of_week, start_time)");
 }
 
 // Initialize schema before preparing statements so new tables exist.
@@ -663,6 +822,96 @@ export const queries = {
     WHERE content_bank_fts MATCH ?
   `),
   getContentBankQuestionById: db.prepare("SELECT * FROM content_bank.content_bank WHERE id = ?"),
+
+  // ── Settings ─────────────────────────────────────────────────────────────
+  getSetting: db.prepare("SELECT value FROM settings WHERE key = ?"),
+  upsertSetting: db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"),
+  // ── v5: Terms ──────────────────────────────────────────────────────────────
+  getActiveTerm:      db.prepare("SELECT * FROM terms WHERE is_active = 1 LIMIT 1"),
+  getAllTerms:         db.prepare("SELECT * FROM terms ORDER BY created_at DESC"),
+  getTermById:        db.prepare("SELECT * FROM terms WHERE id = ?"),
+  createTerm:         db.prepare("INSERT INTO terms (session, name, start_date, end_date) VALUES (?, ?, ?, ?)"),
+  deactivateAllTerms: db.prepare("UPDATE terms SET is_active = 0"),
+  activateTerm:       db.prepare("UPDATE terms SET is_active = 1 WHERE id = ?"),
+  updateTerm:         db.prepare("UPDATE terms SET session=?, name=?, start_date=?, end_date=?, registration_open=? WHERE id=?"),
+
+  // ── v5: Classes ─────────────────────────────────────────────────────────────
+  getAllClasses:  db.prepare("SELECT * FROM classes ORDER BY level, name, section"),
+  getClassById:  db.prepare("SELECT * FROM classes WHERE id = ?"),
+  createClass:   db.prepare("INSERT INTO classes (name, section, level) VALUES (?, ?, ?)"),
+  updateClass:   db.prepare("UPDATE classes SET name=?, section=?, level=? WHERE id=?"),
+  deleteClass:   db.prepare("DELETE FROM classes WHERE id=?"),
+
+  // ── v5: Class Enrollments ───────────────────────────────────────────────────
+  getClassRoster:             db.prepare("SELECT u.id, u.name, u.email, u.grade, u.reg_id, u.is_active, ce.enrollment_date FROM class_enrollments ce JOIN users u ON u.id = ce.student_id WHERE ce.class_id = ? AND ce.term_id = ? ORDER BY u.name"),
+  getStudentClassForTerm:     db.prepare("SELECT c.*, ce.enrollment_date FROM class_enrollments ce JOIN classes c ON c.id = ce.class_id WHERE ce.student_id = ? AND ce.term_id = ? LIMIT 1"),
+  enrollStudentInClass:       db.prepare("INSERT OR REPLACE INTO class_enrollments (student_id, class_id, term_id) VALUES (?, ?, ?)"),
+  unenrollStudentFromClass:   db.prepare("DELETE FROM class_enrollments WHERE student_id=? AND term_id=?"),
+  getEnrollmentCountForClass: db.prepare("SELECT COUNT(*) as count FROM class_enrollments WHERE class_id=? AND term_id=?"),
+
+  // ── v5: Guardian-Student Links ──────────────────────────────────────────────
+  getPendingGuardianLinks:  db.prepare("SELECT gsl.*, gu.name as guardian_name, gu.email as guardian_email, su.name as student_name, su.grade as student_grade, su.reg_id FROM guardian_student_links gsl JOIN users gu ON gu.id = gsl.guardian_id JOIN users su ON su.id = gsl.student_id WHERE gsl.status = 'pending' ORDER BY gsl.created_at DESC"),
+  getAllGuardianLinks:       db.prepare("SELECT gsl.*, gu.name as guardian_name, gu.email as guardian_email, su.name as student_name, su.grade as student_grade, su.reg_id FROM guardian_student_links gsl JOIN users gu ON gu.id = gsl.guardian_id JOIN users su ON su.id = gsl.student_id ORDER BY gsl.created_at DESC LIMIT 200"),
+  getGuardianWards:         db.prepare("SELECT gsl.*, su.name as student_name, su.grade, su.reg_id, su.image_url FROM guardian_student_links gsl JOIN users su ON su.id = gsl.student_id WHERE gsl.guardian_id = ? AND gsl.status = 'approved'"),
+  getStudentGuardians:      db.prepare("SELECT gsl.*, gu.name as guardian_name, gu.email, gu.phone FROM guardian_student_links gsl JOIN users gu ON gu.id = gsl.guardian_id WHERE gsl.student_id = ? AND gsl.status = 'approved'"),
+  createGuardianLink:       db.prepare("INSERT INTO guardian_student_links (guardian_id, student_id, relationship, verification_method) VALUES (?, ?, ?, 'manual_admin')"),
+  updateGuardianLinkStatus: db.prepare("UPDATE guardian_student_links SET status=?, verified_by=?, verified_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?"),
+  getGuardianLink:          db.prepare("SELECT * FROM guardian_student_links WHERE id=?"),
+
+  // ── v5: Academic Calendar Events ────────────────────────────────────────────
+  getCalendarByTerm:   db.prepare("SELECT * FROM academic_calendar_events WHERE term_id=? ORDER BY start_date"),
+  createCalendarEvent: db.prepare("INSERT INTO academic_calendar_events (term_id, title, description, start_date, end_date, type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  updateCalendarEvent: db.prepare("UPDATE academic_calendar_events SET title=?, description=?, start_date=?, end_date=?, type=? WHERE id=?"),
+  deleteCalendarEvent: db.prepare("DELETE FROM academic_calendar_events WHERE id=?"),
+  getCalendarEvent:    db.prepare("SELECT * FROM academic_calendar_events WHERE id=?"),
+
+  // ── v5: Timetables ──────────────────────────────────────────────────────────
+  getTimetableByClass:    db.prepare("SELECT tt.*, s.name as subject_name, s.code as subject_code, u.name as teacher_name FROM timetables tt JOIN subjects s ON s.id = tt.subject_id LEFT JOIN users u ON u.id = tt.teacher_id WHERE tt.class_id=? AND tt.term_id=? ORDER BY tt.day_of_week, tt.start_time"),
+  checkTeacherConflict:   db.prepare("SELECT id FROM timetables WHERE teacher_id=? AND term_id=? AND day_of_week=? AND start_time=? LIMIT 1"),
+  checkClassroomConflict: db.prepare("SELECT id FROM timetables WHERE classroom IS NOT NULL AND classroom=? AND term_id=? AND day_of_week=? AND start_time=? LIMIT 1"),
+  createTimetableSlot:    db.prepare("INSERT INTO timetables (class_id, subject_id, term_id, teacher_id, day_of_week, start_time, end_time, classroom) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  deleteTimetableSlot:    db.prepare("DELETE FROM timetables WHERE id=?"),
+  getTimetableSlot:       db.prepare("SELECT * FROM timetables WHERE id=?"),
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// bootstrap_v5_migration(): runs once on first deploy so v2 API is never empty.
+// Creates a default term, a Legacy Class, and enrolls all existing students.
+// Fully idempotent — safe to call on every server start.
+// ─────────────────────────────────────────────────────────────────────────────
+export function bootstrap_v5_migration(): void {
+  const termCount = (db.prepare("SELECT COUNT(*) as c FROM terms").get() as any)?.c ?? 0;
+  if (termCount > 0) return;
+
+  console.log("[db v5] bootstrap_v5_migration() — first deploy, seeding default term...");
+
+  db.transaction(() => {
+    const ctRow = db.prepare("SELECT value FROM settings WHERE key='CURRENT_TERM'").get() as any;
+    const currentTermStr = String(ctRow?.value ?? "2026-T1");
+    const parts = currentTermStr.split("-");
+    const year = parts[0] ?? "2026";
+    const termLabel = parts[1] === "T2" ? "Second Term" : parts[1] === "T3" ? "Third Term" : "First Term";
+    const session = (Number(year) - 1) + "/" + year;
+
+    const termResult = db.prepare(
+      "INSERT INTO terms (session, name, start_date, end_date, is_active, registration_open) VALUES (?, ?, date('now','start of year'), date('now','start of year','+4 months'), 1, 1)"
+    ).run(session, termLabel) as { lastInsertRowid: number | bigint };
+    const termId = Number(termResult.lastInsertRowid);
+
+    let classId: number;
+    const existingClass = db.prepare("SELECT id FROM classes WHERE name='Legacy Class'").get() as any;
+    if (existingClass) {
+      classId = Number(existingClass.id);
+    } else {
+      const cr = db.prepare("INSERT INTO classes (name, level) VALUES ('Legacy Class', 'junior')").run() as { lastInsertRowid: number | bigint };
+      classId = Number(cr.lastInsertRowid);
+    }
+
+    const students = db.prepare("SELECT id FROM users WHERE role='student' AND is_active=1").all() as Array<{ id: number }>;
+    const stmt = db.prepare("INSERT OR IGNORE INTO class_enrollments (student_id, class_id, term_id) VALUES (?, ?, ?)");
+    for (const s of students) stmt.run(s.id, classId, termId);
+
+    console.log("[db v5] Bootstrap done: term=" + termLabel + " (" + session + "), enrolled " + students.length + " students into Legacy Class.");
+  })();
+}
 export default db;

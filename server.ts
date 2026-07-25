@@ -2,7 +2,7 @@ import { serve } from "bun";
 import { existsSync } from "fs";
 import fs from "fs";
 import crypto, { timingSafeEqual } from "node:crypto";
-import db, { EXAMPOOL_DB_PATH, initializeDatabase, queries } from "./db";
+import db, { EXAMPOOL_DB_PATH, initializeDatabase, queries, bootstrap_v5_migration } from "./db";
 import { buildSessionCookie, generateToken, hashPassword, verifyPassword, verifyToken } from "./auth";
 import os from "os";
 import path from "path";
@@ -2784,8 +2784,342 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ valid: true, tier: row.license_type, expires_at: row.expires_at, content_packs: JSON.parse(row.content_packs || "[]") });
   }
 
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // v5.0 /api/v2/ Routes — Academic Calendar + Guardian Foundation
+  // All routes are prefixed /api/v2/ to be non-breaking alongside v4.1 routes.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── v2: Terms ─────────────────────────────────────────────────────────────
+  if (pathname === "/api/v2/terms" && method === "GET") {
+    requireAuth(req);
+    return apiSuccess(queries.getAllTerms.all());
+  }
+
+  if (pathname === "/api/v2/terms/active" && method === "GET") {
+    requireAuth(req);
+    const term = queries.getActiveTerm.get();
+    return apiSuccess(term ?? null);
+  }
+
+  if (pathname === "/api/v2/terms" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const session = trimStr(body?.session).slice(0, 20);
+    const name = trimStr(body?.name).slice(0, 40);
+    const start_date = trimStr(body?.start_date);
+    const end_date = trimStr(body?.end_date);
+    if (!session || !name || !start_date || !end_date) return apiError(400, "session, name, start_date, end_date required");
+    if (!isValidExamDateTime(start_date) || !isValidExamDateTime(end_date)) return apiError(400, "Invalid date format");
+    const result = queries.createTerm.run(session, name, start_date, end_date) as { lastInsertRowid: number | bigint };
+    return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
+  }
+
+  const termIdMatch = pathname.match(/^\/api\/v2\/terms\/(\d+)$/);
+  if (termIdMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const termId = Number(termIdMatch[1]);
+    if (!isPositiveIntId(termId)) return apiError(400, "Invalid term id");
+    const term = queries.getTermById.get(termId) as any;
+    if (!term) return apiError(404, "Term not found");
+    const body = await readJson(req);
+    queries.updateTerm.run(
+      trimStr(body?.session) || term.session,
+      trimStr(body?.name) || term.name,
+      trimStr(body?.start_date) || term.start_date,
+      trimStr(body?.end_date) || term.end_date,
+      body?.registration_open !== undefined ? Number(body.registration_open) : term.registration_open,
+      termId
+    );
+    return apiSuccess(queries.getTermById.get(termId));
+  }
+
+  const termActivateMatch = pathname.match(/^\/api\/v2\/terms\/(\d+)\/activate$/);
+  if (termActivateMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const termId = Number(termActivateMatch[1]);
+    if (!isPositiveIntId(termId)) return apiError(400, "Invalid term id");
+    const term = queries.getTermById.get(termId) as any;
+    if (!term) return apiError(404, "Term not found");
+    // [ATOMIC] Single transaction: deactivate all, then activate one.
+    // Prevents dual-active-term race condition even with concurrent admin clicks.
+    db.transaction(() => {
+      queries.deactivateAllTerms.run();
+      queries.activateTerm.run(termId);
+    })();
+    auditLog(auth.userId, "TERM_ACTIVATE", "terms", termId, JSON.stringify({ session: term.session, name: term.name }));
+    return apiSuccess(queries.getTermById.get(termId));
+  }
+
+  // ── v2: Classes ───────────────────────────────────────────────────────────
+  if (pathname === "/api/v2/classes" && method === "GET") {
+    requireAuth(req);
+    return apiSuccess(queries.getAllClasses.all());
+  }
+
+  if (pathname === "/api/v2/classes" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const name = trimStr(body?.name).slice(0, 50);
+    const section = trimStr(body?.section).slice(0, 20) || null;
+    const level = body?.level === "senior" ? "senior" : "junior";
+    if (!name) return apiError(400, "Class name required");
+    try {
+      const result = queries.createClass.run(name, section, level) as { lastInsertRowid: number | bigint };
+      auditLog(auth.userId, "CLASS_CREATE", "classes", Number(result.lastInsertRowid), JSON.stringify({ name, section }));
+      return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
+    } catch (e) {
+      if (isSqliteUniqueError(e)) return apiError(409, "A class with this name and section already exists");
+      throw e;
+    }
+  }
+
+  const classIdMatch = pathname.match(/^\/api\/v2\/classes\/(\d+)$/);
+  if (classIdMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const classId = Number(classIdMatch[1]);
+    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
+    const cls = queries.getClassById.get(classId) as any;
+    if (!cls) return apiError(404, "Class not found");
+    const body = await readJson(req);
+    queries.updateClass.run(
+      trimStr(body?.name) || cls.name,
+      body?.section !== undefined ? (trimStr(body.section) || null) : cls.section,
+      body?.level === "senior" ? "senior" : (body?.level === "junior" ? "junior" : cls.level),
+      classId
+    );
+    return apiSuccess(queries.getClassById.get(classId));
+  }
+
+  if (classIdMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const classId = Number(classIdMatch[1]);
+    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
+    const count = (queries.getEnrollmentCountForClass.get(classId, 0) as any)?.count ?? 0;
+    if (count > 0) return apiError(409, "Cannot delete class with enrolled students");
+    queries.deleteClass.run(classId);
+    return apiMessage("Class deleted");
+  }
+
+  // ── v2: Class Roster ──────────────────────────────────────────────────────
+  const classRosterMatch = pathname.match(/^\/api\/v2\/classes\/(\d+)\/roster$/);
+  if (classRosterMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const classId = Number(classRosterMatch[1]);
+    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
+    const termId = Number(url.searchParams.get("term_id") || 0);
+    const activeTerm = queries.getActiveTerm.get() as any;
+    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
+    if (!resolvedTermId) return apiError(400, "No active term. Provide term_id or activate a term first.");
+    return apiSuccess(queries.getClassRoster.all(classId, resolvedTermId));
+  }
+
+  // ── v2: Class Enrollments (bulk) ─────────────────────────────────────────
+  if (pathname === "/api/v2/class-enrollments/bulk" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const { term_id, class_id, student_ids } = body ?? {};
+    if (!isPositiveIntId(term_id) || !isPositiveIntId(class_id) || !Array.isArray(student_ids)) {
+      return apiError(400, "term_id, class_id, and student_ids[] required");
+    }
+    if (student_ids.length > 500) return apiError(400, "Max 500 students per bulk enroll");
+    const term = queries.getTermById.get(term_id) as any;
+    const cls = queries.getClassById.get(class_id) as any;
+    if (!term) return apiError(404, "Term not found");
+    if (!cls) return apiError(404, "Class not found");
+    let enrolled = 0;
+    db.transaction(() => {
+      for (const sid of student_ids) {
+        if (!isPositiveIntId(Number(sid))) continue;
+        queries.enrollStudentInClass.run(Number(sid), class_id, term_id);
+        enrolled++;
+      }
+    })();
+    auditLog(auth.userId, "CLASS_ENROLL_BULK", "class_enrollments", class_id, JSON.stringify({ term_id, count: enrolled }));
+    return apiSuccess({ enrolled });
+  }
+
+  // ── v2: Guardian Links ────────────────────────────────────────────────────
+  if (pathname === "/api/v2/guardian-links" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const status = url.searchParams.get("status");
+    if (status === "pending") return apiSuccess(queries.getPendingGuardianLinks.all());
+    return apiSuccess(queries.getAllGuardianLinks.all());
+  }
+
+  if (pathname === "/api/v2/guardian-links" && method === "POST") {
+    const auth = requireAuth(req);
+    // Guardians can request their own links; operators can create on their behalf
+    requireRole(auth.role, ["guardian", "operator"]);
+    const body = await readJson(req);
+    const guardian_id = auth.role === "guardian" ? auth.userId : Number(body?.guardian_id);
+    const student_id = Number(body?.student_id);
+    const relationship = trimStr(body?.relationship || "Parent").slice(0, 40);
+    if (!isPositiveIntId(guardian_id) || !isPositiveIntId(student_id)) return apiError(400, "guardian_id and student_id required");
+    const student = queries.getUserById.get(student_id) as any;
+    const guardian = queries.getUserById.get(guardian_id) as any;
+    if (!student || student.role !== "student") return apiError(400, "Invalid student id");
+    if (!guardian || guardian.role !== "guardian") return apiError(400, "Guardian must have the guardian role");
+    try {
+      const result = queries.createGuardianLink.run(guardian_id, student_id, relationship) as { lastInsertRowid: number | bigint };
+      auditLog(auth.userId, "GUARDIAN_LINK_REQUEST", "guardian_student_links", Number(result.lastInsertRowid), JSON.stringify({ guardian_id, student_id, relationship }));
+      return apiSuccess({ id: Number(result.lastInsertRowid), status: "pending" }, 201);
+    } catch (e) {
+      if (isSqliteUniqueError(e)) return apiError(409, "A link between this guardian and student already exists");
+      throw e;
+    }
+  }
+
+  const guardianLinkActionMatch = pathname.match(/^\/api\/v2\/guardian-links\/(\d+)\/(approve|reject|revoke)$/);
+  if (guardianLinkActionMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const linkId = Number(guardianLinkActionMatch[1]);
+    const action = guardianLinkActionMatch[2] as string;
+    if (!isPositiveIntId(linkId)) return apiError(400, "Invalid link id");
+    const link = queries.getGuardianLink.get(linkId) as any;
+    if (!link) return apiError(404, "Guardian link not found");
+    const newStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "revoked";
+    queries.updateGuardianLinkStatus.run(newStatus, auth.userId, linkId);
+    auditLog(auth.userId, `GUARDIAN_LINK_${newStatus.toUpperCase()}`, "guardian_student_links", linkId, JSON.stringify({ action }));
+    return apiSuccess({ id: linkId, status: newStatus });
+  }
+
+  // ── v2: Academic Calendar Events ──────────────────────────────────────────
+  if (pathname === "/api/v2/calendar" && method === "GET") {
+    requireAuth(req);
+    const termId = Number(url.searchParams.get("term_id") || 0);
+    const activeTerm = queries.getActiveTerm.get() as any;
+    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
+    if (!resolvedTermId) return apiSuccess([]);
+    return apiSuccess(queries.getCalendarByTerm.all(resolvedTermId));
+  }
+
+  if (pathname === "/api/v2/calendar" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const term_id = Number(body?.term_id);
+    const title = trimStr(body?.title).slice(0, 100);
+    const description = trimStr(body?.description).slice(0, 500) || null;
+    const start_date = trimStr(body?.start_date);
+    const end_date = trimStr(body?.end_date);
+    const VALID_EVENT_TYPES = ["holiday","exam_period","resumption","event","deadline","other"];
+    const type = VALID_EVENT_TYPES.includes(body?.type) ? body.type : "event";
+    if (!isPositiveIntId(term_id) || !title || !start_date || !end_date) {
+      return apiError(400, "term_id, title, start_date, end_date required");
+    }
+    if (!isValidExamDateTime(start_date) || !isValidExamDateTime(end_date)) return apiError(400, "Invalid date format");
+    const result = queries.createCalendarEvent.run(term_id, title, description, start_date, end_date, type, auth.userId) as { lastInsertRowid: number | bigint };
+    return apiSuccess(queries.getCalendarEvent.get(Number(result.lastInsertRowid)), 201);
+  }
+
+  const calEventMatch = pathname.match(/^\/api\/v2\/calendar\/(\d+)$/);
+  if (calEventMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const eventId = Number(calEventMatch[1]);
+    if (!isPositiveIntId(eventId)) return apiError(400, "Invalid event id");
+    const ev = queries.getCalendarEvent.get(eventId) as any;
+    if (!ev) return apiError(404, "Event not found");
+    const body = await readJson(req);
+    const VALID_EVENT_TYPES = ["holiday","exam_period","resumption","event","deadline","other"];
+    queries.updateCalendarEvent.run(
+      trimStr(body?.title) || ev.title,
+      body?.description !== undefined ? trimStr(body.description).slice(0, 500) : ev.description,
+      trimStr(body?.start_date) || ev.start_date,
+      trimStr(body?.end_date) || ev.end_date,
+      VALID_EVENT_TYPES.includes(body?.type) ? body.type : ev.type,
+      eventId
+    );
+    return apiSuccess(queries.getCalendarEvent.get(eventId));
+  }
+
+  if (calEventMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const eventId = Number(calEventMatch[1]);
+    if (!isPositiveIntId(eventId)) return apiError(400, "Invalid event id");
+    const ev = queries.getCalendarEvent.get(eventId) as any;
+    if (!ev) return apiError(404, "Event not found");
+    queries.deleteCalendarEvent.run(eventId);
+    return apiMessage("Event deleted");
+  }
+
+  // ── v2: Timetables ────────────────────────────────────────────────────────
+  const timetableClassMatch = pathname.match(/^\/api\/v2\/timetables\/class\/(\d+)$/);
+  if (timetableClassMatch && method === "GET") {
+    requireAuth(req);
+    const classId = Number(timetableClassMatch[1]);
+    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
+    const termId = Number(url.searchParams.get("term_id") || 0);
+    const activeTerm = queries.getActiveTerm.get() as any;
+    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
+    if (!resolvedTermId) return apiSuccess([]);
+    return apiSuccess(queries.getTimetableByClass.all(classId, resolvedTermId));
+  }
+
+  if (pathname === "/api/v2/timetables" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const class_id = Number(body?.class_id);
+    const subject_id = Number(body?.subject_id);
+    const term_id = Number(body?.term_id);
+    const teacher_id = body?.teacher_id ? Number(body.teacher_id) : null;
+    const day_of_week = Number(body?.day_of_week);
+    const start_time = trimStr(body?.start_time);
+    const end_time = trimStr(body?.end_time);
+    const classroom = trimStr(body?.classroom).slice(0, 100) || null;
+    if (!isPositiveIntId(class_id) || !isPositiveIntId(subject_id) || !isPositiveIntId(term_id)) {
+      return apiError(400, "class_id, subject_id, term_id required");
+    }
+    if (!Number.isInteger(day_of_week) || day_of_week < 0 || day_of_week > 6) return apiError(400, "day_of_week must be 0-6");
+    if (!start_time || !end_time) return apiError(400, "start_time and end_time required");
+    // [CONFLICT DETECTION] Teacher double-booking check
+    if (teacher_id && isPositiveIntId(teacher_id)) {
+      const teacherConflict = queries.checkTeacherConflict.get(teacher_id, term_id, day_of_week, start_time) as any;
+      if (teacherConflict) return apiError(409, "Teacher is already assigned to another class at this time slot");
+    }
+    // [CONFLICT DETECTION] Classroom double-booking check
+    if (classroom) {
+      const roomConflict = queries.checkClassroomConflict.get(classroom, term_id, day_of_week, start_time) as any;
+      if (roomConflict) return apiError(409, `Classroom "${classroom}" is already booked at this time slot`);
+    }
+    try {
+      const result = queries.createTimetableSlot.run(class_id, subject_id, term_id, teacher_id, day_of_week, start_time, end_time, classroom) as { lastInsertRowid: number | bigint };
+      auditLog(auth.userId, "TIMETABLE_CREATE", "timetables", Number(result.lastInsertRowid), JSON.stringify({ class_id, subject_id, day_of_week, start_time }));
+      return apiSuccess(queries.getTimetableSlot.get(Number(result.lastInsertRowid)), 201);
+    } catch (e) {
+      if (isSqliteUniqueError(e)) return apiError(409, "A timetable slot already exists for this class at this day and time");
+      throw e;
+    }
+  }
+
+  const timetableSlotMatch = pathname.match(/^\/api\/v2\/timetables\/(\d+)$/);
+  if (timetableSlotMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const slotId = Number(timetableSlotMatch[1]);
+    if (!isPositiveIntId(slotId)) return apiError(400, "Invalid slot id");
+    const slot = queries.getTimetableSlot.get(slotId) as any;
+    if (!slot) return apiError(404, "Timetable slot not found");
+    queries.deleteTimetableSlot.run(slotId);
+    return apiMessage("Timetable slot deleted");
+  }
+
   return apiError(404, "Not found");
 }
+
 
 const server = serve({
   port: Number(Bun.env.PORT ?? 8001),
