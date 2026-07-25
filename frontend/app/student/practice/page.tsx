@@ -5,7 +5,28 @@ import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
 import { savePackage, getAllPackageIds, deletePackage, getOfflineSubmissions, deleteOfflineSubmission } from "../../../lib/idb";
-import { DocumentIcon, SearchIcon, ClockIcon } from "../../../components/icons/Icons";
+import { DocumentIcon, SearchIcon, ClockIcon, DownloadIcon } from "../../../components/icons/Icons";
+
+const SUBJECT_MAP: Record<string, string> = {
+  MTH: "Mathematics",
+  ENG: "English Language",
+  PHY: "Physics",
+  CHM: "Chemistry",
+  BIO: "Biology",
+  GOV: "Government",
+  ECO: "Economics",
+  LIT: "Literature in English",
+  CRS: "Christian Religious Studies",
+  IRS: "Islamic Religious Studies",
+  ACC: "Accounting",
+  COM: "Commerce",
+  GEO: "Geography",
+  AGR: "Agricultural Science"
+};
+
+const getSubjectName = (code: string) => {
+  return SUBJECT_MAP[code.toUpperCase()] || code;
+};
 
 export default function PracticeSandboxPage() {
   return (
@@ -22,7 +43,9 @@ function PracticeSandbox() {
   const [loading, setLoading] = useState(true);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [selectedBody, setSelectedBody] = useState<string | null>(null);
+  const [selectedBody, setSelectedBody] = useState<string>("");
+  const [selectedYear, setSelectedYear] = useState<string>("");
+  const [selectedSubject, setSelectedSubject] = useState<string>("");
 
   useEffect(() => {
     const syncOfflineSubmissions = async () => {
@@ -94,12 +117,15 @@ function PracticeSandbox() {
   if (loading) return <div className="spinner" style={{ margin: "3rem auto" }} />;
 
   const uniqueBodies = Array.from(new Set(packages.map(p => p.exam_body)));
+  const availableYears = selectedBody ? Array.from(new Set(packages.filter(p => p.exam_body === selectedBody).map(p => p.year))) : [];
+  const availableSubjects = selectedYear ? Array.from(new Set(packages.filter(p => p.exam_body === selectedBody && String(p.year) === String(selectedYear)).map(p => p.subject))) : [];
+  const selectedPkg = packages.find(p => p.exam_body === selectedBody && String(p.year) === String(selectedYear) && p.subject === selectedSubject);
 
   return (
-    <main style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
-      <header style={{ marginBottom: "2rem" }}>
-        <h1 className="pageTitle">Practice Sandbox</h1>
-        <p style={{ color: "var(--color-muted)" }}>Sharpen your skills using past questions from JAMB, WAEC, and NECO.</p>
+    <main style={{ padding: "2rem", maxWidth: "800px", margin: "0 auto" }}>
+      <header style={{ marginBottom: "3rem", textAlign: "center" }}>
+        <h1 className="pageTitle" style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>Practice Sandbox</h1>
+        <p style={{ color: "var(--color-muted)", fontSize: "1.1rem" }}>Configure your practice session parameters below.</p>
       </header>
 
       {error ? (
@@ -115,67 +141,108 @@ function PracticeSandbox() {
           </p>
         </div>
       ) : (
-        <>
-          {/* Filters */}
-          <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem" }}>
-            <button 
-              className={`btn ${!selectedBody ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setSelectedBody(null)}
-            >
-              All
-            </button>
-            {uniqueBodies.map(body => (
-              <button 
-                key={body}
-                className={`btn ${selectedBody === body ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setSelectedBody(body as string)}
+        <div className="card" style={{ padding: "2rem", background: "var(--color-surface)", boxShadow: "0 4px 12px rgba(0,0,0,0.05)", borderRadius: "12px", border: "1px solid var(--color-border)" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+            
+            {/* Step 1: Exam Type */}
+            <div>
+              <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-muted)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Exam Body
+              </label>
+              <select 
+                className="input" 
+                value={selectedBody}
+                onChange={e => {
+                  setSelectedBody(e.target.value);
+                  setSelectedYear("");
+                  setSelectedSubject("");
+                }}
+                style={{ width: "100%", padding: "0.75rem", fontSize: "1rem", borderRadius: "6px", border: "1px solid var(--color-border)", background: "var(--color-surface)", cursor: "pointer" }}
               >
-                {body}
-              </button>
-            ))}
-          </div>
+                <option value="">-- Select ({uniqueBodies.length} available) --</option>
+                {uniqueBodies.map(body => {
+                  const bodyCount = packages.filter(p => p.exam_body === body).length;
+                  return <option key={body as string} value={body as string}>{body as string} ({bodyCount} packages)</option>
+                })}
+              </select>
+            </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1.5rem" }}>
-            {packages
-              .filter(p => !selectedBody || p.exam_body === selectedBody)
-              .map((pkg, idx) => (
-              <div key={idx} className="card" style={{ display: "flex", flexDirection: "column", height: "100%", padding: "1.5rem", transition: "transform 0.2s" }} onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-4px)'} onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}>
-                <div style={{ marginBottom: "auto" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
-                    <span className="badge" style={{ background: "var(--color-primary-glow)", color: "var(--color-primary)", fontWeight: "bold" }}>
-                      {pkg.exam_body} {pkg.year}
-                    </span>
-                    <span style={{ fontSize: "0.8rem", color: "var(--color-muted)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                      <ClockIcon width="14" height="14" /> 45 mins
-                    </span>
-                  </div>
-                  <h3 style={{ fontSize: "1.25rem", marginBottom: "0.5rem" }}>{pkg.subject}</h3>
-                  <p style={{ color: "var(--color-muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-                    {pkg.content_count} past questions available.
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: "0.5rem", marginTop: "auto" }}>
-                  <button 
-                    className="btn btn-primary" 
-                    style={{ flex: 1, justifyContent: "center" }}
-                    onClick={() => handleStartPractice(pkg.id || pkg.subject)}
-                  >
-                    Start
-                  </button>
-                  {downloadedPkgs.includes(pkg.id || pkg.subject) ? (
-                    <button className="btn btn-ghost" style={{ color: "var(--color-danger)" }} onClick={() => handleDelete(pkg.id || pkg.subject)} title="Remove Offline Download">
-                      🗑️
-                    </button>
+            {/* Step 2: Year */}
+            <div style={{ opacity: selectedBody ? 1 : 0.4, pointerEvents: selectedBody ? "auto" : "none", transition: "opacity 0.2s" }}>
+              <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-muted)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Year
+              </label>
+              <select 
+                className="input" 
+                value={selectedYear}
+                onChange={e => {
+                  setSelectedYear(e.target.value);
+                  setSelectedSubject("");
+                }}
+                disabled={!selectedBody}
+                style={{ width: "100%", padding: "0.75rem", fontSize: "1rem", borderRadius: "6px", border: "1px solid var(--color-border)", background: "var(--color-surface)", cursor: selectedBody ? "pointer" : "not-allowed" }}
+              >
+                <option value="">{selectedBody ? `-- Select (${availableYears.length} available) --` : "-- Select Year --"}</option>
+                {availableYears.map(year => (
+                  <option key={year as string} value={year as string}>{year as string}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Step 3: Subject */}
+            <div style={{ opacity: selectedYear ? 1 : 0.4, pointerEvents: selectedYear ? "auto" : "none", transition: "opacity 0.2s" }}>
+              <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 600, color: "var(--color-muted)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Subject
+              </label>
+              <select 
+                className="input" 
+                value={selectedSubject}
+                onChange={e => setSelectedSubject(e.target.value)}
+                disabled={!selectedYear}
+                style={{ width: "100%", padding: "0.75rem", fontSize: "1rem", borderRadius: "6px", border: "1px solid var(--color-border)", background: "var(--color-surface)", cursor: selectedYear ? "pointer" : "not-allowed" }}
+              >
+                <option value="">{selectedYear ? `-- Select (${availableSubjects.length} available) --` : "-- Select Subject --"}</option>
+                {availableSubjects.map(sub => (
+                  <option key={sub as string} value={sub as string}>{getSubjectName(sub as string)}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Actions */}
+            <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              <button 
+                className="btn btn-primary" 
+                disabled={!selectedPkg}
+                onClick={() => selectedPkg && handleStartPractice(selectedPkg.id || selectedPkg.subject)}
+                style={{ width: "100%", padding: "0.85rem", fontSize: "1.05rem", fontWeight: 600, borderRadius: "6px", transition: "all 0.2s", opacity: selectedPkg ? 1 : 0.5 }}
+              >
+                Start Practice Exam
+              </button>
+
+              {selectedPkg && (
+                <div style={{ textAlign: "center" }}>
+                  {downloadedPkgs.includes(selectedPkg.id || selectedPkg.subject) ? (
+                    <span style={{ fontSize: "0.85rem", color: "var(--color-success)", fontWeight: 500 }}>✓ Ready for offline use</span>
                   ) : (
-                    <button className="btn btn-ghost" onClick={() => handleDownload(pkg.id || pkg.subject)} disabled={downloadingId === (pkg.id || pkg.subject)} title="Download for Offline">
-                      {downloadingId === (pkg.id || pkg.subject) ? "..." : "⬇️"}
+                    <button 
+                      className="btn btn-ghost" 
+                      onClick={() => handleDownload(selectedPkg.id || selectedPkg.subject)} 
+                      disabled={downloadingId === (selectedPkg.id || selectedPkg.subject)}
+                      style={{ fontSize: "0.85rem", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", padding: "0.4rem 0.8rem", height: "auto", minHeight: "0" }}
+                    >
+                      {downloadingId === (selectedPkg.id || selectedPkg.subject) ? "Downloading..." : (
+                        <>
+                          <DownloadIcon width="14" height="14" /> Download for Offline
+                        </>
+                      )}
                     </button>
                   )}
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
+
           </div>
-        </>
+        </div>
       )}
     </main>
   );

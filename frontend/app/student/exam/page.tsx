@@ -29,6 +29,7 @@ function ExamContent() {
   const router       = useRouter();
   const searchParams = useSearchParams();
   const subjectId    = Number(searchParams.get("subjectId") || 0);
+  const practiceId   = searchParams.get("practiceId");
   const { showToast } = useToast();
 
   const [mode,              setMode]              = useState<Mode>("loading");
@@ -67,11 +68,16 @@ function ExamContent() {
 
   const isSubmittingRef = useRef(false);
   const handleSubmit = useCallback(async () => {
-    if (!examId || isSubmittingRef.current) return;
+    if ((!examId && !practiceId) || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
     setMode("submitting");
     try {
-      const res = await api.submitExamWithAnswers(examId, buildAnswerPayload());
+      let res;
+      if (practiceId) {
+        res = await api.submitPractice(practiceId, buildAnswerPayload());
+      } else {
+        res = await api.submitExamWithAnswers(examId!, buildAnswerPayload());
+      }
       setScoreResult(res as any);
       showToast("Exam submitted successfully!", "success");
       setMode("completed");
@@ -82,7 +88,7 @@ function ExamContent() {
       setMode("in-progress");
       isSubmittingRef.current = false;
     }
-  }, [examId, buildAnswerPayload, router]);
+  }, [examId, practiceId, buildAnswerPayload, router, showToast]);
 
   const remaining = useMonotonicTimer(
     timerSeed,
@@ -117,6 +123,20 @@ function ExamContent() {
       if (!document.fullscreenElement) {
         await document.documentElement.requestFullscreen().catch(() => console.warn("Fullscreen denied"));
       }
+      
+      if (practiceId) {
+        const start = await api.startPractice(practiceId) as any;
+        if (!start || !start.exam) throw new Error("Could not start practice exam");
+        const examData = start.exam;
+        setExamId(examData.id);
+        localStorage.removeItem(`exam_answers_practice_${practiceId}`);
+        setQuestions(examData.questions || []);
+        seedTimer(new Date().toISOString(), examData.subject.duration || 45);
+        setSubject(examData.subject);
+        setMode("in-progress");
+        return;
+      }
+
       const start = await api.startExam(subjectForStart.id) as any;
       if (!start) throw new Error("Could not start exam — check that the exam window is open");
       const id = Number(start.examId ?? start.exam?.id);
@@ -136,13 +156,23 @@ function ExamContent() {
       setError(err instanceof Error ? err.message : "Failed to start exam. The exam window might be closed.");
       setMode("error" as any); // fallback mode, the render block catches `error` state regardless
     }
-  }, [seedTimer]);
+  }, [practiceId, seedTimer]);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       setMode("loading");
       try {
+        if (practiceId) {
+          const parts = practiceId.split("_");
+          setSubject({
+            title: `${parts[0]} ${parts[1]} - ${parts.slice(2).join(" ")}`,
+            duration: 45
+          });
+          setShowInstructions(true);
+          return;
+        }
+
         const [subjects, activeExams] = await Promise.all([
           api.getSubjects(),
           api.getActiveExams(),
@@ -230,7 +260,7 @@ function ExamContent() {
       }
     })();
     return () => { mounted = false; };
-  }, [subjectId, startExam, seedTimer]);
+  }, [subjectId, practiceId, startExam, seedTimer]);
 
   useEffect(() => {
     if (!examId || mode !== "in-progress") return;
@@ -510,7 +540,7 @@ function ExamContent() {
       {/* ── Top bar ── */}
       <header className={styles.topbar}>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <h2 style={{ margin: 0 }}>{subject?.name || "Exam"}</h2>
+          <h2 style={{ margin: 0 }}>{practiceId ? "MOCK EXAM" : (subject?.name || "Exam")}</h2>
           {/* Status Badges */}
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", background: "var(--color-surface-2)", padding: "0.25rem 0.5rem", borderRadius: "100px", border: "1px solid var(--color-border)" }}>
             <p className={timerClass} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.85rem", fontWeight: 700, margin: 0, padding: "0 0.25rem" }}>
@@ -635,28 +665,29 @@ function ExamContent() {
                 <p style={{ color: "var(--color-danger)" }}>No questions found. Please contact your teacher.</p>
               </div>
             )}
-          </div>
+            )}
 
-          {/* Navigation row */}
-          <div className={styles.navRow}>
-            <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.max(0, v - 1))}>← Prev</button>
-            <button
-              className="btn btn-ghost"
-              onClick={() => current && setFlags((prev) => ({ ...prev, [current.id]: !prev[current.id] }))}
-              style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}
-            >
-              <FlagIcon width="13" height="13" />
-              {current && flags[current.id] ? "Unflag" : "Flag"}
-            </button>
-            <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.min(questions.length - 1, v + 1))}>Next →</button>
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowSubmitConfirm(true)}
-              disabled={mode === "submitting"}
-              style={{ fontWeight: 700 }}
-            >
-              {mode === "submitting" ? "Submitting…" : `Submit (${answeredCount}/${questions.length})`}
-            </button>
+            {/* Navigation row (Now inside scroll area, below options) */}
+            <div className={styles.navRow}>
+              <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.max(0, v - 1))}>← Prev</button>
+              <button
+                className="btn btn-ghost"
+                onClick={() => current && setFlags((prev) => ({ ...prev, [current.id]: !prev[current.id] }))}
+                style={{ display: "flex", gap: "0.3rem", alignItems: "center" }}
+              >
+                <FlagIcon width="13" height="13" />
+                {current && flags[current.id] ? "Unflag" : "Flag"}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setCurrentIndex((v) => Math.min(questions.length - 1, v + 1))}>Next →</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowSubmitConfirm(true)}
+                disabled={mode === "submitting"}
+                style={{ fontWeight: 700 }}
+              >
+                {mode === "submitting" ? "Submitting…" : `Submit (${answeredCount}/${questions.length})`}
+              </button>
+            </div>
           </div>
         </div>
 

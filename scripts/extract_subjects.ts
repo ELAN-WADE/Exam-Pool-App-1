@@ -6,7 +6,7 @@ async function extract() {
   const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
 
   let textBlocks: string[] = [];
-
+4
   for await (const line of rl) {
     try {
       const entry = JSON.parse(line);

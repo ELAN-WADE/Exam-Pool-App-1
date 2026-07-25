@@ -34,6 +34,16 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+
+# [SECURITY VULN-06] Bun runtime binary — large, unauditable, and supply-chain risk
+bun.zip
+
+# [SECURITY VULN-07] Encrypted content packages — licensed IP, not for version control
+*.epkg
+
+# [SECURITY VULN-07] License file — contains sensitive deployment credentials
+license.json
 
 # IntelliJ based IDEs
 .idea

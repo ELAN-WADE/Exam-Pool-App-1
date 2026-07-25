@@ -2,18 +2,13 @@
 
 import Link from "next/link";
 import React, { useCallback, useEffect, useState, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
 import { api } from "../../../lib/api";
-import type { Subject, ExamResult, User } from "../../../lib/types";
-import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon, PlusIcon } from "../../../components/icons/Icons";
+import type { Subject, ExamResult } from "../../../lib/types";
+import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
-import { EmptyState } from "../../../components/ui/EmptyState";
-import { useToast } from "../../../hooks/useToast";
-import dynamic from "next/dynamic";
-import styles from "./page.module.css";
-
-const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
 
 export default function TeacherDashboardPage() {
   return (
@@ -23,55 +18,30 @@ export default function TeacherDashboardPage() {
   );
 }
 
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { staggerChildren: 0.08 }
+  }
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
+};
+
 function TeacherDashboard() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [questionCounts, setQuestionCounts] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Report card quick-launch: show all students with completed exams
+  // Report card quick-launch
   const [reportStudents, setReportStudents] = useState<ExamResult[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportCardStudent, setReportCardStudent] = useState<ExamResult | null>(null);
 
-  // ── Create Assessment State ─────────────────────────────────────────
-  const [modalOpen, setModalOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", code: "", term: "", duration: "60", mode: "test", is_assignment: false });
-  const [saving, setSaving] = useState(false);
-  const { showToast } = useToast();
-
-  const handleCreateAssessment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    try {
-      await api.createSubject({
-        name: form.name,
-        code: form.code,
-        term: form.term,
-        duration: Number(form.duration),
-        exam_datetime: "", 
-        teacher_id: 0, 
-        mode: form.mode,
-        is_assignment: form.is_assignment ? 1 : 0,
-        can_retake: 1,
-      });
-      showToast("Successfully created assessment", "success");
-      setModalOpen(false);
-      setForm({ name: "", code: "", term: "", duration: "60", mode: "test", is_assignment: false });
-      
-      const subs = await api.getSubjects();
-      if (subs) {
-        subjectsRef.current = subs;
-        setSubjects(subs);
-      }
-    } catch (err: any) {
-      showToast(err.message || "Failed to create assessment", "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  // ── Fetch report-card students (re-used on live refresh) ──────────────
   const loadReportStudents = useCallback(async (subs: Subject[], signal?: AbortSignal) => {
     setReportLoading(true);
     const allStudentMap: Record<number, ExamResult> = {};
@@ -94,7 +64,6 @@ function TeacherDashboard() {
     setReportLoading(false);
   }, []);
 
-  // ── Initial data load ──────────────────────────────────────────────
   const subjectsRef = useRef<Subject[]>([]);
 
   useEffect(() => {
@@ -106,11 +75,13 @@ function TeacherDashboard() {
         const subs = await api.getSubjects() ?? [];
         if (signal.aborted) return;
         
-        subjectsRef.current = subs;
-        setSubjects(subs);
+        const examSubs = subs.filter(s => s.is_assignment !== 1);
+        subjectsRef.current = examSubs;
+        setSubjects(examSubs);
+        
         const counts: Record<number, number> = {};
         await Promise.all(
-          subs.map(async (s) => {
+          examSubs.map(async (s) => {
             try {
               if (signal.aborted) return;
               const qs = await api.getQuestions(Number(s.id));
@@ -123,7 +94,7 @@ function TeacherDashboard() {
         );
         if (signal.aborted) return;
         setQuestionCounts(counts);
-        await loadReportStudents(subs, signal);
+        await loadReportStudents(examSubs, signal);
       } catch (err: any) {
         if (!signal.aborted) setError(err.message || "Failed to load subjects");
       } finally {
@@ -133,12 +104,10 @@ function TeacherDashboard() {
     return () => abortController.abort();
   }, [loadReportStudents]);
 
-  // ── Live-update: listen for exam_submitted SSE events ─────────────
   useEffect(() => {
     const handler = (e: Event) => {
       const notif = (e as CustomEvent).detail;
       if (notif?.type === "exam_submitted") {
-        // Silently refresh the report card section
         loadReportStudents(subjectsRef.current);
       }
     };
@@ -147,291 +116,219 @@ function TeacherDashboard() {
   }, [loadReportStudents]);
 
   if (loading) return (
-    <>
-      <div className="pageHeader animate-enter">
+    <div className="font-roboto flex flex-col gap-8">
+      <div className="flex flex-col gap-4 animate-pulse">
         <Skeleton width={200} height={36} />
-        <div className={styles.pills}>
-          <Skeleton width={72} height={28} borderRadius={999} />
+        <div className="flex gap-2">
           <Skeleton width={72} height={28} borderRadius={999} />
           <Skeleton width={72} height={28} borderRadius={999} />
         </div>
       </div>
-      <div className={styles.grid}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} height={300} borderRadius="var(--radius-xl)" className="animate-enter" style={{ animationDelay: `${i * 50}ms` }} />
+          <Skeleton key={i} height={300} borderRadius={24} />
         ))}
       </div>
-    </>
+    </div>
   );
 
   if (error) return (
-    <div className={styles.errorState}>
+    <div className="font-roboto flex flex-col items-center gap-5 p-16 bg-red-50/50 text-red-600 rounded-3xl border border-dashed border-red-200 text-center font-bold text-lg">
       <WarningIcon width="40" height="40" />
       <p>{error}</p>
     </div>
   );
 
-  if (subjects.length === 0) {
-    return (
-      <div className="animate-enter">
-        <EmptyState
-          title="No Subjects Assigned"
-          description="You don't have any subjects yet. Contact your operator to get assigned."
-          icon={<EmptyBoxIcon width="32" height="32" />}
-        />
-      </div>
-    );
-  }
-
   const published = subjects.filter((s) => s.is_published).length;
   const drafts = subjects.filter((s) => !s.is_published).length;
 
   return (
-    <>
-      {/* Report Card Modal */}
-      {reportCardStudent && (
-        <ReportCardModal
-          student={reportCardStudent}
-          onClose={() => setReportCardStudent(null)}
-        />
-      )}
-
-      <div className="pageHeader">
-        <div>
-          <h1 className="pageTitle">My Subjects & Assessments</h1>
-          <p className="pageSubtitle">Manage your exam content and student results</p>
-        </div>
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-          <div className={styles.pills}>
-            <span className={styles.pill}><span className={styles.pillNum}>{subjects.length}</span> Total</span>
-            <span className={styles.pill} style={{ '--accent': 'var(--color-success)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-success)" }}>{published}</span> Live</span>
-            <span className={styles.pill} style={{ '--accent': 'var(--color-primary)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-primary)" }}>{drafts}</span> Draft</span>
-          </div>
-          <button className="btn btn-primary" onClick={() => setModalOpen(true)}>
-            <PlusIcon width="16" height="16" /> Create Assessment
-          </button>
-        </div>
-      </div>
-
-      <div className={styles.grid}>
-        {subjects.map((s, i: number) => {
-          const qCount = questionCounts[Number(s.id)] ?? "…";
-          const isLive = Boolean(s.is_published);
-          return (
-            <div key={s.id} className={`${styles.card} ${isLive ? styles.cardLive : styles.cardDraft} animate-enter`} style={{ animationDelay: `${i * 50}ms` }}>
-              {/* Top Status Strip */}
-              <div className={styles.cardTopStrip} />
-
-              {/* Card Header */}
-              <div className={styles.cardHeader}>
-                <div className={styles.subjectIconBox}>
-                  <SubjectIcon width="18" height="18" />
-                </div>
-                <span className={`badge ${isLive ? "badge-success" : "badge-muted"}`}>
-                  {isLive ? "● Live" : "Draft"}
-                </span>
-                {s.is_assignment === 1 ? (
-                   <span className="badge badge-info" style={{ marginLeft: "0.5rem", background: "rgba(14, 165, 233, 0.1)", color: "var(--color-info)" }}>Assignment</span>
-                ) : s.mode === "test" || s.mode === "quiz" ? (
-                   <span className="badge badge-warning" style={{ marginLeft: "0.5rem", background: "rgba(245, 158, 11, 0.1)", color: "var(--color-warning)" }}>{s.mode.charAt(0).toUpperCase() + s.mode.slice(1)}</span>
-                ) : (
-                   <span className="badge badge-primary" style={{ marginLeft: "0.5rem", background: "rgba(79, 124, 255, 0.1)", color: "var(--color-primary)" }}>Exam</span>
-                )}
-              </div>
-
-              {/* Card Body */}
-              <div className={styles.cardBody}>
-                <h3 className={styles.subjectName}>{s.name}</h3>
-                <div className={styles.codeRow}>
-                  <code className={styles.code}>{s.code}</code>
-                  <code className={styles.code}>Term {s.term}</code>
-                </div>
-
-                <div className={styles.meta}>
-                  <div className={styles.metaRow}>
-                    <CalendarIcon width="12" height="12" />
-                    {s.exam_datetime
-                      ? new Date(s.exam_datetime).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
-                      : "Date TBA"}
-                  </div>
-                  <div className={styles.metaRow}>
-                    <ClockIcon width="12" height="12" />
-                    {s.duration} min duration
-                  </div>
-                </div>
-
-                <div className={styles.metaBadges}>
-                  <span className={styles.metaBadge}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    {qCount} Qs
-                  </span>
-                  <span className={styles.metaBadge}>
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                    {s.total_score ?? 0} Marks
-                  </span>
-                  {isLive && (
-                    <span className={styles.metaBadge} style={{ color: "var(--color-warning)" }}>
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                      Locked
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Card Actions */}
-              <div className={styles.cardActions}>
-                <Link
-                  href={`/teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`}
-                  className={`btn btn-primary ${styles.actionBtn}`}
-                >
-                  {isLive ? "View Questions" : "Manage Questions"}
-                </Link>
-                <div className={styles.actionRow}>
-                  <Link href={`/teacher/students?subjectId=${s.id}`} className={`btn btn-ghost ${styles.actionBtnSm}`}>
-                    <UsersIcon width="12" height="12" /> Students
-                  </Link>
-                  <Link href="/teacher/results" className={`btn btn-ghost ${styles.actionBtnSm}`}>
-                    <BookIcon width="12" height="12" /> Results
-                  </Link>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── Report Cards Section ── */}
-      <div style={{ marginTop: "2.5rem" }}>
-        <div className="pageHeader" style={{ marginBottom: "1rem" }}>
-          <div>
-            <h2 style={{ fontSize: "1.1rem", fontWeight: 800, margin: 0 }}>Report Cards</h2>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-              Generate and print report cards for students who have completed exams
-            </p>
-          </div>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => loadReportStudents(subjectsRef.current)}
-            title="Refresh to see newly completed exams"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M3 12a9 9 0 009-9 9 9 0 015.657 2.343"/>
-              <polyline points="21 3 21 9 15 9"/>
-              <path d="M21 12a9 9 0 01-9 9 9 9 0 01-5.657-2.343"/>
-            </svg>
-            Refresh
-          </button>
-        </div>
-
-        {reportLoading ? (
-          <div style={{ display: "flex", gap: "1rem" }}>
-            {[1, 2, 3].map((i) => <Skeleton key={i} width={200} height={80} borderRadius={12} />)}
-          </div>
-        ) : reportStudents.length === 0 ? (
-          <div style={{
-            background: "var(--color-surface)",
-            border: "1.5px dashed var(--color-border)",
-            borderRadius: 12,
-            padding: "2.5rem",
-            textAlign: "center",
-            color: "var(--color-muted)",
-          }}>
-            <div style={{ marginBottom: "0.75rem", color: "var(--color-muted)" }}>
-              <ClipboardIcon width="40" height="40" style={{ margin: "0 auto", opacity: 0.5 }} />
-            </div>
-            <p style={{ fontWeight: 600, margin: "0 0 0.25rem" }}>No completed exams yet</p>
-            <p style={{ fontSize: "0.875rem", margin: 0 }}>Students who have submitted exams will appear here for report card generation.</p>
-          </div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.875rem" }}>
-            {reportStudents.map((st) => (
-              <div
-                key={st.student_user_id}
-                style={{
-                  background: "var(--color-surface)",
-                  border: "1.5px solid var(--color-border)",
-                  borderRadius: 12,
-                  padding: "1rem",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.875rem",
-                  cursor: "pointer",
-                  transition: "border-color 0.15s, box-shadow 0.15s",
-                }}
-                onClick={() => setReportCardStudent(st)}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "var(--color-primary)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(79,124,255,0.12)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "var(--color-border)"; (e.currentTarget as HTMLDivElement).style.boxShadow = "none"; }}
-              >
-                <div style={{
-                  width: 42, height: 42, borderRadius: "50%",
-                  background: "var(--color-primary)", color: "#fff",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontWeight: 800, fontSize: "1rem", flexShrink: 0,
-                }}>
-                  {String(st.student_name || "?").charAt(0).toUpperCase()}
-                </div>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.875rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{st.student_name}</div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{st.grade || "—"} · {st.reg_id || ""}</div>
-                </div>
-                <DocumentIcon width="16" height="16" style={{ color: "var(--color-primary)", flexShrink: 0 }} />
-              </div>
-            ))}
-          </div>
+    <div className="font-roboto min-h-screen">
+      <AnimatePresence>
+        {reportCardStudent && (
+          <ReportCardModal
+            student={reportCardStudent}
+            onClose={() => setReportCardStudent(null)}
+          />
         )}
-      </div>
+      </AnimatePresence>
 
-      {/* ── Create Assessment Modal ── */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="md">
-        <h2>Create Assessment</h2>
-        <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create a class test, quiz, or a take-home assignment.</p>
-        <form onSubmit={handleCreateAssessment} style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Name *</label>
-              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Week 1 Quiz" required />
+      <motion.div 
+        variants={containerVariants} 
+        initial="hidden" 
+        animate="visible"
+        className="flex flex-col gap-8 pb-12"
+      >
+        {/* Header Section */}
+        <motion.div variants={itemVariants} className="flex flex-col gap-4 md:flex-row md:items-end justify-between">
+          <div>
+            <h1 className="text-4xl font-black text-slate-900 m-0 tracking-tight">Overview</h1>
+            <p className="text-slate-500 mt-1 font-medium text-sm">Manage your exam content and student results smoothly</p>
+          </div>
+          <div className="flex gap-3 mt-4 md:mt-0">
+            <div className="bg-white border border-slate-200/60 px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 text-slate-500 shadow-sm">
+              <span className="text-slate-900 font-black text-base">{subjects.length}</span> Total
             </div>
-            <div className="field">
-              <label>Code *</label>
-              <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. MTH101-Q1" required />
+            <div className="bg-white border border-slate-200/60 px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 text-slate-500 shadow-sm">
+              <span className="text-emerald-600 font-black text-base">{published}</span> Live
             </div>
-            <div className="field">
-              <label>Term *</label>
-              <input className="input" value={form.term} onChange={(e) => setForm({ ...form, term: e.target.value })} placeholder="e.g. 2026-T1" required />
-            </div>
-            <div className="field">
-              <label>Duration (mins) *</label>
-              <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
+            <div className="bg-white border border-slate-200/60 px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-2 text-slate-500 shadow-sm">
+              <span className="text-teal-600 font-black text-base">{drafts}</span> Draft
             </div>
           </div>
-          
-          <div className="field">
-            <label>Assessment Type *</label>
-            <select className="select" value={form.is_assignment ? "assignment" : form.mode} onChange={(e) => {
-              const val = e.target.value;
-              if (val === "assignment") {
-                setForm({ ...form, mode: "test", is_assignment: true });
-              } else {
-                setForm({ ...form, mode: val, is_assignment: false });
-              }
-            }}>
-              <option value="test">Class Test (Tier 2)</option>
-              <option value="quiz">Class Quiz (Tier 2)</option>
-              <option value="assignment">Take-Home Assignment (Tier 3)</option>
-            </select>
-            <div style={{ padding: "0.75rem", marginTop: "0.75rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", fontSize: "0.85rem", color: "var(--color-muted)" }}>
-              {form.is_assignment 
-                ? "📚 Students will download this assignment to their app and complete it offline at home." 
-                : "💻 Students will take this assessment in class using the school Wi-Fi network."}
+        </motion.div>
+
+        {subjects.length === 0 ? (
+          <motion.div variants={itemVariants} className="mt-4">
+            <div className="flex flex-col items-center justify-center py-20 px-4 border border-dashed border-slate-200 rounded-[32px] bg-white/50 text-center">
+              <div className="bg-slate-50 p-4 rounded-full mb-4">
+                <EmptyBoxIcon width="32" height="32" className="text-slate-400" />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">No Exams Assigned</h3>
+              <p className="text-slate-500 text-sm max-w-sm">You don't have any exams yet. Contact your operator to get assigned to a subject.</p>
             </div>
+          </motion.div>
+        ) : (
+          <motion.div variants={containerVariants} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {subjects.map((s) => {
+              const qCount = questionCounts[Number(s.id)] ?? "…";
+              const isLive = Boolean(s.is_published);
+              return (
+                <motion.div 
+                  key={s.id} 
+                  variants={itemVariants}
+                  whileHover={{ y: -6, transition: { duration: 0.2 } }}
+                  className="bg-white border border-slate-100 rounded-[28px] p-6 flex flex-col gap-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:shadow-[0_20px_40px_rgb(0,0,0,0.08)] transition-shadow duration-300 relative overflow-hidden group"
+                >
+                  {/* Status Indicator Glow */}
+                  <div className={`absolute top-0 right-0 w-32 h-32 blur-3xl opacity-20 -mr-10 -mt-10 pointer-events-none transition-opacity group-hover:opacity-40 ${isLive ? 'bg-emerald-500' : 'bg-slate-400'}`} />
+
+                  <div className="flex items-center justify-between relative z-10">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${isLive ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-600'}`}>
+                      <SubjectIcon width="20" height="20" />
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-[10px] uppercase tracking-wider font-bold ${isLive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                      {isLive ? "Live" : "Draft"}
+                    </span>
+                  </div>
+                  
+                  <div className="flex-1 flex flex-col relative z-10">
+                    <h3 className="text-xl font-black text-slate-900 m-0 leading-snug tracking-tight line-clamp-2">{s.name}</h3>
+                    
+                    <div className="flex items-center gap-2 mt-3">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 bg-slate-100 px-2 py-1 rounded-lg font-bold">{s.code}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-slate-500 bg-slate-100 px-2 py-1 rounded-lg font-bold">Term {s.term}</span>
+                    </div>
+
+                    <div className="flex flex-col gap-2 mt-5">
+                      <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                        <CalendarIcon width="14" height="14" className="opacity-60" />
+                        {s.exam_datetime ? new Date(s.exam_datetime).toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "Date TBA"}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                        <ClockIcon width="14" height="14" className="opacity-60" />
+                        {s.duration} mins
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 mt-4 pt-4 border-t border-slate-50/80">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        {qCount} Qs
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                        {s.total_score ?? 0} Marks
+                      </div>
+                      {isLive && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-500 ml-auto">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                          Locked
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-2 mt-2 relative z-10">
+                    <Link href={`/teacher/questions?subjectId=${s.id}${!isLive ? "&action=create" : ""}`} className="w-full text-center bg-slate-900 hover:bg-black text-white font-bold py-3.5 rounded-2xl transition-colors shadow-md text-sm">
+                      {isLive ? "View Questions" : "Manage Questions"}
+                    </Link>
+                    <div className="flex gap-2">
+                      <Link href={`/teacher/students?subjectId=${s.id}`} className="flex-1 flex items-center justify-center gap-2 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-bold py-3 rounded-2xl transition-colors text-xs">
+                        <UsersIcon width="14" height="14" /> Students
+                      </Link>
+                      <Link href="/teacher/results" className="flex-1 flex items-center justify-center gap-2 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-bold py-3 rounded-2xl transition-colors text-xs">
+                        <BookIcon width="14" height="14" /> Results
+                      </Link>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        )}
+
+        {/* Report Cards Section */}
+        <motion.div variants={itemVariants} className="mt-8 bg-white border border-slate-100 rounded-[32px] p-8 shadow-[0_8px_30px_rgb(0,0,0,0.03)]">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <div>
+              <h2 className="text-2xl font-black m-0 text-slate-900 tracking-tight">Report Cards</h2>
+              <p className="text-slate-500 text-sm mt-1">
+                Generate and print report cards for students who have completed exams
+              </p>
+            </div>
+            <button
+              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors self-start sm:self-auto"
+              onClick={() => loadReportStudents(subjectsRef.current)}
+              title="Refresh to see newly completed exams"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12a9 9 0 009-9 9 9 0 015.657 2.343"/>
+                <polyline points="21 3 21 9 15 9"/>
+                <path d="M21 12a9 9 0 01-9 9 9 9 0 01-5.657-2.343"/>
+              </svg>
+              Refresh
+            </button>
           </div>
 
-          <div className="modal-actions" style={{ marginTop: "1rem" }}>
-            <button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Creating..." : "Create Assessment"}</button>
-          </div>
-        </form>
-      </Modal>
-    </>
+          {reportLoading ? (
+            <div className="flex gap-4 overflow-hidden">
+              {[1, 2, 3].map((i) => <Skeleton key={i} width={240} height={80} borderRadius={20} />)}
+            </div>
+          ) : reportStudents.length === 0 ? (
+            <div className="bg-slate-50/50 rounded-2xl p-12 text-center flex flex-col items-center">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mb-4">
+                <ClipboardIcon width="24" height="24" className="text-slate-300" />
+              </div>
+              <p className="font-bold text-slate-900 mb-1">No completed exams yet</p>
+              <p className="text-sm text-slate-500">Students who have submitted exams will appear here.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
+              {reportStudents.map((st) => (
+                <motion.div
+                  key={st.student_user_id}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="bg-white border border-slate-100 hover:border-slate-300 shadow-sm hover:shadow-md rounded-[20px] p-4 flex items-center gap-4 cursor-pointer transition-colors"
+                  onClick={() => setReportCardStudent(st)}
+                >
+                  <div className="w-12 h-12 rounded-full bg-slate-900 text-white flex items-center justify-center font-black text-lg shrink-0">
+                    {String(st.student_name || "?").charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-sm truncate text-slate-900">{st.student_name}</div>
+                    <div className="text-xs text-slate-500 mt-1 font-medium">{st.grade || "—"} · {st.reg_id || ""}</div>
+                  </div>
+                  <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
+                    <DocumentIcon width="14" height="14" className="text-slate-400" />
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+    </div>
   );
 }

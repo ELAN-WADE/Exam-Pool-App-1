@@ -1,6 +1,7 @@
 /* ── Exam Page ───────────────────────────────────── */
 .page {
-  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
   background: #f8fafc;
   display: flex;
   flex-direction: column;
@@ -60,12 +61,13 @@
 .focusMode { grid-template-columns: 1fr 0; }
 .focusMode .sidePanel { display: none; }
 
-/* ── Question panel ────────────────────────────────── */
 .questionPanel {
   display: flex; flex-direction: column;
   overflow-y: hidden;
   border-right: 1px solid #e2e8f0;
   background: #f8fafc;
+  min-height: 0;
+  min-width: 0;
 }
 
 .questionScrollArea {
@@ -227,11 +229,14 @@
 
 /* ── Nav row ─────────────────────────────────────────── */
 .navRow {
-  display: flex; gap: 1rem; align-items: center; justify-content: center;
-  padding: 1.25rem 1.5rem;
-  background: #ffffff;
-  border-top: 1px solid #e2e8f0;
+  display: flex; gap: 1.5rem; align-items: center; justify-content: center;
+  padding: 1rem 0 0 0;
+  width: 100%;
+  max-width: 880px;
+  background: transparent;
+  border-top: none;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 /* ── Right sidebar ───────────────────────────────────── */
@@ -240,6 +245,8 @@
   background: #ffffff;
   overflow-y: auto;
   border-left: 1px solid #e2e8f0;
+  min-height: 0;
+  min-width: 0;
 }
 .sidePanelHeader {
   padding: 1.25rem 1.5rem;

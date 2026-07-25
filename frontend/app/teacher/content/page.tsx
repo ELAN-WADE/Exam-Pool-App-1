@@ -16,7 +16,6 @@ export default function TeacherContentPage() {
 function ContentLibrary() {
   const [packages, setPackages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -44,42 +43,6 @@ function ContentLibrary() {
   useEffect(() => {
     loadPackages();
   }, []);
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploading(true);
-    setError("");
-    setSuccess("");
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const token = localStorage.getItem("exampool_token");
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${API_BASE}/api/system/content/upload`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || "Failed to upload package");
-      }
-
-      setSuccess(`Successfully imported package: ${file.name}`);
-      await loadPackages();
-    } catch (err: any) {
-      setError("Import failed: " + err.message);
-    } finally {
-      setUploading(false);
-    }
-  };
 
   const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -154,86 +117,46 @@ function ContentLibrary() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "2rem" }}>
-        {/* Left Column: Installed Packages */}
+      <div style={{ maxWidth: "600px", margin: "0 auto" }}>
         <div>
-          <h3 style={{ fontSize: "1.1rem", marginBottom: "1rem" }}>Installed Packages</h3>
-          {packages.length === 0 ? (
-            <div className="card" style={{ textAlign: "center", padding: "3rem 1rem", background: "var(--color-surface-2)" }}>
-              <DocumentIcon width="40" height="40" style={{ color: "var(--color-muted)", margin: "0 auto 1rem" }} />
-              <p style={{ color: "var(--color-muted)" }}>No content packages installed.</p>
-            </div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {packages.map((pkg, idx) => (
-                <div key={idx} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <h4 style={{ margin: "0 0 0.25rem 0", fontSize: "1.05rem" }}>{pkg.exam_body} {pkg.year} - {pkg.subject}</h4>
-                    <div style={{ fontSize: "0.85rem", color: "var(--color-muted)", display: "flex", gap: "1rem" }}>
-                      <span>Version: {pkg.version}</span>
-                      <span>Questions: {pkg.content_count}</span>
-                    </div>
-                  </div>
-                  <span className="badge badge-success">Verified</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right Column: Upload */}
-        <div>
-          <h3 style={{ fontSize: "1.1rem", marginBottom: "1rem" }}>Import Package</h3>
-          <div className="card" style={{ padding: "1.5rem" }}>
-            <p style={{ fontSize: "0.85rem", color: "var(--color-muted)", marginBottom: "1.5rem", lineHeight: 1.5 }}>
-              Upload an encrypted <strong>.epkg</strong> file. The system will automatically decrypt it using your Master License File and insert the questions into the Content Bank.
-            </p>
-
-            <div style={{ border: "2px dashed var(--color-border)", padding: "2rem 1rem", borderRadius: "var(--radius-lg)", textAlign: "center", position: "relative", background: "var(--color-surface-2)", transition: "all 0.2s" }}>
-              <input
-                type="file"
-                accept=".epkg"
-                onChange={handleFileUpload}
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}
-                disabled={uploading}
-              />
-              <DocumentIcon width="32" height="32" style={{ color: "var(--color-primary)", margin: "0 auto 0.5rem" }} />
-              <div style={{ fontWeight: 600, color: "var(--color-text)", fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-                {uploading ? "Decrypting package..." : "Select .epkg file"}
-              </div>
-            </div>
-          </div>
-
-          <h3 style={{ fontSize: "1.1rem", marginBottom: "1rem", marginTop: "2rem" }}>Import PDF (Auto-Parse)</h3>
+          <h3 style={{ fontSize: "1.1rem", marginBottom: "1rem" }}>Import PDF (Auto-Parse)</h3>
           <div className="card" style={{ padding: "1.5rem" }}>
             <p style={{ fontSize: "0.85rem", color: "var(--color-muted)", marginBottom: "1rem", lineHeight: 1.5 }}>
               Upload a standard PDF of past questions. The system will extract the text, identify questions and options, and insert them into the bank automatically.
             </p>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "1rem", marginBottom: "1.5rem" }}>
               <div>
-                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.25rem", display: "block" }}>Exam Body</label>
-                <select className="input" value={pdfMeta.exam_body} onChange={e => setPdfMeta({...pdfMeta, exam_body: e.target.value})}>
+                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.4rem", display: "block", fontWeight: 600, textTransform: "uppercase" }}>Exam Body</label>
+                <select className="input" value={pdfMeta.exam_body} onChange={e => setPdfMeta({...pdfMeta, exam_body: e.target.value})} style={{ width: "100%", padding: "0.75rem", borderRadius: "6px", border: "1px solid var(--color-border)" }}>
                   <option value="JAMB">JAMB</option>
                   <option value="WAEC">WAEC</option>
                   <option value="NECO">NECO</option>
                   <option value="NABTEB">NABTEB</option>
                 </select>
               </div>
+              
               <div>
-                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.25rem", display: "block" }}>Subject Code (e.g. MTH, PHY, CHM)</label>
-                <input type="text" className="input" placeholder="Subject Code (e.g. MTH)" value={pdfMeta.subject_code} onChange={e => setPdfMeta({...pdfMeta, subject_code: e.target.value.toUpperCase()})} />
+                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.4rem", display: "block", fontWeight: 600, textTransform: "uppercase" }}>Subject Code</label>
+                <input type="text" className="input" placeholder="e.g. MTH, ENG, PHY" value={pdfMeta.subject_code} onChange={e => setPdfMeta({...pdfMeta, subject_code: e.target.value.toUpperCase()})} style={{ width: "100%", padding: "0.75rem", borderRadius: "6px", border: "1px solid var(--color-border)" }} />
               </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input type="number" className="input" placeholder="Year" value={pdfMeta.year} onChange={e => setPdfMeta({...pdfMeta, year: parseInt(e.target.value) || 2024})} />
-                <select className="input" value={pdfMeta.paper_type} onChange={e => setPdfMeta({...pdfMeta, paper_type: e.target.value})}>
-                  <option value="objective">Objective</option>
-                  <option value="theory">Theory</option>
-                </select>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                <div>
+                  <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.4rem", display: "block", fontWeight: 600, textTransform: "uppercase" }}>Year</label>
+                  <input type="number" className="input" placeholder="e.g. 2024" value={pdfMeta.year} onChange={e => setPdfMeta({...pdfMeta, year: parseInt(e.target.value) || 2024})} style={{ width: "100%", padding: "0.75rem", borderRadius: "6px", border: "1px solid var(--color-border)" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.4rem", display: "block", fontWeight: 600, textTransform: "uppercase" }}>Paper Type</label>
+                  <select className="input" value={pdfMeta.paper_type} onChange={e => setPdfMeta({...pdfMeta, paper_type: e.target.value})} style={{ width: "100%", padding: "0.75rem", borderRadius: "6px", border: "1px solid var(--color-border)" }}>
+                    <option value="objective">Objective</option>
+                    <option value="theory">Theory</option>
+                  </select>
+                </div>
               </div>
             </div>
 
-            <div style={{ border: "2px dashed var(--color-border)", padding: "1.5rem 1rem", borderRadius: "var(--radius-lg)", textAlign: "center", position: "relative", background: "var(--color-surface-2)", transition: "all 0.2s" }}>
+            <div style={{ border: "2px dashed var(--color-primary)", padding: "2rem 1rem", borderRadius: "12px", textAlign: "center", position: "relative", background: "var(--color-primary-glow)", transition: "all 0.2s" }}>
               <input
                 type="file"
                 accept=".pdf"
@@ -241,10 +164,13 @@ function ContentLibrary() {
                 style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}
                 disabled={uploadingPdf || !pdfMeta.exam_body || !pdfMeta.subject_code}
               />
-              <DocumentIcon width="24" height="24" style={{ color: "var(--color-primary)", margin: "0 auto 0.5rem" }} />
-              <div style={{ fontWeight: 600, color: "var(--color-text)", fontSize: "0.9rem" }}>
-                {uploadingPdf ? "Parsing PDF..." : "Select .pdf file"}
+              <DocumentIcon width="36" height="36" style={{ color: "var(--color-primary)", margin: "0 auto 0.75rem" }} />
+              <div style={{ fontWeight: 700, color: "var(--color-primary)", fontSize: "1rem" }}>
+                {uploadingPdf ? "Parsing PDF... Please wait" : "Click or Drag to Upload PDF"}
               </div>
+              <p style={{ fontSize: "0.75rem", color: "var(--color-primary)", marginTop: "0.5rem", opacity: 0.8 }}>
+                Must be a standard numbered PDF format.
+              </p>
             </div>
           </div>
         </div>

@@ -36,14 +36,16 @@ export async function validateMLF(jwt: string, currentHardwareFingerprint: strin
 
   if (header.alg !== 'RS256') throw new Error("MLF must be RS256");
 
-  // Validate Signature
-  // NOTE: Mocking subtle crypto verification for the architectural scaffolding
-  // Since new Uint8Array(256) is an invalid SPKI, importKey will throw.
-  // We skip it for the mock.
+  // [SECURITY FIX VULN-01] Signature verification was mocked as `true`, meaning any JWT
+  // (including forged ones) passed validation. The real RSA path below must be wired up
+  // before production use. Until then, isValid = false ensures the guard below always fires
+  // and callers receive an explicit error rather than silently granted access.
+  //
+  // To activate real verification, uncomment the block below and supply a valid PUBLIC_KEY_PEM:
   // const key = await importPublicKey(PUBLIC_KEY_PEM);
   // const data = new TextEncoder().encode(parts[0] + '.' + parts[1]);
   // const isValid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, data);
-  const isValid = true; 
+  const isValid = false; // MOCK — signature NOT verified; replace with real crypto before production
 
   /** Shape of a decoded ExamPool Master License File payload */
   interface MLFPayload {

@@ -37,67 +37,63 @@
 
 /* ── Subject Card ─────────────────────────────────────── */
 .card {
-  background: var(--color-surface);
-  border: 1.5px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  padding: 0;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  border-radius: 24px;
+  padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-sm);
-  transition: all 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.05);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
   overflow: hidden;
   min-width: 0;
+  gap: 1.25rem;
 }
 .card:hover {
-  box-shadow: var(--shadow-xl);
-  border-color: var(--color-border-hover);
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.08);
   transform: translateY(-4px);
 }
-.cardLive  { border-color: rgba(5, 150, 105, 0.3); }
-.cardDraft { border-color: var(--color-border); }
+.cardLive  { }
+.cardDraft { }
 
 /* Top status strip removed per request */
 .cardTopStrip { display: none; }
 
 /* Card header */
 .cardHeader {
-  padding: 0.75rem 1rem 0.625rem;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface-2);
 }
 .subjectIconBox {
-  width: 40px; height: 40px;
-  background: var(--color-primary-glow);
+  width: 48px; height: 48px;
+  background: linear-gradient(135deg, rgba(15, 118, 110, 0.1), rgba(15, 118, 110, 0.05));
   color: var(--color-primary);
-  border: 1px solid rgba(15, 118, 110, 0.2);
-  border-radius: 10px;
+  border-radius: 16px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 3px 10px rgba(15, 118, 110, 0.1);
+  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.1);
 }
 .cardLive .subjectIconBox {
-  background: var(--color-success-bg);
+  background: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(5, 150, 105, 0.05));
   color: var(--color-success);
-  border-color: var(--color-success-border);
-  box-shadow: 0 3px 10px rgba(5, 150, 105, 0.1);
+  box-shadow: 0 4px 10px rgba(5, 150, 105, 0.1);
 }
 
 /* Card body */
 .cardBody {
-  padding: 0.875rem 1rem;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
 }
 .subjectName {
-  font-size: 1rem;
+  font-size: 1.15rem;
   font-weight: 800;
-  color: var(--color-text);
+  color: #0f172a;
   line-height: 1.3;
   letter-spacing: -0.02em;
   margin: 0;
@@ -107,47 +103,48 @@
 }
 .codeRow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .code {
-  font-size: 0.7rem;
-  color: var(--color-muted);
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border);
-  padding: 0.175rem 0.5rem;
-  border-radius: var(--radius-xs);
+  font-size: 0.75rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border: none;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
 /* Meta section */
-.meta { display: flex; flex-direction: column; gap: 0.375rem; margin-top: 0.125rem; }
+.meta { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
 .metaRow {
-  display: flex; align-items: center; gap: 0.4rem;
-  font-size: 0.8rem; color: var(--color-muted); font-weight: 500;
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.85rem; color: #475569; font-weight: 500;
 }
-.metaRow svg { flex-shrink: 0; opacity: 0.8; }
+.metaRow svg { flex-shrink: 0; opacity: 0.7; }
 
 /* Meta badges */
-.metaBadges { display: flex; gap: 0.375rem; flex-wrap: wrap; margin-top: 0.375rem; }
+.metaBadges { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
 .metaBadge {
-  display: inline-flex; align-items: center; gap: 0.3rem;
-  background: var(--color-surface-2);
-  border-radius: var(--radius-xs);
-  border: 1px solid var(--color-border);
-  padding: 0.2rem 0.5rem;
-  font-size: 0.7rem; font-weight: 700; color: var(--color-text);
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem; font-weight: 700; color: #334155;
+  transition: all 0.2s ease;
 }
+.metaBadge:hover { background: #f1f5f9; border-color: #cbd5e1; }
 
 /* Card footer actions */
 .cardActions {
-  padding: 0.75rem 1rem;
-  border-top: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  background: var(--color-surface-2);
+  gap: 0.75rem;
+  margin-top: auto;
 }
-.actionRow { display: flex; gap: 0.5rem; }
-.actionBtn    { width: 100%; justify-content: center; font-size: 0.875rem; }
-.actionBtnSm  { flex: 1; justify-content: center; font-size: 0.8rem; }
+.actionRow { display: flex; gap: 0.75rem; }
+.actionBtn    { width: 100%; justify-content: center; font-size: 0.9rem; padding: 0.75rem; border-radius: 12px; }
+.actionBtnSm  { flex: 1; justify-content: center; font-size: 0.85rem; padding: 0.6rem; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; font-weight: 600; }
+.actionBtnSm:hover { background: #f1f5f9; color: #0f172a; border-color: #cbd5e1; }
 
 /* ── Error state ──────────────────────────────────────── */
 .errorState {
@@ -161,16 +158,13 @@
 
 /* ── Responsive ───────────────────────────────────────── */
 @media (max-width: 1280px) {
-  .grid { grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+  .grid { grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
 }
 @media (max-width: 960px) {
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 1.25rem; }
 }
 @media (max-width: 640px) {
-  .grid { grid-template-columns: 1fr; gap: 0.875rem; }
-  .card { border-radius: var(--radius-lg); }
-  .cardHeader { padding: 0.875rem 1rem; }
-  .cardBody   { padding: 0.875rem 1rem; }
-  .cardActions { padding: 0.875rem 1rem; }
+  .grid { grid-template-columns: 1fr; gap: 1rem; }
+  .card { padding: 1.25rem; }
   .pills { gap: 0.4rem; }
 }

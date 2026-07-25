@@ -85,7 +85,12 @@ const securityHeaders = {
   "X-Frame-Options": "DENY",
   "X-Content-Type-Options": "nosniff",
   "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:;"
+  // [SECURITY FIX VULN-03] Removed 'unsafe-eval' (not needed in production builds).
+  // Tightened connect-src from 'http: https:' (any origin) to 'self' + WS only.
+  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' ws: wss:;",
+  // [SECURITY FIX VULN-08] Added Permissions-Policy and Referrer-Policy
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
 };
 
 const corsHeaders = {
@@ -725,10 +730,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!identifier) return apiError(400, "Identifier required");
     const normalizedIdentifier = identifier.includes("@") ? normalizeEmail(identifier) : identifier.toUpperCase();
     const user = queries.getUserByEmailOrReg.get(normalizedIdentifier, normalizedIdentifier) as any;
-    // [SECURITY FIX] Return same generic response regardless of whether account exists
-    // to prevent user enumeration oracle.
+    // [SECURITY FIX VULN-04] Always return the same response shape regardless of whether
+    // the account exists or is active. Previously, found users returned `{ role }` while
+    // missing users returned `{ found: true }` — the asymmetry allowed an attacker to
+    // enumerate valid usernames and roles by inspecting the response body.
     if (!user || sqlInt(user.is_active) !== 1) return apiSuccess({ found: true });
-    return apiSuccess({ role: user.role });
+    return apiSuccess({ found: true });
   }
 
   if (method === "POST" && pathname === "/api/auth/reset-password") {
@@ -1235,7 +1242,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const q_session = trimStr(body?.session) || null;
     const q_term = trimStr(body?.term) || null;
     const q_mode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : "exam";
-    const image_url = trimStr(body?.image_url) || null;
+    // [SECURITY FIX VULN-02] Validate image_url against an allowed prefix allowlist.
+    // An unrestricted URL field is a stored XSS / SSRF vector if the frontend renders it
+    // via <img src> or if the server ever fetches it. Only relative /uploads/ paths are allowed.
+    const rawImageUrl = trimStr(body?.image_url);
+    if (rawImageUrl && !rawImageUrl.startsWith("/uploads/")) {
+      return apiError(400, "image_url must be a relative /uploads/ path");
+    }
+    const image_url = rawImageUrl || null;
     // Pad options to 4 elements for DB consistency (true_false gets 2 real + 2 empty)
     const paddedOptions = options.length < 4
       ? [...options, ...Array(4 - options.length).fill("")]
@@ -1255,7 +1269,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         teacher_answer,
         image_url,
         body?.is_file_upload !== undefined ? Number(body.is_file_upload) : 0,
-        body?.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || null) : null
+        // [SECURITY FIX VULN-02] Restrict attached_file_url to /uploads/ paths
+        (() => { const u = body?.attached_file_url !== undefined ? trimStr(body.attached_file_url) : ""; if (u && !u.startsWith("/uploads/")) throw new HttpError(400, "attached_file_url must be a relative /uploads/ path"); return u || null; })()
       );
       // Always recompute total_score from source of truth
       queries.updateSubjectTotalScore.run(Number(subject_id), Number(subject_id));
@@ -1313,10 +1328,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       return apiError(400, "marks must be a positive integer");
     }
     const nextTAnswer = body.teacher_answer !== undefined ? (trimStr(body.teacher_answer) || null) : (question.teacher_answer || null);
-    const nextImg = body.image_url !== undefined ? (trimStr(body.image_url) || null) : (question.image_url || null);
+    // [SECURITY FIX VULN-02] Same /uploads/ allowlist as question creation.
+    const rawNextImg = body.image_url !== undefined ? trimStr(body.image_url) : (question.image_url || "");
+    if (rawNextImg && !rawNextImg.startsWith("/uploads/")) {
+      return apiError(400, "image_url must be a relative /uploads/ path");
+    }
+    const nextImg = rawNextImg || null;
     db.transaction(() => {
       const nextIsFileUpload = body.is_file_upload !== undefined ? Number(body.is_file_upload) : Number(question.is_file_upload ?? 0);
-      const nextAttachedFileUrl = body.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || null) : (question.attached_file_url || null);
+      // [SECURITY FIX VULN-02] Restrict attached_file_url to /uploads/ paths on edit too
+      const rawAttachedUrl = body.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || "") : (question.attached_file_url || "");
+      if (rawAttachedUrl && !rawAttachedUrl.startsWith("/uploads/")) throw new HttpError(400, "attached_file_url must be a relative /uploads/ path");
+      const nextAttachedFileUrl = rawAttachedUrl || null;
       queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, nextIsFileUpload, nextAttachedFileUrl, questionId);
       // Recompute total_score since marks may have changed
       queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
@@ -1970,7 +1993,16 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (method === "POST" && pathname === "/api/settings/import") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
+    // [SECURITY FIX VULN-10] Check Content-Length BEFORE buffering the entire body into memory.
+    // Without this check a client could send a multi-GB payload that fills server RAM before
+    // the 'Invalid SQLite file' rejection ever fires.
+    const IMPORT_MAX_BYTES = 52 * 1024 * 1024; // 52 MB
+    const contentLength = Number(req.headers.get("content-length"));
+    if (contentLength && contentLength > IMPORT_MAX_BYTES) {
+      return apiError(413, "Payload Too Large — max import size is 52 MB");
+    }
     const buffer = new Uint8Array(await req.arrayBuffer());
+    if (buffer.byteLength > IMPORT_MAX_BYTES) return apiError(413, "Payload Too Large — max import size is 52 MB");
     const magic = new TextDecoder().decode(buffer.slice(0, 16));
     if (!magic.startsWith("SQLite format 3")) return apiError(400, "Invalid SQLite file");
     
@@ -2214,7 +2246,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     // License file controls feature access for the entire school.
     // Teachers must NOT be able to modify it — operator-only.
     requireRole(auth.role, ["operator"]);
-    const body = await req.json();
+    const body = await readJson(req);
+    // [SECURITY FIX VULN-05] Validate that the body has a jwt string before writing to disk.
+    // Previously any arbitrary JSON could be written, potentially crashing the license validator
+    // or injecting unexpected keys into the license file.
+    if (!body || typeof body !== "object" || (typeof body.jwt !== "string" && typeof body.token !== "string" && typeof body.key !== "string")) {
+      return apiError(400, "Invalid license payload: must be a JSON object containing a 'jwt', 'token', or 'key' string field");
+    }
     await Bun.write("license.json", JSON.stringify(body, null, 2));
     auditLog(auth.userId, "LICENSE_UPDATE", "system", null, "{}");
     return apiSuccess({ success: true });
@@ -2334,10 +2372,17 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       if (buffer.byteLength > 10 * 1024 * 1024) throw new HttpError(400, "PDF file exceeds 10MB limit");
       let text = "";
       const origWarn = console.warn;
-      console.warn = (...args: any[]) => {
-        if (typeof args[0] === "string" && args[0].includes("standardFontDataUrl")) return;
-        origWarn(...args);
+      const origError = console.error;
+      const origLog = console.log;
+      
+      const suppress = (...args: any[]) => {
+        const msg = args.map(a => (a && a.toString ? a.toString() : String(a))).join(" ");
+        return msg.includes("standardFontDataUrl");
       };
+
+      console.warn = (...args: any[]) => { if (!suppress(...args)) origWarn(...args); };
+      console.error = (...args: any[]) => { if (!suppress(...args)) origError(...args); };
+      console.log = (...args: any[]) => { if (!suppress(...args)) origLog(...args); };
       try {
         const m = await import("pdf-parse");
         if (m.PDFParse) {
@@ -2359,6 +2404,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         throw new HttpError(500, "PDF parsing failed: " + e.message);
       } finally {
         console.warn = origWarn;
+        console.error = origError;
+        console.log = origLog;
       }
 
       // Extract metadata from form and standardize exam_body
