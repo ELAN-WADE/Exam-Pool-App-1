@@ -2332,42 +2332,84 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       const buffer = Buffer.from(await (file as File).arrayBuffer());
       // [SECURITY FIX] Limit PDF upload size to prevent memory exhaustion
       if (buffer.byteLength > 10 * 1024 * 1024) throw new HttpError(400, "PDF file exceeds 10MB limit");
-      if (!pdfParse) throw new HttpError(500, "PDF parsing is not available on this server");
-      const data = await pdfParse(buffer);
-      const text = data.text;
+      let text = "";
+      try {
+        const m = await import("pdf-parse");
+        if (m.PDFParse) {
+          const uint8Array = new Uint8Array(buffer);
+          const parser = new m.PDFParse(uint8Array);
+          const data = await parser.getText();
+          text = data.text;
+        } else if (typeof m.default === "function") {
+          const data = await m.default(buffer);
+          text = data.text;
+        } else if (typeof m === "function") {
+          const data = await (m as any)(buffer);
+          text = data.text;
+        } else {
+          throw new Error("Could not determine pdf-parse export format");
+        }
+      } catch (e: any) {
+        console.error("PDF Parse error:", e);
+        throw new HttpError(500, "PDF parsing failed: " + e.message);
+      }
 
-      // Extract metadata from form
-      const exam_body = formData.get("exam_body")?.toString() || "UNKNOWN";
+      // Extract metadata from form and standardize/validate exam_body
+      let exam_body = (formData.get("exam_body")?.toString() || "").trim().toUpperCase();
+      if (!["JAMB", "WAEC", "NECO", "NABTEB"].includes(exam_body)) {
+        throw new HttpError(400, `Invalid exam body '${exam_body || "empty"}'. Must be one of: JAMB, WAEC, NECO, NABTEB.`);
+      }
+
       const year = parseInt(formData.get("year")?.toString() || "2024", 10);
       const subject_code = formData.get("subject_code")?.toString() || "GEN";
       const paper_type = formData.get("paper_type")?.toString() || "objective";
 
-      // Basic regex parsing for questions (Assuming format: 1. Question text A. Option B. Option)
+      // Improved regex parsing for questions and dynamic year extraction
       const questions: any[] = [];
-      const lines = text.split('\n').filter((l: string) => l.trim().length > 0);
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
       
       let currentQuestion: any = null;
       let currentOptions: string[] = [];
+      let currentYear = year; // Default to metadata year, but dynamically update as we scan headers
 
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (/^(Q?\d+[\.\)])\s+/.test(line)) {
+        const line = lines[i];
+
+        // 1. Detect dynamic year headers (e.g. "Physics 1983", "1983 Questions", or just a year "1983")
+        // Check if the line is short (under 40 characters) and contains a valid year.
+        if (line.length < 40 && !/^(\d+[\.\)])\s+/.test(line) && !/^([A-E][\.\)]|\([A-E]\)|\[[A-E]\])\s+/.test(line)) {
+          const yearMatch = line.match(/\b(19\d{2}|20\d{2})\b/);
+          if (yearMatch) {
+            const parsedYear = parseInt(yearMatch[1], 10);
+            if (parsedYear >= 1970 && parsedYear <= 2030) {
+              currentYear = parsedYear;
+            }
+          }
+        }
+        
+        // 2. Detect numbered question starts
+        if (/^(\d+[\.\)])\s+/.test(line) || /^Q\d+[\.\)]?\s+/.test(line)) {
           if (currentQuestion) {
             currentQuestion.options = currentOptions;
             questions.push(currentQuestion);
           }
           currentQuestion = {
-            question_text: line.replace(/^(Q?\d+[\.\)])\s+/, ""),
+            question_text: line.replace(/^(\d+[\.\)]|Q\d+[\.\)]?)\s+/, "").trim(),
             options: [],
             correct_answer: "A", // Default
             solution_text: "",
             difficulty: 3,
-            topic_tag: ""
+            topic_tag: "",
+            year: currentYear // Storing year dynamically detected or defaulted
           };
           currentOptions = [];
-        } else if (/^[A-E][\.\)]\s+/.test(line)) {
-          currentOptions.push(line.replace(/^[A-E][\.\)]\s+/, ""));
-        } else if (currentQuestion && currentOptions.length === 0) {
+        } 
+        // 3. Detect options like "A.", "(A)", "[A]"
+        else if (/^([A-E][\.\)]|\([A-E]\)|\[[A-E]\])\s+/.test(line)) {
+          currentOptions.push(line.replace(/^([A-E][\.\)]|\([A-E]\)|\[[A-E]\])\s+/, "").trim());
+        } 
+        // 4. Handle multi-line question text and option values
+        else if (currentQuestion && currentOptions.length === 0) {
           currentQuestion.question_text += " " + line;
         } else if (currentQuestion && currentOptions.length > 0) {
           currentOptions[currentOptions.length - 1] += " " + line;
@@ -2380,7 +2422,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
 
       if (questions.length === 0) {
-         throw new HttpError(400, "Could not extract any questions from the PDF. Please ensure it follows a standard numbered format (e.g. 1. Question... A. Option...).");
+         throw new HttpError(400, "Could not extract any questions from the PDF. Ensure it uses standard numbered format (e.g. 1. Question... A. Option...).");
       }
 
       const tx = db.transaction(() => {
@@ -2391,7 +2433,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         `);
         for (const q of questions) {
           insertStmt.run(
-            exam_body, year, subject_code, paper_type,
+            exam_body, q.year, subject_code, paper_type,
             q.question_text,
             JSON.stringify(q.options),
             q.correct_answer, q.solution_text, q.difficulty, q.topic_tag
