@@ -114,10 +114,10 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
       })
       .catch((e) => console.error("Failed to fetch notifications:", e));
 
-    // ── 2. SSE stream using fetch (supports Authorization header) ─────
-    const token = localStorage.getItem("exampool_token");
-    if (!token) return;
-
+    // ── 2. SSE stream — uses HttpOnly cookie via credentials: "include" ─────────
+    // [SECURITY FIX VULN-13] Removed localStorage.getItem("exampool_token"). The cookie is
+    // sent automatically when credentials: "include" is specified. Tokens in localStorage
+    // are readable by any XSS payload; HttpOnly cookies are not.
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -125,7 +125,7 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
       try {
         const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
         const response = await fetch(`${API_BASE}/api/notifications/stream`, {
-          headers: { Authorization: `Bearer ${token}` },
+          credentials: "include",
           signal: controller.signal,
         });
 

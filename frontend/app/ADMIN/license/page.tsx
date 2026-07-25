@@ -26,10 +26,10 @@ function LicenseDashboard() {
       // In a real scenario, this would call an API endpoint returning the decoded MLF and hardware fingerprint.
       // E.g., const res = await fetch('/api/admin/license');
       // For now, we simulate fetching the server's current state.
-      const token = localStorage.getItem("exampool_token");
+      // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie auth
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/system/license`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: "include",
       });
       if (!res.ok) {
         throw new Error("Failed to fetch license data");
@@ -60,14 +60,12 @@ function LicenseDashboard() {
       const text = await file.text();
       const payload = JSON.parse(text); // Expecting MLF JSON
 
-      const token = localStorage.getItem("exampool_token");
+      // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie auth
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/system/license`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
 

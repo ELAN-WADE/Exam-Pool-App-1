@@ -441,7 +441,9 @@ async function serveStatic(urlPath: string): Promise<Response> {
 }
 
 function isApiExemptWhileSetup(pathname: string, method: string): boolean {
-  if (method === "GET" && pathname === "/api/server-info") return true;
+  // [SECURITY FIX VULN-14] /api/server-info is no longer exempt from auth.
+  // It leaked internal IPs, port, and version string to unauthenticated callers.
+  // The setup wizard uses /api/setup (POST) which is still exempt below.
   if (method === "POST" && (pathname === "/api/setup" || pathname === "/api/setup/complete")) return true;
   return false;
 }
@@ -555,12 +557,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "GET" && pathname === "/api/server-info") {
+    // [SECURITY FIX VULN-14] Require authentication — prevents unauthenticated network enumeration.
+    // Also removed version string to prevent version-based CVE targeting.
+    requireAuth(req);
     const interfaces = os.networkInterfaces();
     const ips: string[] = [];
     for (const addresses of Object.values(interfaces)) {
       for (const a of addresses || []) if (a.family === "IPv4" && !a.internal) ips.push(a.address);
     }
-    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 3000), version: "1.2.0" });
+    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 3000) });
   }
 
   if (method === "POST" && (pathname === "/api/setup" || pathname === "/api/setup/complete")) {
@@ -719,7 +724,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (method === "POST" && pathname === "/api/auth/logout") {
     const auth = requireAuth(req);
     auditLog(auth.userId, "LOGOUT", "user", auth.userId, "{}");
-    return apiMessage("Logged out", 200, { "Set-Cookie": "__exampool_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" });
+    return apiMessage("Logged out", 200, { "Set-Cookie": "__exampool_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
   }
 
   if (method === "POST" && pathname === "/api/auth/reset-password/verify-email") {
@@ -2611,6 +2616,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator", "teacher"]);
     const q = url.searchParams.get("q");
     if (!q) return apiError(400, "Query string 'q' required");
+    // [SECURITY FIX] Cap FTS query length — prevents pathological SQLite FTS patterns
+    if (q.length > 200) return apiError(400, "Query string too long (max 200 chars)");
     const results = queries.searchContentBank.all(q);
     return apiSuccess({ results });
   }

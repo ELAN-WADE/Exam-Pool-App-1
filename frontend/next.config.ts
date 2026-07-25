@@ -19,11 +19,14 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
+  // [SECURITY FIX VULN-16] ESLint and TypeScript errors are no longer silenced.
+  // Suppressing them hid security-relevant type errors during production builds.
+  // Fix any build errors that surface rather than suppressing them here.
   eslint: {
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: false,
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   experimental: {
     cpus: 1,

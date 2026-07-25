@@ -219,11 +219,12 @@ export const api = {
   uploadFile: async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    // Uses native fetch directly because fetchWithAuth defaults to application/json
-    const token = localStorage.getItem("exampool_token");
+    // [SECURITY FIX VULN-13] Use credentials: "include" so the HttpOnly session cookie
+    // is sent automatically. Removed localStorage.getItem("exampool_token") — storing
+    // JWTs in localStorage exposes them to any XSS, including VULN-12 payloads.
     const res = await fetch(process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/api/upload` : "/api/upload", {
       method: "POST",
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
       body: formData,
     });
     if (!res.ok) throw new Error("Upload failed");

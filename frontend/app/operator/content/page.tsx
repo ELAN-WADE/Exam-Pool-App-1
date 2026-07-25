@@ -25,10 +25,10 @@ function ContentLibrary() {
 
   const loadPackages = async () => {
     try {
-      const token = localStorage.getItem("exampool_token");
+      // [SECURITY FIX VULN-13] credentials:include uses HttpOnly cookie — not localStorage token
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/sync/content/manifest`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: "include",
       });
       if (res.ok) {
         const data = await res.json();
@@ -57,13 +57,11 @@ function ContentLibrary() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const token = localStorage.getItem("exampool_token");
+      // [SECURITY FIX VULN-13] credentials:include — HttpOnly cookie auth
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/system/content/upload`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
+        credentials: "include",
         body: formData
       });
 
@@ -102,11 +100,11 @@ function ContentLibrary() {
       formData.append("subject_code", pdfMeta.subject_code);
       formData.append("paper_type", pdfMeta.paper_type);
 
-      const token = localStorage.getItem("exampool_token");
+      // [SECURITY FIX VULN-13] credentials:include — HttpOnly cookie auth
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/content/pdf-upload`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
         body: formData
       });
 

@@ -269,17 +269,16 @@ function ExamContent() {
 
   useEffect(() => {
     if (mode !== "in-progress" || !examId) return;
-    
-    const token = localStorage.getItem("exampool_token");
-    if (!token) return;
 
+    // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie auth.
+    // Previously read localStorage.getItem("exampool_token") which is XSS-accessible.
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
     let abortController = new AbortController();
 
     const connectSSE = async () => {
       try {
         const response = await fetch(`${API_BASE}/api/exams/${examId}/stream`, {
-          headers: { "Authorization": `Bearer ${token}` },
+          credentials: "include",
           signal: abortController.signal
         });
         if (!response.ok) return;
