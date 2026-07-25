@@ -6,10 +6,14 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReportCardModal } from "../../../components/teacher/ReportCardModal";
 import { api } from "../../../lib/api";
 import type { Subject, ExamResult, User } from "../../../lib/types";
-import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
+import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon, PlusIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { useToast } from "../../../hooks/useToast";
+import dynamic from "next/dynamic";
 import styles from "./page.module.css";
+
+const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
 
 export default function TeacherDashboardPage() {
   return (
@@ -29,6 +33,43 @@ function TeacherDashboard() {
   const [reportStudents, setReportStudents] = useState<ExamResult[]>([]);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportCardStudent, setReportCardStudent] = useState<ExamResult | null>(null);
+
+  // ── Create Assessment State ─────────────────────────────────────────
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState({ name: "", code: "", term: "", duration: "60", mode: "test", is_assignment: false });
+  const [saving, setSaving] = useState(false);
+  const { showToast } = useToast();
+
+  const handleCreateAssessment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.createSubject({
+        name: form.name,
+        code: form.code,
+        term: form.term,
+        duration: Number(form.duration),
+        exam_datetime: "", 
+        teacher_id: 0, 
+        mode: form.mode,
+        is_assignment: form.is_assignment ? 1 : 0,
+        can_retake: 1,
+      });
+      showToast("Successfully created assessment", "success");
+      setModalOpen(false);
+      setForm({ name: "", code: "", term: "", duration: "60", mode: "test", is_assignment: false });
+      
+      const subs = await api.getSubjects();
+      if (subs) {
+        subjectsRef.current = subs;
+        setSubjects(subs);
+      }
+    } catch (err: any) {
+      showToast(err.message || "Failed to create assessment", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ── Fetch report-card students (re-used on live refresh) ──────────────
   const loadReportStudents = useCallback(async (subs: Subject[], signal?: AbortSignal) => {
@@ -157,13 +198,18 @@ function TeacherDashboard() {
 
       <div className="pageHeader">
         <div>
-          <h1 className="pageTitle">My Subjects</h1>
+          <h1 className="pageTitle">My Subjects & Assessments</h1>
           <p className="pageSubtitle">Manage your exam content and student results</p>
         </div>
-        <div className={styles.pills}>
-          <span className={styles.pill}><span className={styles.pillNum}>{subjects.length}</span> Total</span>
-          <span className={styles.pill} style={{ '--accent': 'var(--color-success)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-success)" }}>{published}</span> Live</span>
-          <span className={styles.pill} style={{ '--accent': 'var(--color-primary)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-primary)" }}>{drafts}</span> Draft</span>
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+          <div className={styles.pills}>
+            <span className={styles.pill}><span className={styles.pillNum}>{subjects.length}</span> Total</span>
+            <span className={styles.pill} style={{ '--accent': 'var(--color-success)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-success)" }}>{published}</span> Live</span>
+            <span className={styles.pill} style={{ '--accent': 'var(--color-primary)' } as React.CSSProperties}><span className={styles.pillNum} style={{ color: "var(--color-primary)" }}>{drafts}</span> Draft</span>
+          </div>
+          <button className="btn btn-primary" onClick={() => setModalOpen(true)}>
+            <PlusIcon width="16" height="16" /> Create Assessment
+          </button>
         </div>
       </div>
 
@@ -184,6 +230,13 @@ function TeacherDashboard() {
                 <span className={`badge ${isLive ? "badge-success" : "badge-muted"}`}>
                   {isLive ? "● Live" : "Draft"}
                 </span>
+                {s.is_assignment === 1 ? (
+                   <span className="badge badge-info" style={{ marginLeft: "0.5rem", background: "rgba(14, 165, 233, 0.1)", color: "var(--color-info)" }}>Assignment</span>
+                ) : s.mode === "test" || s.mode === "quiz" ? (
+                   <span className="badge badge-warning" style={{ marginLeft: "0.5rem", background: "rgba(245, 158, 11, 0.1)", color: "var(--color-warning)" }}>{s.mode.charAt(0).toUpperCase() + s.mode.slice(1)}</span>
+                ) : (
+                   <span className="badge badge-primary" style={{ marginLeft: "0.5rem", background: "rgba(79, 124, 255, 0.1)", color: "var(--color-primary)" }}>Exam</span>
+                )}
               </div>
 
               {/* Card Body */}
@@ -327,6 +380,58 @@ function TeacherDashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Create Assessment Modal ── */}
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="md">
+        <h2>Create Assessment</h2>
+        <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginBottom: "1.5rem" }}>Create a class test, quiz, or a take-home assignment.</p>
+        <form onSubmit={handleCreateAssessment} style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div className="field">
+              <label>Name *</label>
+              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Week 1 Quiz" required />
+            </div>
+            <div className="field">
+              <label>Code *</label>
+              <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. MTH101-Q1" required />
+            </div>
+            <div className="field">
+              <label>Term *</label>
+              <input className="input" value={form.term} onChange={(e) => setForm({ ...form, term: e.target.value })} placeholder="e.g. 2026-T1" required />
+            </div>
+            <div className="field">
+              <label>Duration (mins) *</label>
+              <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
+            </div>
+          </div>
+          
+          <div className="field">
+            <label>Assessment Type *</label>
+            <select className="select" value={form.is_assignment ? "assignment" : form.mode} onChange={(e) => {
+              const val = e.target.value;
+              if (val === "assignment") {
+                setForm({ ...form, mode: "test", is_assignment: true });
+              } else {
+                setForm({ ...form, mode: val, is_assignment: false });
+              }
+            }}>
+              <option value="test">Class Test (Tier 2)</option>
+              <option value="quiz">Class Quiz (Tier 2)</option>
+              <option value="assignment">Take-Home Assignment (Tier 3)</option>
+            </select>
+            <div style={{ padding: "0.75rem", marginTop: "0.75rem", background: "var(--color-surface-2)", borderRadius: "var(--radius-md)", fontSize: "0.85rem", color: "var(--color-muted)" }}>
+              {form.is_assignment 
+                ? "📚 Students will download this assignment to their app and complete it offline at home." 
+                : "💻 Students will take this assessment in class using the school Wi-Fi network."}
+            </div>
+          </div>
+
+          <div className="modal-actions" style={{ marginTop: "1rem" }}>
+            <button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Creating..." : "Create Assessment"}</button>
+          </div>
+        </form>
+      </Modal>
     </>
   );
 }

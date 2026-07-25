@@ -39,6 +39,7 @@ export interface Subject {
   exam_id?: number; // When active for student
   instructions?: string;
   is_assignment?: number; // 1 if offline-capable assignment
+  mode?: string; // "exam", "test", "quiz"
 }
 
 export interface ExamResult {

@@ -234,4 +234,8 @@ export const api = {
   getOfflineAssignments: () => fetchWithAuth<{ assignments: any[] }>("/api/offline/assignments"),
   /** Sync offline answers */
   syncOfflineAssignments: (exams: any[]) => fetchWithAuth<{ synced: number }>("/api/offline/sync", { method: "POST", body: JSON.stringify({ exams }) }),
+  /** Get system network and custom domain settings (Operator only) */
+  getSystemSettings: () => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings"),
+  /** Update custom domain URL (Operator only) */
+  updateSystemSettings: (data: { custom_url: string }) => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings", { method: "PUT", body: JSON.stringify(data) }),
 };

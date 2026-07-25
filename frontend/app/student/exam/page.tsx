@@ -568,11 +568,11 @@ function ExamContent() {
                     <p className={styles.questionText}>{current.question_text}</p>
 
                     {current.question_type === "essay" ? (
-                      <textarea
+                      <DebouncedTextarea
                         className={styles.essayTextarea}
                         placeholder="Write your answer here…"
                         value={(answers[current.id] as string) || ""}
-                        onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                        onChange={(val) => setAnswers((prev) => ({ ...prev, [current.id]: val }))}
                       />
                     ) : (
                       (() => {
@@ -580,13 +580,12 @@ function ExamContent() {
                         const validOpts = opts.filter(Boolean);
                         if (validOpts.length === 0) {
                           return (
-                            <input
-                              type="text"
+                            <DebouncedInput
                               className="input"
                               style={{ width: "100%", padding: "1rem", fontSize: "1rem", borderRadius: "var(--radius-lg)" }}
                               placeholder="Type your short answer..."
                               value={(answers[current.id] as string) || ""}
-                              onChange={(e) => setAnswers((prev) => ({ ...prev, [current.id]: e.target.value }))}
+                              onChange={(val) => setAnswers((prev) => ({ ...prev, [current.id]: val }))}
                             />
                           );
                         }
@@ -703,11 +702,45 @@ function ExamContent() {
   );
 }
 
-function safeOptions(optionsJson: string): string[] {
-  try {
-    const parsed = JSON.parse(optionsJson);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
+function safeOptions(jsonStr: string | null | undefined): string[] {
+  if (!jsonStr) return [];
+  try { return JSON.parse(jsonStr) as string[]; } catch { return []; }
+}
+
+function DebouncedTextarea({ value, onChange, placeholder, className }: { value: string, onChange: (val: string) => void, placeholder: string, className?: string }) {
+  const [text, setText] = useState(value);
+  const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setText(val);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onChange(val), 400);
+  };
+
+  return <textarea className={className} placeholder={placeholder} value={text} onChange={handleChange} />;
+}
+
+function DebouncedInput({ value, onChange, placeholder, className, style }: { value: string, onChange: (val: string) => void, placeholder: string, className?: string, style?: any }) {
+  const [text, setText] = useState(value);
+  const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    setText(value);
+  }, [value]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setText(val);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => onChange(val), 400);
+  };
+
+  return <input type="text" className={className} style={style} placeholder={placeholder} value={text} onChange={handleChange} />;
 }
 
 function formatTime(totalSeconds: number): string {

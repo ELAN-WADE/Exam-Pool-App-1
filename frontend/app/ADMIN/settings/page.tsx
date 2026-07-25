@@ -45,6 +45,10 @@ function SettingsContent() {
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
 
+  const [systemSettings, setSystemSettings] = useState<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean } | null>(null);
+  const [customUrlInput, setCustomUrlInput] = useState("");
+  const [savingDomain,   setSavingDomain]   = useState(false);
+
   const showToast = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
     setTimeout(() => setToast(null), 3200);
@@ -64,8 +68,27 @@ function SettingsContent() {
         }
       }),
       api.getAuditLogs().then((d: any) => setLogs(Array.isArray(d) ? d : [])).catch(() => setLogs([])),
+      api.getSystemSettings().then((sys) => {
+        setSystemSettings(sys);
+        setCustomUrlInput(sys.custom_url || "");
+      }).catch(() => {}),
     ]).finally(() => setLogsLoading(false));
   }, []);
+
+  const saveCustomUrl = async () => {
+    if (!customUrlInput.trim()) return;
+    setSavingDomain(true);
+    try {
+      const res = await api.updateSystemSettings({ custom_url: customUrlInput.trim() });
+      setSystemSettings(res);
+      setCustomUrlInput(res.custom_url);
+      showToast("success", `Custom domain published: ${res.custom_url}`);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Failed to publish domain");
+    } finally {
+      setSavingDomain(false);
+    }
+  };
 
   const handleLogoUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -305,10 +328,112 @@ function SettingsContent() {
         </div>
       </section>
 
+      {/* ── Network & Custom Domain (URL Masking) ───────────── */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Network & Custom Domain (URL Masking)</h2>
+        <div className="card" style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "1rem" }}>
+            <div style={{ padding: "0.75rem", background: "rgba(59, 130, 246, 0.1)", color: "var(--color-primary)", borderRadius: "var(--radius-lg)" }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </div>
+            <div style={{ flex: 1 }}>
+              <h3 style={{ fontSize: "1.05rem", fontWeight: 600, margin: "0 0 0.25rem 0" }}>Custom School URL</h3>
+              <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", margin: 0, lineHeight: 1.5 }}>
+                Allow students and teachers on the school Wi-Fi to type a clean URL (e.g., <code>exampool.ng</code>) instead of numerical IP addresses.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1.5rem" }}>
+            {/* Domain Input Area */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              <label style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--color-text)" }}>School Domain Name</label>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  value={customUrlInput}
+                  onChange={(e) => setCustomUrlInput(e.target.value)}
+                  placeholder="e.g. exampool.ng or myschool.edu.ng"
+                />
+                <button className="btn btn-primary" onClick={saveCustomUrl} disabled={savingDomain} style={{ whiteSpace: "nowrap" }}>
+                  {savingDomain ? "Publishing…" : "Publish"}
+                </button>
+              </div>
+              <p style={{ color: "var(--color-muted)", fontSize: "0.75rem", margin: 0 }}>
+                Enter the domain only. Do not include <code>http://</code> or trailing slashes.
+              </p>
+            </div>
+
+            {/* Network Status Area */}
+            <div style={{ background: "var(--color-surface-2)", borderRadius: "var(--radius-lg)", border: "1px solid var(--color-border)", padding: "1.25rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--color-muted)" }}>
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                  <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                  <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                </svg>
+                <h4 style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--color-muted)", textTransform: "uppercase", letterSpacing: "0.05em", margin: 0 }}>
+                  Server Status
+                </h4>
+              </div>
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", fontSize: "0.9rem" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "var(--color-muted)" }}>Local IPv4</span>
+                  <code style={{ background: "var(--color-surface-1)", padding: "0.2rem 0.4rem", borderRadius: "var(--radius-sm)", fontWeight: 500 }}>{systemSettings?.server_ip || "Detecting…"}</code>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "var(--color-muted)" }}>HTTP Port</span>
+                  <code style={{ background: "var(--color-surface-1)", padding: "0.2rem 0.4rem", borderRadius: "var(--radius-sm)", fontWeight: 500 }}>{systemSettings?.server_port || 8001}</code>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: "var(--color-muted)" }}>DNS Resolution</span>
+                  {systemSettings?.dns_active ? (
+                    <span className="badge badge-success">Active (Port 53)</span>
+                  ) : (
+                    <span className="badge badge-warning" title="Requires Administrator privileges to bind Port 53">Inactive</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Router Instructions Box */}
+          <div style={{ display: "flex", gap: "1rem", background: "rgba(59, 130, 246, 0.05)", borderRadius: "var(--radius-lg)", border: "1px solid rgba(59, 130, 246, 0.15)", padding: "1.25rem" }}>
+            <div style={{ color: "var(--color-primary)", flexShrink: 0, marginTop: "0.1rem" }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                <line x1="12" y1="20" x2="12.01" y2="20"></line>
+              </svg>
+            </div>
+            <div>
+              <h4 style={{ fontSize: "0.95rem", fontWeight: 600, color: "var(--color-text)", margin: "0 0 0.5rem 0" }}>Wi-Fi Router Setup Guide</h4>
+              <ol style={{ margin: 0, padding: "0 0 0 1.25rem", color: "var(--color-muted)", fontSize: "0.875rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                <li>Log into your school's Wi-Fi router admin portal (usually <code>192.168.1.1</code> or <code>192.168.8.1</code>).</li>
+                <li>Navigate to <strong>DHCP Settings</strong> and set the <strong>Primary DNS Server</strong> to <code>{systemSettings?.server_ip || "SERVER_IP"}</code>.</li>
+                <li>Ensure the ExamPool server is running with <strong>Administrator privileges</strong> to allow DNS routing.</li>
+                <li>Students connected to the Wi-Fi can now visit <code>http://{systemSettings?.custom_url || customUrlInput || "exampool.ng"}</code> to access the portal.</li>
+              </ol>
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
       {/* ── Server Info ──────────────────────────────────────── */}
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>Server Information</h2>
         <div className={`card ${styles.infoGrid}`}>
+          <div className={styles.infoRow}><span className={styles.infoKey}>Custom Domain</span><code className={styles.infoVal}>{systemSettings?.custom_url || "exampool.ng"}</code></div>
           <div className={styles.infoRow}><span className={styles.infoKey}>Server URL</span><code className={styles.infoVal}>{origin || "Loading…"}</code></div>
           <div className={styles.infoRow}><span className={styles.infoKey}>Organisation</span><span className={styles.infoVal}>{config.org_name || "—"}</span></div>
           <div className={styles.infoRow}><span className={styles.infoKey}>App Version</span><span className={styles.infoVal}>{config.version || "1.0.0"}</span></div>

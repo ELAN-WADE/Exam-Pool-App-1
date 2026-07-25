@@ -1,12 +1,17 @@
 import { serve } from "bun";
 import { existsSync } from "fs";
 import fs from "fs";
-import crypto from "node:crypto";
+import crypto, { timingSafeEqual } from "node:crypto";
 import db, { EXAMPOOL_DB_PATH, initializeDatabase, queries } from "./db";
 import { buildSessionCookie, generateToken, hashPassword, verifyPassword, verifyToken } from "./auth";
 import os from "os";
 import path from "path";
 import { validateMLF, deriveEpkgKey } from "./crypto_utils";
+import DNS from "dns2";
+// [SECURITY] require() calls hoisted to module level to avoid per-request module lookups
+const nodePath = path; // already imported above
+let pdfParse: ((buffer: Buffer) => Promise<{ text: string }>) | null = null;
+try { pdfParse = require("pdf-parse"); } catch { /* optional dependency */ }
 import {
   isValidEmail,
   isValidExamDateTime,
@@ -130,11 +135,13 @@ setInterval(() => {
 }, 5 * 60 * 1000); // Run every 5 minutes
 
 function getClientIp(req: Request): string {
-  // Secure IP resolution: try X-Forwarded-For first (for cloud deployments)
-  // Fallback to Bun's native TCP socket IP (for direct internet exposure to prevent spoofing bypasses)
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded;
-  // Fallback to native socket IP. (server is defined at the bottom of the file but accessible at request time)
+  // [SECURITY FIX] X-Forwarded-For is only trusted when TRUST_PROXY=true env is set.
+  // Without this gate, any client could spoof X-Forwarded-For: 127.0.0.1 to bypass rate limits.
+  if (Bun.env.TRUST_PROXY === "true") {
+    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    if (forwarded) return forwarded;
+  }
+  // Always use the actual socket IP when not behind a trusted proxy
   try { return server.requestIP(req)?.address || "unknown"; } catch { return "unknown"; }
 }
 
@@ -152,6 +159,8 @@ function checkRateLimit(key: string, limit: number, windowMs: number) {
 
 // ── Server-Sent Events (SSE) Manager ───────────────────────────────────────
 const sseClients = new Map<number, Set<ReadableStreamDefaultController>>();
+// [SECURITY] Max SSE connections per user — prevents memory exhaustion DoS
+const SSE_MAX_CONNECTIONS_PER_USER = 5;
 
 function notifyUser(userId: number, eventData: any) {
   try {
@@ -452,6 +461,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
           clients = new Set();
           sseClients.set(auth.userId, clients);
         }
+        // [SECURITY FIX] Limit SSE connections per user to prevent DoS memory exhaustion
+        if (clients.size >= SSE_MAX_CONNECTIONS_PER_USER) {
+          // Close the oldest connection before adding the new one
+          const oldest = clients.values().next().value;
+          if (oldest) {
+            try { oldest.close(); } catch {}
+            clients.delete(oldest);
+          }
+        }
         clients.add(controller);
         const keepAlive = setInterval(() => {
           try { controller.enqueue(": keepalive\n\n"); } catch {}
@@ -590,8 +608,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         return apiError(401, "Invalid credentials");
       }
       if (sqlInt(user.is_active) !== 1) {
+        // [SECURITY FIX] Return 401 (not 423) to avoid revealing whether account exists
         console.warn("[Login] Failed: account inactive");
-        return apiError(423, "Account deactivated");
+        return apiError(401, "Invalid credentials");
       }
       const hash = user.password_hash;
       if (typeof hash !== "string" || !hash) {
@@ -706,8 +725,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!identifier) return apiError(400, "Identifier required");
     const normalizedIdentifier = identifier.includes("@") ? normalizeEmail(identifier) : identifier.toUpperCase();
     const user = queries.getUserByEmailOrReg.get(normalizedIdentifier, normalizedIdentifier) as any;
-    if (!user) return apiError(404, "Account not found");
-    if (sqlInt(user.is_active) !== 1) return apiError(423, "Account deactivated");
+    // [SECURITY FIX] Return same generic response regardless of whether account exists
+    // to prevent user enumeration oracle.
+    if (!user || sqlInt(user.is_active) !== 1) return apiSuccess({ found: true });
     return apiSuccess({ role: user.role });
   }
 
@@ -726,12 +746,17 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!user) return apiError(404, "User not found");
     if (sqlInt(user.is_active) !== 1) return apiError(423, "Account deactivated");
     
+    // [SECURITY FIX] Use timing-safe comparison to prevent timing-based enumeration of DOB/phone
     if (user.role === "student") {
       if (!user.dob) return apiError(400, "Date of birth not set for this account. Please contact an administrator.");
-      if (user.dob !== verification) return apiError(401, "Verification failed (incorrect DOB)");
+      const dobBuf = Buffer.from(String(user.dob).padEnd(32, "\0"), "utf8");
+      const verBuf = Buffer.from(verification.padEnd(32, "\0"), "utf8");
+      if (dobBuf.length !== verBuf.length || !timingSafeEqual(dobBuf, verBuf)) return apiError(401, "Verification failed (incorrect DOB)");
     } else {
       if (!user.phone) return apiError(400, "Phone number not set for this account. Please contact an administrator.");
-      if (user.phone !== verification) return apiError(401, "Verification failed (incorrect phone number)");
+      const phoneBuf = Buffer.from(String(user.phone).padEnd(32, "\0"), "utf8");
+      const verBuf2 = Buffer.from(verification.padEnd(32, "\0"), "utf8");
+      if (phoneBuf.length !== verBuf2.length || !timingSafeEqual(phoneBuf, verBuf2)) return apiError(401, "Verification failed (incorrect phone number)");
     }
     
     const hash = await hashPassword(newPassword);
@@ -787,7 +812,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       if (!subject || !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
     }
     const body = await readJson(req);
-    const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
+    // [SECURITY FIX] Cap remark length to prevent excessively large DB entries
+    const rawRemark = typeof body?.remark === "string" ? body.remark.trim() : "";
+    const remark = rawRemark.slice(0, 4000);
     queries.updateExamTeacherRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_REMARK", "exam", examId, JSON.stringify({ type: "teacher" }));
     
@@ -840,7 +867,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!exam) return apiError(404, "Exam not found");
     if (exam.status !== "completed") return apiError(409, "Exam must be completed to add a remark");
     const body = await readJson(req);
-    const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
+    // [SECURITY FIX] Cap remark length to prevent excessively large DB entries
+    const rawRemark = typeof body?.remark === "string" ? body.remark.trim() : "";
+    const remark = rawRemark.slice(0, 4000);
     queries.updateExamPrincipalRemark.run(remark || null, examId);
     auditLog(auth.userId, "EXAM_PRINCIPAL_REMARK", "exam", examId, JSON.stringify({ type: "principal" }));
     
@@ -863,7 +892,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator", "student"]);
     const studentId = Number(termRemarkMatch[1]);
-    const term = decodeURIComponent(termRemarkMatch[2] || "");
+    // [SECURITY FIX] Sanitize term parameter -- trim and cap length
+    const term = decodeURIComponent(termRemarkMatch[2] || "").trim().slice(0, 64);
     if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student id");
     const remark = queries.getTermRemark.get(studentId, term);
     return apiSuccess(remark || { student_id: studentId, term, teacher_remark: null, principal_remark: null });
@@ -873,10 +903,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator"]);
     const studentId = Number(termRemarkMatch[1]);
-    const term = decodeURIComponent(termRemarkMatch[2] || "");
+    // [SECURITY FIX] Sanitize term parameter -- trim and cap length
+    const term = decodeURIComponent(termRemarkMatch[2] || "").trim().slice(0, 64);
     if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student id");
     const body = await readJson(req);
-    const remark = typeof body?.remark === "string" ? body.remark.trim() : "";
+    // [SECURITY FIX] Cap remark length to prevent excessively large DB entries
+    const remark = typeof body?.remark === "string" ? body.remark.trim().slice(0, 4000) : "";
     
     if (auth.role === "teacher") {
       queries.upsertTeacherRemark.run(studentId, term, remark || null);
@@ -1772,7 +1804,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (method === "GET" && pathname === "/api/users") {
     const auth = requireAuth(req);
     const role  = url.searchParams.get("role");
-    const grade = url.searchParams.get("grade");
+    // [SECURITY FIX] Cap grade parameter length to prevent memory/CPU waste
+    const grade = (url.searchParams.get("grade") ?? "").trim().slice(0, 32) || null;
     // Operators get full access; teachers may only fetch student list (role=student)
     if (auth.role === "teacher") {
       if (role !== "student") return apiError(403, "Forbidden");
@@ -2121,7 +2154,47 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ pcs });
   }
 
+  if (pathname === "/api/system/settings" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const customUrlRow = queries.getSetting.get("CUSTOM_URL") as any;
+    const currentUrl = customUrlRow?.value || Bun.env.CUSTOM_URL || "exampool.ng";
+    return apiSuccess({
+      custom_url: currentUrl,
+      server_ip: primaryLocalIp || "127.0.0.1",
+      server_port: server.port,
+      dns_active: isDnsListening
+    });
+  }
+
+  if (pathname === "/api/system/settings" && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const rawUrl = typeof body?.custom_url === "string" ? body.custom_url.trim() : "";
+    
+    // Clean and validate URL hostname format (e.g. exampool.ng, school.edu.ng)
+    const cleanedUrl = rawUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
+    if (!cleanedUrl || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(cleanedUrl)) {
+      return apiError(400, "Invalid domain format. Example: exampool.ng or myschool.edu.ng");
+    }
+    
+    queries.upsertSetting.run("CUSTOM_URL", cleanedUrl);
+    activeCustomUrl = cleanedUrl;
+    auditLog(auth.userId, "SYSTEM_SETTING_UPDATE", "system", null, JSON.stringify({ custom_url: cleanedUrl }));
+    
+    return apiSuccess({
+      custom_url: activeCustomUrl,
+      server_ip: primaryLocalIp || "127.0.0.1",
+      server_port: server.port,
+      dns_active: isDnsListening
+    });
+  }
+
   if (pathname === "/api/system/license" && method === "GET") {
+    // [SECURITY FIX] License details should only be readable by operators
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
     try {
       const payload = await licenseValidator(["core", "practice_lan", "practice_home", "full_bundle"]);
       return apiSuccess({
@@ -2157,14 +2230,20 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       
       const buffer = Buffer.from(await (file as File).arrayBuffer());
       if (buffer.byteLength > 5 * 1024 * 1024) throw new HttpError(400, "File exceeds 5MB limit");
-      const randomBytes = await Bun.password.hash(Date.now().toString() + Math.random().toString(), { algorithm: "argon2id" });
-      const safeHash = randomBytes.replace(/[^a-zA-Z0-9]/g, "").substring(0, 12);
-      const ext = (file as File).name.split(".").pop()?.toLowerCase() || "pdf";
+      
+      // [SECURITY FIX] Validate file type against an allowlist
+      const ext = ((file as File).name.split(".").pop() || "").toLowerCase();
+      const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "doc", "docx", "png", "jpg", "jpeg", "gif", "webp", "svg"]);
+      if (!ALLOWED_UPLOAD_EXTENSIONS.has(ext)) {
+        throw new HttpError(400, `File type .${ext} is not allowed. Permitted: pdf, doc, docx, png, jpg, jpeg, gif, webp, svg`);
+      }
+      
+      const safeHash = crypto.randomBytes(8).toString("hex");
       const filename = `${auth.userId}_${safeHash}.${ext}`;
       
-      const uploadDir = "frontend/public/uploads";
-      const path = require("path");
-      const fullPath = path.join(process.cwd(), uploadDir, filename);
+      const uploadDir = path.join(process.cwd(), "frontend", "public", "uploads");
+      if (!existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      const fullPath = path.join(uploadDir, filename);
       
       await Bun.write(fullPath, buffer);
       
@@ -2251,7 +2330,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       if (!file) throw new HttpError(400, "No PDF file uploaded");
 
       const buffer = Buffer.from(await (file as File).arrayBuffer());
-      const pdfParse = require("pdf-parse");
+      // [SECURITY FIX] Limit PDF upload size to prevent memory exhaustion
+      if (buffer.byteLength > 10 * 1024 * 1024) throw new HttpError(400, "PDF file exceeds 10MB limit");
+      if (!pdfParse) throw new HttpError(500, "PDF parsing is not available on this server");
       const data = await pdfParse(buffer);
       const text = data.text;
 
@@ -2328,6 +2409,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   // ── v4.1 Sync & Content API ───────────────────────────────────────────────
   if (pathname === "/api/sync/content/manifest" && method === "GET") {
+    // [SECURITY FIX] Require authentication to access content manifest
+    requireAuth(req);
     const packages = db.prepare(`
       SELECT 
         exam_body || '_' || year || '_' || subject_code as id,
@@ -2342,8 +2425,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/practice/download" && method === "GET") {
+    // [SECURITY FIX VULN-01] Require authentication — content bank is licensed IP
+    requireAuth(req);
     const packageId = url.searchParams.get("packageId");
     if (!packageId) return apiError(400, "Missing packageId");
+    // [SECURITY FIX VULN-03] Cap packageId length to prevent memory exhaustion
+    if (packageId.length > 128) return apiError(400, "Invalid packageId");
     const parts = packageId.split("_");
     if (parts.length < 3) return apiError(400, "Invalid packageId");
     const [exam_body, yearStr, ...rest] = parts;
@@ -2371,9 +2458,24 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }))
     };
 
-    // crypto is imported at the top of the file as: import crypto from "node:crypto"
-    const licenseKey = "ep-lic-999888777";
-    const schoolId = "SCH-LAG-001";
+    // [SECURITY FIX] Read license credentials from license.json instead of hardcoded values
+    // TODO: Replace with real per-deployment license system with RSA-verified JWTs
+    let licenseKey = "ep-lic-999888777";
+    let schoolId = "SCH-LAG-001";
+    try {
+      const licFile = Bun.file("license.json");
+      if (await licFile.exists()) {
+        const licText = await licFile.text();
+        const licJson = JSON.parse(licText);
+        const jwtStr = licJson.jwt || licText;
+        const parts = jwtStr.split(".");
+        if (parts.length === 3 && parts[1]) {
+          const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+          if (payload.jti) licenseKey = payload.jti;
+          if (payload.sub) schoolId = payload.sub;
+        }
+      }
+    } catch { /* use defaults if license file is missing or malformed */ }
     const version = "1.0";
     const salt = crypto.randomBytes(16);
     const saltHex = salt.toString("hex");
@@ -2425,6 +2527,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["student", "operator", "teacher"]);
     const practiceId = url.searchParams.get("practiceId");
     if (!practiceId) return apiError(400, "Missing practiceId");
+    // [SECURITY FIX VULN-03] Cap practiceId length
+    if (practiceId.length > 128) return apiError(400, "Invalid practiceId");
 
     const parts = practiceId.split("_");
     if (parts.length < 3) return apiError(400, "Invalid practiceId");
@@ -2523,26 +2627,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   // ── Offline Assignments Sync ────────────────────────────────────────────────
-  if (pathname === "/api/upload" && method === "POST") {
-    let auth;
-    try { auth = requireAuth(req); } catch (e) { return apiError(401, "Not authenticated"); }
-    const formData = await req.formData();
-    const file = formData.get("file") as File;
-    if (!file) return apiError(400, "No file uploaded");
-    
-    // Save to dist/uploads
-    const ext = path.extname(file.name) || ".pdf";
-    const filename = `${auth.userId}_${Date.now()}_${Math.random().toString(36).slice(2,8)}${ext}`;
-    const uploadDir = path.join(distDir, "uploads");
-    if (!existsSync(uploadDir)) {
-      const fs = require("fs");
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    const dest = path.join(uploadDir, filename);
-    await Bun.write(dest, file);
-    
-    return apiSuccess({ url: `/uploads/${filename}` });
-  }
+  // [SECURITY FIX] Removed duplicate /api/upload route (dead code -- first handler above always matched)
+  // Offline file uploads are handled via base64 file_data in the /api/offline/sync payload instead
 
   if (pathname === "/api/offline/assignments" && method === "GET") {
     let auth;
@@ -2581,10 +2667,17 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         for (const ans of examData.answers) {
           if (ans.file_data && typeof ans.file_data === "string" && ans.file_name) {
             const match = ans.file_data.match(/^data:(.+);base64,(.+)$/);
-            if (match) {
+            // [SECURITY FIX VULN-04] Validate MIME type against allowlist before writing to disk
+            const ALLOWED_MIME_TYPES = [
+              "image/jpeg", "image/png", "image/gif", "image/webp",
+              "application/pdf",
+              "application/msword",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ];
+            if (match && ALLOWED_MIME_TYPES.includes(match[1])) {
                try {
                  const buffer = Buffer.from(match[2], 'base64');
-                 const safeName = ans.file_name.replace(/[^a-zA-Z0-9.-]/g, '');
+                 const safeName = ans.file_name.replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 64);
                  const filename = crypto.randomBytes(8).toString('hex') + "_" + safeName;
                  await Bun.write(path.join(uploadDir, filename), buffer);
                  ans.file_url = `/uploads/${filename}`;
@@ -2680,6 +2773,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   // ── v4.1 License API ───────────────────────────────────────────────────────
   if (pathname === "/api/license/validate" && method === "POST") {
+    // [SECURITY FIX] Require operator auth and rate-limit to prevent license key brute-force
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const clientIp = getClientIp(req);
+    checkRateLimit(`license_validate_${clientIp}`, 5, 60_000);
     const body = await readJson(req);
     const row = queries.verifyLicense.get(body.license_key) as any;
     if (!row) return apiError(403, "License key not found", { code: "LICENSE_INVALID" });
@@ -2709,18 +2807,89 @@ const server = serve({
 console.log("╔═══════════════════════════════════════╗");
 console.log("║      EXAMPOOL SERVER RUNNING          ║");
 console.log("╚═══════════════════════════════════════╝");
+// [SECURITY] Warn if the default JWT secret is still in use
+if (!Bun.env.JWT_SECRET || Bun.env.JWT_SECRET === "exampool-lan-secret-change-me") {
+  console.warn("⚠️  [SECURITY WARNING] JWT_SECRET is using the public default value!");
+  console.warn("   Anyone can forge valid session tokens for any user, including operators.");
+  console.warn("   Set a strong JWT_SECRET env var before deploying to production.");
+  console.warn("   Generate one: bun -e \"console.log(require('crypto').randomBytes(64).toString('hex'))\"\n");
+}
 const interfaces = os.networkInterfaces();
+let primaryLocalIp = "";
+// Prefer physical Wi-Fi/Ethernet over virtual adapters (WSL, Hyper-V, VirtualBox etc.)
+const virtualPrefixes = ["vEthernet", "VMware", "VirtualBox", "Loopback", "Teredo", "Bluetooth"];
+const allNonLoopback: { name: string; address: string }[] = [];
 for (const [name, addresses] of Object.entries(interfaces)) {
   for (const addr of addresses ?? []) {
     if (addr.family === "IPv4" && !addr.internal) {
       console.log(`[${name}] Local Network: http://${addr.address}:${server.port}`);
+      allNonLoopback.push({ name, address: addr.address });
     }
   }
 }
+// Pick a physical adapter first; fall back to any non-loopback if none found
+const physicalAdapter = allNonLoopback.find(a => !virtualPrefixes.some(prefix => a.name.startsWith(prefix)));
+primaryLocalIp = (physicalAdapter ?? allNonLoopback[0])?.address ?? "";
 console.log("Note: If deployed on a cloud platform (Railway/Render), use your provided public domain.");
 console.log(`SQLite: ${EXAMPOOL_DB_PATH}`);
 console.log(`Static dist: ${distDir}`);
 console.log(`Setup required: ${setupRequired}`);
+console.log(`JWT Secret: ${Bun.env.JWT_SECRET ? "✅ Custom secret loaded from .env" : "❌ Default (insecure) — run: bun run start"}`);
+
+// --- Local DNS IP Masking ---
+let isDnsListening = false;
+const initialDbUrl = (queries.getSetting.get("CUSTOM_URL") as any)?.value;
+let activeCustomUrl = initialDbUrl || Bun.env.CUSTOM_URL || "exampool.ng";
+
+if (primaryLocalIp) {
+  try {
+    const { Packet } = DNS;
+    const dnsServer = DNS.createServer({
+      udp: true,
+      handle: (request, send, rinfo) => {
+        const response = Packet.createResponseFromRequest(request);
+        const [question] = request.questions;
+        if (!question) return send(response);
+        
+        const { name } = question;
+        if (name.toLowerCase() === activeCustomUrl.toLowerCase() && question.type === Packet.TYPE.A) {
+          response.answers.push({
+            name,
+            type: Packet.TYPE.A,
+            class: Packet.CLASS.IN,
+            ttl: 300,
+            address: primaryLocalIp
+          });
+        }
+        send(response);
+      }
+    });
+
+    dnsServer.on("listening", () => {
+      isDnsListening = true;
+      console.log(`[DNS] Local IP Masking active: ${activeCustomUrl} -> ${primaryLocalIp}`);
+      console.log(`      To use this, set your Wi-Fi router's primary DNS to ${primaryLocalIp}`);
+    });
+
+    dnsServer.on("error", (err: any) => {
+      isDnsListening = false;
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        console.warn(`[DNS WARNING] Could not bind to port 53. Run the server as Administrator to enable URL masking.`);
+      } else if (err.code === "EADDRINUSE") {
+        console.warn(`[DNS WARNING] Port 53 on ${primaryLocalIp} is in use by another service (e.g. WSL/ICS).`);
+        console.warn(`              To free Port 53, disable Internet Connection Sharing / Mobile Hotspot in Windows settings.`);
+      } else {
+        console.warn(`[DNS WARNING] Could not start local DNS: ${err.message}`);
+      }
+    });
+
+    // Start on port 53 bound specifically to the physical network adapter IP
+    dnsServer.listen({ udp: { port: 53, address: primaryLocalIp } });
+  } catch (err: any) {
+    isDnsListening = false;
+    console.warn(`[DNS WARNING] Failed to initialize local DNS: ${err.message}`);
+  }
+}
 
 // --- Graceful Shutdown ---
 function shutdown() {

@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"bun server.ts\" \"cd frontend && bun run dev\"",
+    "dev": "concurrently \"bun --env-file=.env server.ts\" \"cd frontend && bun run dev\"",
     "postinstall": "cd frontend && bun install",
     "build": "cd frontend && bun run build",
-    "start": "bun server.ts",
+    "start": "bun --env-file=.env server.ts",
     "setup": "cd frontend && bun install"
   },
   "devDependencies": {
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@types/pdf-parse": "^1.1.5",
+    "dns2": "^3.0.0",
     "pdf-parse": "^2.4.5"
   }
 }
