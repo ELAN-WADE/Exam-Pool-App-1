@@ -139,7 +139,6 @@ function ExamContent() {
   }, [seedTimer]);
 
   useEffect(() => {
-    if (!subjectId) { setError("Missing subjectId"); return; }
     let mounted = true;
     (async () => {
       setMode("loading");
@@ -149,14 +148,33 @@ function ExamContent() {
           api.getActiveExams(),
         ]);
         if (!mounted) return;
-        const s = ((subjects as any[]) ?? []).find((item) => Number(item.id) === subjectId);
+
+        const subjectsList = ((subjects as any[]) ?? []);
+        const activeExamsPayload = (activeExams as any)?.exams ?? activeExams;
+        
+        let targetSubjectId = subjectId;
+
+        // Auto-resolution: if no subjectId was passed in URL, pick active in-progress exam or first enrolled subject
+        if (!targetSubjectId) {
+          const inProgressAny = ((activeExamsPayload as any[]) ?? [])[0];
+          if (inProgressAny && inProgressAny.subject_id) {
+            targetSubjectId = Number(inProgressAny.subject_id);
+          } else if (subjectsList.length > 0) {
+            targetSubjectId = Number(subjectsList[0].id);
+          }
+        }
+
+        if (!targetSubjectId) {
+          throw new Error("No active exam selected. Please select a subject from your student dashboard.");
+        }
+
+        const s = subjectsList.find((item) => Number(item.id) === targetSubjectId);
         if (!s) throw new Error("Subject not found or you are not enrolled");
         setSubject(s);
-        const activeExamsPayload = (activeExams as any)?.exams ?? activeExams;
         const serverTime = (activeExams as any)?.server_time;
 
         const inProgress = ((activeExamsPayload as any[]) ?? []).find(
-          (item) => Number(item.subject_id) === subjectId,
+          (item) => Number(item.subject_id) === targetSubjectId,
         );
         if (inProgress) {
           setExamId(Number(inProgress.id));
@@ -191,7 +209,7 @@ function ExamContent() {
             
             setAnswers(mapped);
           } catch { setAnswers({}); }
-          const qs = ((await api.getQuestions(subjectId)) as any[]) ?? [];
+          const qs = ((await api.getQuestions(targetSubjectId)) as any[]) ?? [];
           if (!mounted) return;
           setQuestions(qs);
           seedTimer(inProgress.start_time, Number(s.duration), serverTime);

@@ -2333,6 +2333,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       // [SECURITY FIX] Limit PDF upload size to prevent memory exhaustion
       if (buffer.byteLength > 10 * 1024 * 1024) throw new HttpError(400, "PDF file exceeds 10MB limit");
       let text = "";
+      const origWarn = console.warn;
+      console.warn = (...args: any[]) => {
+        if (typeof args[0] === "string" && args[0].includes("standardFontDataUrl")) return;
+        origWarn(...args);
+      };
       try {
         const m = await import("pdf-parse");
         if (m.PDFParse) {
@@ -2352,13 +2357,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       } catch (e: any) {
         console.error("PDF Parse error:", e);
         throw new HttpError(500, "PDF parsing failed: " + e.message);
+      } finally {
+        console.warn = origWarn;
       }
 
-      // Extract metadata from form and standardize/validate exam_body
-      let exam_body = (formData.get("exam_body")?.toString() || "").trim().toUpperCase();
-      if (!["JAMB", "WAEC", "NECO", "NABTEB"].includes(exam_body)) {
-        throw new HttpError(400, `Invalid exam body '${exam_body || "empty"}'. Must be one of: JAMB, WAEC, NECO, NABTEB.`);
-      }
+      // Extract metadata from form and standardize exam_body
+      let rawExamBody = (formData.get("exam_body")?.toString() || "").trim().toUpperCase();
+      let exam_body = ["JAMB", "WAEC", "NECO", "NABTEB"].includes(rawExamBody) ? rawExamBody : "JAMB";
 
       const year = parseInt(formData.get("year")?.toString() || "2024", 10);
       const subject_code = formData.get("subject_code")?.toString() || "GEN";

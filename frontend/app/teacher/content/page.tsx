@@ -21,7 +21,7 @@ function ContentLibrary() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   
-  const [pdfMeta, setPdfMeta] = useState({ exam_body: "", year: new Date().getFullYear(), subject_code: "", paper_type: "objective" });
+  const [pdfMeta, setPdfMeta] = useState({ exam_body: "JAMB", year: new Date().getFullYear(), subject_code: "", paper_type: "objective" });
 
   const loadPackages = async () => {
     try {
@@ -211,8 +211,19 @@ function ContentLibrary() {
             </p>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1rem" }}>
-              <input type="text" className="input" placeholder="Exam Body (e.g. WAEC)" value={pdfMeta.exam_body} onChange={e => setPdfMeta({...pdfMeta, exam_body: e.target.value})} />
-              <input type="text" className="input" placeholder="Subject Code (e.g. MTH)" value={pdfMeta.subject_code} onChange={e => setPdfMeta({...pdfMeta, subject_code: e.target.value})} />
+              <div>
+                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.25rem", display: "block" }}>Exam Body</label>
+                <select className="input" value={pdfMeta.exam_body} onChange={e => setPdfMeta({...pdfMeta, exam_body: e.target.value})}>
+                  <option value="JAMB">JAMB</option>
+                  <option value="WAEC">WAEC</option>
+                  <option value="NECO">NECO</option>
+                  <option value="NABTEB">NABTEB</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginBottom: "0.25rem", display: "block" }}>Subject Code (e.g. MTH, PHY, CHM)</label>
+                <input type="text" className="input" placeholder="Subject Code (e.g. MTH)" value={pdfMeta.subject_code} onChange={e => setPdfMeta({...pdfMeta, subject_code: e.target.value.toUpperCase()})} />
+              </div>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <input type="number" className="input" placeholder="Year" value={pdfMeta.year} onChange={e => setPdfMeta({...pdfMeta, year: parseInt(e.target.value) || 2024})} />
                 <select className="input" value={pdfMeta.paper_type} onChange={e => setPdfMeta({...pdfMeta, paper_type: e.target.value})}>
