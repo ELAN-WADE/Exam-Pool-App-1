@@ -16,7 +16,8 @@ interface RichQuestionContentProps {
 }
 
 // Strict allowlist: presentation-only tags, no script/style/form/iframe.
-const DOMPURIFY_CONFIG: DOMPurify.Config = {
+// Strict allowlist: presentation-only tags, no script/style/form/iframe.
+const DOMPURIFY_CONFIG: any = {
   ALLOWED_TAGS: [
     'b', 'i', 'em', 'strong', 'u', 's', 'p', 'br', 'span',
     'ul', 'ol', 'li',
@@ -52,7 +53,7 @@ export function RichQuestionContent({ htmlContent, diagramPath, audioPath, isRtl
     // typeof window check ensures this only runs client-side (DOMPurify needs DOM).
     if (typeof window !== 'undefined') {
       const clean = DOMPurify.sanitize(htmlContent || '', DOMPURIFY_CONFIG);
-      setSanitizedHtml(clean as string);
+      setSanitizedHtml(clean as unknown as string);
     }
   }, [htmlContent]);
 

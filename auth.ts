@@ -93,6 +93,6 @@ export function buildSessionCookie(token: string): string {
   // [SECURITY FIX] Changed SameSite from Lax to Strict.
   // Lax allows the cookie to be sent on cross-site GET navigations, increasing CSRF risk.
   // Strict ensures the cookie is only sent on same-origin requests.
+  const secure = Bun.env.IS_HTTPS === "true" ? "; Secure" : "";
   return `__exampool_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}${secure}`;
-
 }

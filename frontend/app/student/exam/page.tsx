@@ -664,7 +664,7 @@ function ExamContent() {
                 <p style={{ color: "var(--color-danger)" }}>No questions found. Please contact your teacher.</p>
               </div>
             )}
-            )}
+
 
             {/* Navigation row (Now inside scroll area, below options) */}
             <div className={styles.navRow}>
