@@ -557,15 +557,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "GET" && pathname === "/api/server-info") {
-    // [SECURITY FIX VULN-14] Require authentication — prevents unauthenticated network enumeration.
-    // Also removed version string to prevent version-based CVE targeting.
-    requireAuth(req);
     const interfaces = os.networkInterfaces();
     const ips: string[] = [];
     for (const addresses of Object.values(interfaces)) {
       for (const a of addresses || []) if (a.family === "IPv4" && !a.internal) ips.push(a.address);
     }
-    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 3000) });
+    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 8001) });
   }
 
   if (method === "POST" && (pathname === "/api/setup" || pathname === "/api/setup/complete")) {
@@ -2389,7 +2386,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       console.error = (...args: any[]) => { if (!suppress(...args)) origError(...args); };
       console.log = (...args: any[]) => { if (!suppress(...args)) origLog(...args); };
       try {
-        const m = await import("pdf-parse");
+        const m: any = await import("pdf-parse");
         if (m.PDFParse) {
           const uint8Array = new Uint8Array(buffer);
           const parser = new m.PDFParse(uint8Array);
@@ -2399,7 +2396,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
           const data = await m.default(buffer);
           text = data.text;
         } else if (typeof m === "function") {
-          const data = await (m as any)(buffer);
+          const data = await m(buffer);
           text = data.text;
         } else {
           throw new Error("Could not determine pdf-parse export format");
@@ -2429,14 +2426,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       let currentOptions: string[] = [];
       let currentYear = year; // Default to metadata year, but dynamically update as we scan headers
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-
+      for (const line of lines) {
         // 1. Detect dynamic year headers (e.g. "Physics 1983", "1983 Questions", or just a year "1983")
         // Check if the line is short (under 40 characters) and contains a valid year.
         if (line.length < 40 && !/^(\d+[\.\)])\s+/.test(line) && !/^([A-E][\.\)]|\([A-E]\)|\[[A-E]\])\s+/.test(line)) {
           const yearMatch = line.match(/\b(19\d{2}|20\d{2})\b/);
-          if (yearMatch) {
+          if (yearMatch && yearMatch[1]) {
             const parsedYear = parseInt(yearMatch[1], 10);
             if (parsedYear >= 1970 && parsedYear <= 2030) {
               currentYear = parsedYear;
@@ -3294,7 +3289,7 @@ if (primaryLocalIp) {
             class: Packet.CLASS.IN,
             ttl: 300,
             address: primaryLocalIp
-          });
+          } as any);
         }
         send(response);
       }

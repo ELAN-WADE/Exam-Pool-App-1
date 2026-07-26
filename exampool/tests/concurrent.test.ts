@@ -142,14 +142,16 @@ describe(`T-210  ${N_CLIENTS} simultaneous exam starts`, () => {
 
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
+      if (!r) continue;
       if (r.status === "rejected") { failures++; continue; }
       const res  = (r as PromiseFulfilledResult<Response>).value;
       if (!res.ok) { failures++; continue; }
       const body = await json(res);
       const eid  = body.data?.examId ?? body.data?.exam?.id;
-      if (eid && clients[i]) {
+      const client = clients[i];
+      if (eid && client) {
         examIds.add(eid);
-        clients[i].examId = eid;
+        client.examId = eid;
       }
     }
 

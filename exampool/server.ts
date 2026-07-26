@@ -215,21 +215,29 @@ function getCacheControl(filePath: string): string {
 
 /** Normalize URL path for static lookup (supports Next `trailingSlash: true` → `/setup/` → `setup/index.html`). */
 async function serveStatic(urlPath: string): Promise<Response> {
+  const currentDistDir = resolveStaticDistDir();
   const pathname = urlPath.split("?")[0] ?? urlPath;
   const rel = pathname.replace(/^\/+/, "").replace(/\/+$/, "");
   const candidates: string[] = [];
 
   if (!rel) {
-    candidates.push(path.join(distDir, "index.html"));
+    candidates.push(path.join(currentDistDir, "index.html"));
   } else if (path.extname(rel) !== "") {
-    candidates.push(path.join(distDir, rel));
+    candidates.push(path.join(currentDistDir, rel));
   } else {
-    candidates.push(path.join(distDir, rel, "index.html"));
-    candidates.push(path.join(distDir, `${rel}.html`));
-    candidates.push(path.join(distDir, rel));
+    candidates.push(path.join(currentDistDir, rel, "index.html"));
+    candidates.push(path.join(currentDistDir, `${rel}.html`));
+    candidates.push(path.join(currentDistDir, rel));
   }
 
+  const resolvedDistDir = path.resolve(currentDistDir);
+
   for (const filePath of candidates) {
+    // Path traversal guard: ensure resolved path stays inside distDir
+    const resolvedFilePath = path.resolve(filePath);
+    if (!resolvedFilePath.startsWith(resolvedDistDir + path.sep) && resolvedFilePath !== resolvedDistDir) {
+      return apiError(403, "Forbidden");
+    }
     const file = Bun.file(filePath);
     if (await file.exists()) {
       return new Response(file, {
@@ -278,7 +286,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     for (const addresses of Object.values(interfaces)) {
       for (const a of addresses || []) if (a.family === "IPv4" && !a.internal) ips.push(a.address);
     }
-    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 3000), version: "1.2.0" });
+    return apiSuccess({ ip: ips[0] || "127.0.0.1", port: Number(Bun.env.PORT ?? 8000) });
   }
 
   if (method === "POST" && (pathname === "/api/setup" || pathname === "/api/setup/complete")) {

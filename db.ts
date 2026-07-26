@@ -1,4 +1,4 @@
-﻿import { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import path from "path";
 import fs from "fs";
 
@@ -823,9 +823,6 @@ export const queries = {
   `),
   getContentBankQuestionById: db.prepare("SELECT * FROM content_bank.content_bank WHERE id = ?"),
 
-  // ── Settings ─────────────────────────────────────────────────────────────
-  getSetting: db.prepare("SELECT value FROM settings WHERE key = ?"),
-  upsertSetting: db.prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"),
   // ── v5: Terms ──────────────────────────────────────────────────────────────
   getActiveTerm:      db.prepare("SELECT * FROM terms WHERE is_active = 1 LIMIT 1"),
   getAllTerms:         db.prepare("SELECT * FROM terms ORDER BY created_at DESC"),

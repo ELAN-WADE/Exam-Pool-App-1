@@ -90,5 +90,6 @@ export function verifyToken(token: string): { userId: number; role: string } | n
 }
 
 export function buildSessionCookie(token: string): string {
-  return `__exampool_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}`;
+  const secure = Bun.env.IS_HTTPS === "true" ? "; Secure" : "";
+  return `__exampool_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_SECONDS}${secure}`;
 }

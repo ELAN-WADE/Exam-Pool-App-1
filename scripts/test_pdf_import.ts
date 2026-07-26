@@ -1,7 +1,7 @@
 import fs from "fs";
 
 async function testPdf() {
-  const m = await import("pdf-parse");
+  const m: any = await import("pdf-parse");
   const pdfParse = m.PDFParse || m.default || m;
   console.log(typeof pdfParse);
   
@@ -9,7 +9,7 @@ async function testPdf() {
   
   if (typeof pdfParse === 'function') {
       try {
-          const data = await pdfParse(buffer);
+          const data = await (pdfParse as any)(buffer);
           console.log(data.text.substring(0, 100));
       } catch (e) {
           console.error("Error with pdfParse:", e);
