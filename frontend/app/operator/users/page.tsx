@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
@@ -36,6 +37,7 @@ export default function OperatorUsersPage() {
 
 function UsersContent() {
   const [users,   setUsers]   = useState<any[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading, setLoading] = useState(true);
   const [search,  setSearch]  = useState("");
   const [tab,     setTab]     = useState<Tab>("all");
@@ -65,7 +67,7 @@ function UsersContent() {
     }
   }, [showToast]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh, selectedSession?.id, selectedTerm?.id]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

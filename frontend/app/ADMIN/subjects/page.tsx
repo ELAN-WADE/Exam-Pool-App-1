@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
@@ -33,7 +34,8 @@ export default function OperatorSubjectsPage() {
 }
 
 function SubjectsContent() {
-  const [subjects,  setSubjects]  = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [users,     setUsers]     = useState<User[]>([]);
   const [students,  setStudents]  = useState<User[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -63,7 +65,11 @@ function SubjectsContent() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [s, u] = await Promise.all([api.getSubjects(), api.getUsers()]);
+      setLoading(true);
+      const [s, u] = await Promise.all([
+        api.getSubjects(selectedSession?.id, selectedTerm?.id), 
+        api.getUsers()
+      ]);
       if (signal?.aborted) return;
       const allUsers = (u as User[]) ?? [];
       setSubjects((s as Subject[]) ?? []);
@@ -80,7 +86,7 @@ function SubjectsContent() {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, selectedSession?.id, selectedTerm?.id]);
 
   const teachers = useMemo(() => users.filter((u) => u.role === "teacher" && u.is_active), [users]);
 
@@ -144,6 +150,8 @@ function SubjectsContent() {
         mode:          form.mode || "exam",
         can_retake:    form.can_retake ? 1 : 0,
         is_assignment: form.is_assignment ? 1 : 0,
+        session_id:    selectedSession?.id,
+        term_id:       selectedTerm?.id,
       };
       if (editing) {
         await api.updateSubject(editing.id, payload);

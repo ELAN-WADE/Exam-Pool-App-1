@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import { useMonotonicTimer } from "../../../hooks/useMonotonicTimer";
 import { useSingleInstance } from "../../../hooks/useSingleInstance";
@@ -31,6 +32,7 @@ function ExamContent() {
   const subjectId    = Number(searchParams.get("subjectId") || 0);
   const practiceId   = searchParams.get("practiceId");
   const { showToast } = useToast();
+  const { selectedSession, selectedTerm } = useAcademic();
 
   const [mode,              setMode]              = useState<Mode>("loading");
   const [error,             setError]             = useState("");
@@ -174,7 +176,7 @@ function ExamContent() {
         }
 
         const [subjects, activeExams] = await Promise.all([
-          api.getSubjects(),
+          api.getSubjects(selectedSession?.id, selectedTerm?.id),
           api.getActiveExams(),
         ]);
         if (!mounted) return;

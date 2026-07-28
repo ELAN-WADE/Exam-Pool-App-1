@@ -14,14 +14,21 @@ export default function AcademicSessionsPage() {
 }
 
 function AcademicSessionsContent() {
-  const { activeSession, activeTerm, refreshAcademic } = useAcademic();
+  const { activeSession, activeTerm, refreshAcademic, selectedSession } = useAcademic();
   const [sessions, setSessions] = useState<any[]>([]);
   const [terms, setTerms] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [newSessionName, setNewSessionName] = useState("");
   const [selectedSessionForTerm, setSelectedSessionForTerm] = useState<number>(0);
-  const [newTermName, setNewTermName] = useState<"First Term" | "Second Term" | "Third Term">("First Term");
+  const [termType, setTermType] = useState<"term" | "semester">("term");
+  const [newTermName, setNewTermName] = useState<string>("First Term");
+  
+  useEffect(() => {
+    if (selectedSession?.id) {
+      setSelectedSessionForTerm(selectedSession.id);
+    }
+  }, [selectedSession, setSelectedSessionForTerm]);
   
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -207,15 +214,56 @@ function AcademicSessionsContent() {
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Term Name</label>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Type</label>
+              <div className="flex gap-4 mb-4">
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+                  <input
+                    type="radio"
+                    name="termType"
+                    value="term"
+                    checked={termType === "term"}
+                    onChange={() => {
+                      setTermType("term");
+                      setNewTermName("First Term");
+                    }}
+                    className="accent-blue-600"
+                  />
+                  Term
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+                  <input
+                    type="radio"
+                    name="termType"
+                    value="semester"
+                    checked={termType === "semester"}
+                    onChange={() => {
+                      setTermType("semester");
+                      setNewTermName("First Semester");
+                    }}
+                    className="accent-blue-600"
+                  />
+                  Semester
+                </label>
+              </div>
+
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Name</label>
               <select
                 value={newTermName}
-                onChange={(e) => setNewTermName(e.target.value as any)}
+                onChange={(e) => setNewTermName(e.target.value)}
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition bg-slate-50 focus:bg-white"
               >
-                <option value="First Term">First Term</option>
-                <option value="Second Term">Second Term</option>
-                <option value="Third Term">Third Term</option>
+                {termType === "term" ? (
+                  <>
+                    <option value="First Term">First Term</option>
+                    <option value="Second Term">Second Term</option>
+                    <option value="Third Term">Third Term</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="First Semester">First Semester</option>
+                    <option value="Second Semester">Second Semester</option>
+                  </>
+                )}
               </select>
             </div>
             <button

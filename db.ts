@@ -552,7 +552,7 @@ export function initializeDatabase(): void {
     CREATE TABLE IF NOT EXISTS academic_terms (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id        INTEGER NOT NULL REFERENCES academic_sessions(id) ON DELETE CASCADE,
-      name              TEXT NOT NULL CHECK(name IN ('First Term', 'Second Term', 'Third Term')),
+      name              TEXT NOT NULL,
       start_date        TEXT,
       end_date          TEXT,
       is_active         INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
@@ -746,11 +746,11 @@ export const queries = {
   `),
   countEnrollments: db.prepare("SELECT COUNT(*) as count FROM subject_enrollments WHERE subject_id = ?"),
   createSubject:             db.prepare(`
-    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, session, mode, instructions, is_timetable_published, window_duration, can_retake, is_assignment)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, session, mode, instructions, is_timetable_published, window_duration, can_retake, is_assignment, session_id, term_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateSubject: db.prepare(`
-    UPDATE subjects SET name=?, code=?, term=?, duration=?, total_score=?, exam_datetime=?, is_published=?, teacher_id=?, description=?, class=?, session=?, mode=?, instructions=?, is_timetable_published=?, window_duration=?, can_retake=?, is_assignment=?
+    UPDATE subjects SET name=?, code=?, term=?, duration=?, total_score=?, exam_datetime=?, is_published=?, teacher_id=?, description=?, class=?, session=?, mode=?, instructions=?, is_timetable_published=?, window_duration=?, can_retake=?, is_assignment=?, session_id=?, term_id=?
     WHERE id=?
   `),
   deleteSubject: db.prepare("DELETE FROM subjects WHERE id = ?"),
@@ -780,8 +780,8 @@ export const queries = {
   createExam: db.prepare(`
     INSERT INTO exams (student_id, subject_id, start_time, answers_json, status, session, term, mode, session_id, term_id) 
     VALUES (?, ?, ?, ?, 'in-progress', ?, ?, ?,
-      (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1), 
-      (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1))
+      (SELECT session_id FROM subjects WHERE id = ?2), 
+      (SELECT term_id FROM subjects WHERE id = ?2))
   `),
   getExamById:             db.prepare("SELECT * FROM exams WHERE id = ?"),
   getExamByStudentSubject: db.prepare("SELECT * FROM exams WHERE student_id = ? AND subject_id = ?"),

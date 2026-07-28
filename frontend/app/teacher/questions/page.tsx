@@ -4,6 +4,7 @@ import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState 
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
@@ -38,6 +39,7 @@ function QuestionsContent() {
 
   const [subjects,       setSubjects]       = useState<any[]>([]);
   const [questions,      setQuestions]      = useState<any[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading,        setLoading]        = useState(true);
   const [questionsReady, setQuestionsReady] = useState(false);
   const [error,          setError]          = useState("");
@@ -83,7 +85,7 @@ function QuestionsContent() {
 
   const loadSubjects = useCallback(async () => {
     try {
-      const data = (await api.getSubjects()) as any[];
+      const data = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as any[];
       setSubjects(data ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed loading subjects");

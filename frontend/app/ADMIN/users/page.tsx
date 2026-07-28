@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { User } from "../../../lib/types";
 import dynamic from "next/dynamic";
@@ -39,6 +40,7 @@ export default function OperatorUsersPage() {
 
 function UsersContent() {
   const [users,   setUsers]   = useState<User[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading, setLoading] = useState(true);
   const [search,  setSearch]  = useState("");
   const [tab,     setTab]     = useState<Tab>("all");
@@ -73,7 +75,7 @@ function UsersContent() {
     const controller = new AbortController();
     refresh(controller.signal);
     return () => controller.abort();
-  }, [refresh]);
+  }, [refresh, selectedSession?.id, selectedTerm?.id]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();

@@ -992,8 +992,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const body = await readJson(req);
     const sessionId = Number(body?.sessionId);
     const name = trimStr(body?.name);
-    if (!sessionId || !["First Term", "Second Term", "Third Term"].includes(name)) {
-      return apiError(400, "Valid sessionId and term name ('First Term', 'Second Term', 'Third Term') required");
+    if (!sessionId || !["First Term", "Second Term", "Third Term", "First Semester", "Second Semester"].includes(name)) {
+      return apiError(400, "Valid sessionId and term/semester name required");
     }
     try {
       queries.createAcademicTerm.run(sessionId, name, body?.startDate || null, body?.endDate || null, 0, "active");
@@ -1217,6 +1217,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120),
       body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
       body.is_assignment !== undefined ? Number(body.is_assignment) : Number(subject.is_assignment ?? 0),
+      body.session_id !== undefined ? Number(body.session_id) : subject.session_id,
+      body.term_id !== undefined ? Number(body.term_id) : subject.term_id,
       subjectId,
     );
     

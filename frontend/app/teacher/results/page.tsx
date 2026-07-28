@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { ExamResult } from "../../../lib/types";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor, fmtDate } from "../../../lib/gradeUtils";
@@ -22,6 +23,7 @@ const GRADE_OPTIONS = ["JSS1","JSS2","JSS3","SS1","SS2","SS3","Grade 1","Grade 2
 function TeacherResults() {
   const [rows,            setRows]            = useState<ExamResult[]>([]);
   const [query,           setQuery]           = useState("");
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading,         setLoading]         = useState(true);
   const [error,           setError]           = useState("");
   const [toast,           setToast]           = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -40,7 +42,8 @@ function TeacherResults() {
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = (await api.getResults()) as ExamResult[];
+      setLoading(true);
+      const data = (await api.getResults(selectedSession?.id, selectedTerm?.id)) as ExamResult[];
       if (signal?.aborted) return;
       setRows(data ?? []);
     } catch (err) {
@@ -54,7 +57,7 @@ function TeacherResults() {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [load, selectedSession?.id, selectedTerm?.id]);
 
   // ── Live-update: re-fetch table when a student submits an exam ──
   useEffect(() => {
@@ -66,7 +69,7 @@ function TeacherResults() {
     };
     window.addEventListener("notification_received", handler);
     return () => window.removeEventListener("notification_received", handler);
-  }, [load]);
+  }, [load, selectedSession?.id, selectedTerm?.id]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase();

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import React, { useCallback, useEffect, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { Subject } from "../../../lib/types";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, PlusIcon } from "../../../components/icons/Icons";
@@ -24,6 +25,7 @@ export default function TeacherAssignmentsPage() {
 function TeacherAssignments() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [questionCounts, setQuestionCounts] = useState<Record<number, number>>({});
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -46,12 +48,14 @@ function TeacherAssignments() {
         mode: form.mode,
         is_assignment: form.is_assignment ? 1 : 0,
         can_retake: 1,
+        session_id: selectedSession?.id,
+        term_id: selectedTerm?.id,
       });
       showToast("Successfully created assessment", "success");
       setModalOpen(false);
       setForm({ name: "", code: "", term: "", duration: "60", mode: "test", is_assignment: true });
       
-      const subs = await api.getSubjects();
+      const subs = await api.getSubjects(selectedSession?.id, selectedTerm?.id);
       if (subs) {
         setSubjects(subs.filter(s => s.is_assignment === 1));
       }
@@ -68,7 +72,7 @@ function TeacherAssignments() {
 
     (async () => {
       try {
-        const subs = await api.getSubjects() ?? [];
+        const subs = await api.getSubjects(selectedSession?.id, selectedTerm?.id) ?? [];
         if (signal.aborted) return;
         
         const assignmentSubs = subs.filter(s => s.is_assignment === 1);

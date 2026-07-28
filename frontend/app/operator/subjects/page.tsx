@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
@@ -14,7 +15,7 @@ type Subject = {
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
   description?: string; class?: string; session?: string; mode?: string;
-  is_assignment?: number;
+  can_retake?: number; is_assignment?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
 type EnrolledStudent = {
@@ -22,7 +23,7 @@ type EnrolledStudent = {
   enrolled_at: string; score?: number; total_score?: number; exam_status?: string;
 };
 
-const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", is_assignment: 0 };
+const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", can_retake: true, is_assignment: false };
 
 export default function OperatorSubjectsPage() {
   return (
@@ -33,7 +34,8 @@ export default function OperatorSubjectsPage() {
 }
 
 function SubjectsContent() {
-  const [subjects,  setSubjects]  = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [users,     setUsers]     = useState<User[]>([]);
   const [students,  setStudents]  = useState<User[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -61,21 +63,30 @@ function SubjectsContent() {
     setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [s, u] = await Promise.all([api.getSubjects(), api.getUsers()]);
+      setLoading(true);
+      const [s, u] = await Promise.all([
+        api.getSubjects(selectedSession?.id, selectedTerm?.id), 
+        api.getUsers()
+      ]);
+      if (signal?.aborted) return;
       const allUsers = (u as User[]) ?? [];
       setSubjects((s as Subject[]) ?? []);
       setUsers(allUsers);
       setStudents(allUsers.filter((user) => user.role === "student" && user.is_active));
     } catch {
-      showToast("error", "Failed to load data.");
+      if (!signal?.aborted) showToast("error", "Failed to load data.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [showToast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load, selectedSession?.id, selectedTerm?.id]);
 
   const teachers = useMemo(() => users.filter((u) => u.role === "teacher" && u.is_active), [users]);
 
@@ -107,7 +118,8 @@ function SubjectsContent() {
       class:         s.class ?? "",
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
-      is_assignment: s.is_assignment ?? 0,
+      can_retake:    s.can_retake !== 0,
+      is_assignment: s.is_assignment === 1,
     });
     setIsScheduled(!!s.exam_datetime && s.exam_datetime !== "");
     setModalOpen(true);
@@ -136,7 +148,10 @@ function SubjectsContent() {
         class:         form.class || null,
         session:       form.session || null,
         mode:          form.mode || "exam",
+        can_retake:    form.can_retake ? 1 : 0,
         is_assignment: form.is_assignment ? 1 : 0,
+        session_id:    selectedSession?.id,
+        term_id:       selectedTerm?.id,
       };
       if (editing) {
         await api.updateSubject(editing.id, payload);
@@ -176,18 +191,27 @@ function SubjectsContent() {
   };
 
   // ---------- Enrollment ----------
+  const enrollAbortController = useRef<AbortController | null>(null);
+
   const openEnroll = async (s: Subject) => {
+    if (enrollAbortController.current) {
+      enrollAbortController.current.abort();
+    }
+    const controller = new AbortController();
+    enrollAbortController.current = controller;
+
     setEnrollSubject(s);
     setEnrollSearch("");
     setEnrollGradeFilter("");
     setEnrollLoading(true);
     try {
       const data = (await api.getSubjectStudents(s.id)) as EnrolledStudent[];
+      if (controller.signal.aborted) return;
       setEnrolled(data ?? []);
     } catch {
-      showToast("error", "Failed to load enrolled students.");
+      if (!controller.signal.aborted) showToast("error", "Failed to load enrolled students.");
     } finally {
-      setEnrollLoading(false);
+      if (!controller.signal.aborted) setEnrollLoading(false);
     }
   };
 
@@ -302,8 +326,7 @@ function SubjectsContent() {
                   <th>Term</th>
                   <th>Teacher</th>
                   <th>Duration</th>
-                  <th>Type</th>
-                  <th>Date / Deadline</th>
+                  <th>Exam Date</th>
                   <th>Published</th>
                   <th>Actions</th>
                 </tr>
@@ -327,11 +350,6 @@ function SubjectsContent() {
                       <span className={styles.durationCell}>
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                         {s.duration} min
-                      </span>
-                    </td>
-                    <td>
-                      <span className={`badge ${s.is_assignment ? "badge-primary" : "badge-muted"}`}>
-                        {s.is_assignment ? "Assignment" : "Exam"}
                       </span>
                     </td>
                     <td className={styles.dateCell}>
@@ -501,25 +519,10 @@ function SubjectsContent() {
               </label>
             </div>
           </div>
-          <div className="field">
-            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", textTransform: "none", fontWeight: 600 }}>
-              <input type="checkbox" checked={form.is_assignment === 1} onChange={(e) => setForm({ ...form, is_assignment: e.target.checked ? 1 : 0 })} />
-              Enable Offline Assignment Mode (Homework / Take-home)
-            </label>
-          </div>
-          {isScheduled && !form.is_assignment && (
+          {isScheduled && (
             <div className="field">
               <label>Exam Date & Time *</label>
               <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
-            </div>
-          )}
-          {form.is_assignment === 1 && (
-            <div className="field">
-              <label>Due Date & Time *</label>
-              <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
-              <p style={{ fontSize: "0.8rem", color: "var(--color-muted)", marginTop: "0.25rem" }}>
-                Offline assignments must have a deadline for submission.
-              </p>
             </div>
           )}
           <div className={styles.formGrid}>
@@ -535,6 +538,14 @@ function SubjectsContent() {
           <div className="field">
             <label>Description</label>
             <input className="input" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+          </div>
+          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+            <input type="checkbox" checked={form.can_retake} onChange={(e) => setForm({ ...form, can_retake: e.target.checked })} id="canRetakeToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="canRetakeToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
+          </div>
+          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+            <input type="checkbox" checked={form.is_assignment} onChange={(e) => setForm({ ...form, is_assignment: e.target.checked })} id="isAssignmentToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="isAssignmentToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Is Offline Assignment (Allow students to cache and take home)</label>
           </div>
           <div className={`field ${styles.teacherField}`}>
             <label>Assign Teacher *</label>

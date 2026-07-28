@@ -27,6 +27,7 @@ function OperatorDashboard() {
 
   useEffect(() => {
     (async () => {
+      setLoading(true);
       const [u, s, r] = await Promise.all([
         api.getUsers(selectedSession?.id, selectedTerm?.id), 
         api.getSubjects(selectedSession?.id, selectedTerm?.id), 

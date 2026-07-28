@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { ExamResult, Subject } from "../../../lib/types";
 import { BookIcon } from "../../../components/icons/Icons";
@@ -22,6 +23,7 @@ export default function StudentResultsPage() {
 function StudentResults() {
   const [results, setResults] = useState<ExamResult[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading, setLoading] = useState(true);
   const [retaking, setRetaking] = useState<number | null>(null);
   const [reviewingExam, setReviewingExam] = useState<{ id: number, subjectName: string } | null>(null);
@@ -30,8 +32,9 @@ function StudentResults() {
   useEffect(() => {
     const controller = new AbortController();
     const signal = controller.signal;
+    setLoading(true);
 
-    Promise.all([api.getResults(), api.getSubjects()])
+    Promise.all([api.getResults(selectedSession?.id, selectedTerm?.id), api.getSubjects(selectedSession?.id, selectedTerm?.id)])
       .then(([resData, subData]) => {
         if (signal.aborted) return;
         setResults((resData as ExamResult[])?.filter(r => r.status === "completed") ?? []);
@@ -42,7 +45,7 @@ function StudentResults() {
       });
 
     return () => controller.abort();
-  }, []);
+  }, [selectedSession?.id, selectedTerm?.id]);
 
   const handleRetake = async (examId: number, subjectId: number) => {
     if (!confirm("Are you sure you want to retake this exam? Your previous attempt will be overwritten and your score will be reset.")) return;
@@ -106,55 +109,30 @@ function StudentResults() {
                     <div className={styles.subjectName}>{subject.name}</div>
                     <span className={styles.subjectCode}>{subject.code}</span>
                   </div>
-                  <div className={styles.scoreCircle} style={{ background: color }}>
-                    {percentage}%
-                    <span className={styles.scoreLabel}>Score</span>
+                  <div className={styles.scoreCircle} style={{ borderColor: color, color }}>
+                    <div className={styles.scoreNumber}>{score}</div>
+                    <div className={styles.scoreTotal}>/ {total}</div>
                   </div>
                 </div>
-
-                <div className={styles.statsRow}>
-                  <div className={styles.statItem}>
-                    <div className={styles.statValue}>{score} / {total}</div>
-                    <div className={styles.statLabel}>Marks</div>
-                  </div>
-                  <div className={styles.statItem}>
-                    <div className={styles.statValue}>{r.answered_questions || 0} / {r.total_questions || 0}</div>
-                    <div className={styles.statLabel}>Questions Answered</div>
-                  </div>
-                </div>
-
-                <div style={{ marginTop: "1rem", display: "flex", gap: "0.75rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+                
+                <div className={styles.cardFooter}>
                   <button 
-                    className="btn btn-ghost"
                     onClick={() => setReviewingExam({ id: r.id, subjectName: subject.name })}
-                    style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", fontWeight: 600, border: "1px solid #e2e8f0", background: "#ffffff" }}
+                    className="btn btn-secondary" style={{ flex: 1 }}
                   >
                     Review Exam
                   </button>
+
                   {subject.can_retake === 1 && (
-                    <button 
-                      className={styles.retakeBtn}
+                    <button
                       onClick={() => handleRetake(r.id, subject.id)}
                       disabled={retaking === r.id}
+                      className="btn className" style={{ flex: 1 }}
                     >
-                      {retaking === r.id ? "Opening..." : "Retake Exam"}
+                      {retaking === r.id ? "Resetting..." : "Retake Exam"}
                     </button>
                   )}
                 </div>
-
-                {r.teacher_remark && (
-                  <div className={styles.teacherRemark}>
-                    <div className={styles.remarkLabel}>Teacher Remark</div>
-                    {r.teacher_remark}
-                  </div>
-                )}
-                
-                {r.principal_remark && (
-                  <div className={styles.teacherRemark} style={{ borderLeftColor: "var(--color-warning)", background: "rgba(245, 158, 11, 0.05)" }}>
-                    <div className={styles.remarkLabel} style={{ color: "var(--color-warning)" }}>Principal Remark</div>
-                    {r.principal_remark}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -162,10 +140,10 @@ function StudentResults() {
       )}
 
       {reviewingExam && (
-        <StudentReviewModal 
-          examId={reviewingExam.id} 
-          subjectName={reviewingExam.subjectName} 
-          onClose={() => setReviewingExam(null)} 
+        <StudentReviewModal
+          examId={reviewingExam.id}
+          subjectName={reviewingExam.subjectName}
+          onClose={() => setReviewingExam(null)}
         />
       )}
     </div>

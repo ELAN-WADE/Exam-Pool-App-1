@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { EnrolledStudent, Subject } from "../../../lib/types";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib/gradeUtils";
@@ -33,6 +34,7 @@ function StudentRoster() {
 
   const [students,    setStudents]    = useState<EnrolledStudent[]>([]);
   const [subjects,    setSubjects]    = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState("");
   const [query,       setQuery]       = useState("");
@@ -70,7 +72,7 @@ function StudentRoster() {
 
     (async () => {
       try {
-        const subs = (await api.getSubjects()) as Subject[];
+        const subs = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as Subject[];
         if (signal.aborted) return;
         setSubjects(subs ?? []);
         const sid = subjectId > 0 ? subjectId : Number(subs[0]?.id ?? 0);

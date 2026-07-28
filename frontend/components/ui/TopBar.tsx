@@ -76,12 +76,20 @@ export function TopBar({ onMenuClick, title }: Props) {
           <div className="hidden sm:flex items-center gap-2">
             <select
               value={selectedSession?.id || ""}
-              onChange={(e) => {
+              onChange={async (e) => {
                 const s = sessions.find(x => x.id === Number(e.target.value));
                 if (s) {
                   setSelectedSession(s);
                   // Reset term if switching session
                   setSelectedTerm(null);
+                  if (user?.role === "operator") {
+                    try {
+                      await api.activateAcademicSession(s.id);
+                      await refreshAcademic();
+                    } catch (err) {
+                      console.error("Failed to activate session", err);
+                    }
+                  }
                 }
               }}
               className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
@@ -92,9 +100,17 @@ export function TopBar({ onMenuClick, title }: Props) {
             
             <select
               value={selectedTerm?.id || ""}
-              onChange={(e) => {
+              onChange={async (e) => {
                 const t = terms.find(x => x.id === Number(e.target.value));
                 setSelectedTerm(t || null);
+                if (user?.role === "operator" && t) {
+                  try {
+                    await api.activateAcademicTerm(t.id);
+                    await refreshAcademic();
+                  } catch (err) {
+                    console.error("Failed to activate term", err);
+                  }
+                }
               }}
               className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
               title="Select Academic Term"

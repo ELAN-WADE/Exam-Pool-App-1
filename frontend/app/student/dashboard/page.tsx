@@ -42,7 +42,7 @@ function DashboardContent() {
     try {
       const [subjectsData, resultsData, activeData] = await Promise.all([
         api.getSubjects(selectedSession?.id, selectedTerm?.id),
-        api.getResults(),
+        api.getResults(selectedSession?.id, selectedTerm?.id),
         api.getActiveExams(),
       ]);
 
@@ -84,6 +84,7 @@ function DashboardContent() {
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
     const abortController = new AbortController();
     
     fetchData(abortController.signal, true).then(() => { if (!mounted) return; });
@@ -96,7 +97,7 @@ function DashboardContent() {
       clearInterval(interval); 
       clearInterval(clockInterval); 
     };
-  }, []);
+  }, [selectedSession?.id, selectedTerm?.id]);
 
   const takenIds  = useMemo(() => new Set(results.map((r) => Number(r.subject_id))), [results]);
   const activeIds = useMemo(() => new Set(activeExams.map((e: any) => Number(e.subject_id || e.id))), [activeExams]);

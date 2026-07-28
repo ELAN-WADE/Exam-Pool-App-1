@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
@@ -28,6 +29,7 @@ export default function OperatorTimetablePage() {
 
 function TimetableContent() {
   const [subjects,  setSubjects]  = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm } = useAcademic();
   const [loading,   setLoading]   = useState(true);
   const [toast,     setToast]     = useState<Toast>(null);
   
@@ -55,7 +57,8 @@ function TimetableContent() {
 
   const load = useCallback(async () => {
     try {
-      const [s, u] = await Promise.all([api.getSubjects(), api.getUsers()]);
+      setLoading(true);
+      const [s, u] = await Promise.all([api.getSubjects(selectedSession?.id, selectedTerm?.id), api.getUsers()]);
       setSubjects((s as Subject[]) ?? []);
       setTeachers(((u as User[]) ?? []).filter(user => user.role === "teacher" && user.is_active));
     } catch {
@@ -65,7 +68,7 @@ function TimetableContent() {
     }
   }, [showToast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, selectedSession?.id, selectedTerm?.id]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -130,7 +133,8 @@ function TimetableContent() {
         name: form.name, code: form.code, term: form.term,
         duration: Number(form.duration), window_duration: Number(form.window_duration), exam_datetime: form.exam_datetime,
         teacher_id: Number(form.teacher_id), class: form.class || null,
-        session: form.session || null, mode: form.mode || "exam"
+        session: form.session || null, mode: form.mode || "exam",
+        session_id: selectedSession?.id, term_id: selectedTerm?.id
       });
       showToast("success", `Subject "${form.name}" created and scheduled.`);
       setCreateModalOpen(false);

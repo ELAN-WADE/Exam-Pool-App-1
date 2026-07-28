@@ -32,6 +32,7 @@ function OperatorDashboard() {
     let mounted = true;
     (async () => {
       try {
+        if (mounted) setLoading(true);
         const [u, s, r] = await Promise.all([
           api.getUsers(selectedSession?.id, selectedTerm?.id), 
           api.getSubjects(selectedSession?.id, selectedTerm?.id), 
