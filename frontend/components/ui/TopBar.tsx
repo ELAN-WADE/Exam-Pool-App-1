@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../../hooks/useAuth";
+import { useAcademic } from "../context/AcademicContext";
+import { api } from "../../lib/api";
 import { NotificationBell } from "./NotificationBell";
 import styles from "./TopBar.module.css";
 
@@ -30,6 +32,7 @@ const BREADCRUMB_MAP: Record<string, string> = {
 
 export function TopBar({ onMenuClick, title }: Props) {
   const { user, logout } = useAuth();
+  const { sessions, terms, selectedSession, selectedTerm, setSelectedSession, setSelectedTerm, refreshAcademic } = useAcademic();
   const pathname = usePathname();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -68,6 +71,40 @@ export function TopBar({ onMenuClick, title }: Props) {
 
       {/* Right */}
       <div className={styles.right}>
+        {/* Academic Switcher (View Filter) */}
+        {(user?.role === "operator" || user?.role === "teacher") && sessions.length > 0 && (
+          <div className="hidden sm:flex items-center gap-2">
+            <select
+              value={selectedSession?.id || ""}
+              onChange={(e) => {
+                const s = sessions.find(x => x.id === Number(e.target.value));
+                if (s) {
+                  setSelectedSession(s);
+                  // Reset term if switching session
+                  setSelectedTerm(null);
+                }
+              }}
+              className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
+              title="Select Academic Session"
+            >
+              {sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            
+            <select
+              value={selectedTerm?.id || ""}
+              onChange={(e) => {
+                const t = terms.find(x => x.id === Number(e.target.value));
+                setSelectedTerm(t || null);
+              }}
+              className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
+              title="Select Academic Term"
+            >
+              <option value="">All Terms</option>
+              {terms.filter(t => t.session_id === selectedSession?.id).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Notification bell */}
         {(user?.role === "operator" || user?.role === "teacher") && (
           <NotificationBell role={user.role === "operator" ? "ADMIN" : "teacher"} />

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import type { Subject, User, ExamResult } from "../../../lib/types";
 import { UsersIcon, BookIcon, CheckCircleIcon, DocumentIcon, BarChartIcon, SettingsIcon, ChevronRightIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
@@ -25,11 +26,17 @@ function OperatorDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  const { selectedSession, selectedTerm } = useAcademic();
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [u, s, r] = await Promise.all([api.getUsers(), api.getSubjects(), api.getResults()]);
+        const [u, s, r] = await Promise.all([
+          api.getUsers(selectedSession?.id, selectedTerm?.id), 
+          api.getSubjects(selectedSession?.id, selectedTerm?.id), 
+          api.getResults(selectedSession?.id, selectedTerm?.id)
+        ]);
         if (!mounted) return;
         setUsers(u ?? []);
         setSubjects(s ?? []);
@@ -41,16 +48,17 @@ function OperatorDashboard() {
       }
     })();
     return () => { mounted = false; };
-  }, []);
+  }, [selectedSession?.id, selectedTerm?.id]);
 
   const stats = useMemo(() => {
     const students  = users.filter((u) => u.role === "student").length;
     const teachers  = users.filter((u) => u.role === "teacher").length;
+    const operators = users.filter((u) => u.role === "operator").length;
     const published = subjects.filter((s) => s.is_published).length;
     const avgScore  = results.length
       ? (results.reduce((a: number, r) => a + (r.score ?? 0), 0) / results.length).toFixed(1)
       : "—";
-    return { students, teachers, subjects: subjects.length, published, exams: results.length, avgScore };
+    return { students, teachers, operators, subjects: subjects.length, published, exams: results.length, avgScore };
   }, [users, subjects, results]);
 
   if (error) return <div className={styles.errorState}>{error}</div>;
@@ -85,10 +93,10 @@ function OperatorDashboard() {
   const statCards = [
     { label: "Total Students",    value: stats.students,  icon: <UsersIcon width="22" height="22" />,       color: "var(--color-primary)", bg: "var(--color-primary-glow)", accent: "var(--color-primary)" },
     { label: "Total Teachers",    value: stats.teachers,  icon: <UsersIcon width="22" height="22" />,       color: "var(--color-success)", bg: "var(--color-success-bg)",  accent: "var(--color-success)" },
+    { label: "Total Operators",   value: stats.operators, icon: <UsersIcon width="22" height="22" />,       color: "var(--color-info)",    bg: "var(--color-info-bg)",     accent: "var(--color-info)" },
     { label: "Total Subjects",    value: stats.subjects,  icon: <BookIcon width="22" height="22" />,        color: "var(--color-warning)", bg: "var(--color-warning-bg)",  accent: "var(--color-warning)" },
-    { label: "Published",         value: stats.published, icon: <CheckCircleIcon width="22" height="22" />, color: "var(--color-info)",    bg: "var(--color-info-bg)",     accent: "var(--color-info)" },
+    { label: "Published Exams",   value: stats.published, icon: <CheckCircleIcon width="22" height="22" />, color: "var(--color-success)", bg: "var(--color-success-bg)",  accent: "var(--color-success)" },
     { label: "Exams Completed",   value: stats.exams,     icon: <DocumentIcon width="22" height="22" />,    color: "var(--color-purple)",  bg: "var(--color-purple-bg)",   accent: "var(--color-purple)" },
-    { label: "Avg. Score",        value: stats.avgScore,  icon: <BarChartIcon width="22" height="22" />,    color: "var(--color-orange)",  bg: "var(--color-orange-bg)",   accent: "var(--color-orange)" },
   ];
 
   const quickLinks = [

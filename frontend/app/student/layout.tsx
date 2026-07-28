@@ -65,6 +65,8 @@ const studentNav = [
   },
 ];
 
+import { AcademicProvider } from "../../components/context/AcademicContext";
+
 export default function StudentLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
@@ -74,19 +76,21 @@ export default function StudentLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="shell">
-      <Sidebar
-        items={studentNav}
-        title="Student"
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-      <div className="shellMain">
-        <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
-        <main className="shellContent">
-          {children}
-        </main>
+    <AcademicProvider>
+      <div className="shell">
+        <Sidebar
+          items={studentNav}
+          title="Student"
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
+        <div className="shellMain">
+          <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
+          <main className="shellContent">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </AcademicProvider>
   );
 }

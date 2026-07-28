@@ -9,6 +9,7 @@ import { api } from "../../../lib/api";
 import type { Subject, ExamResult } from "../../../lib/types";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
+import { useAcademic } from "../../../components/context/AcademicContext";
 
 export default function TeacherDashboardPage() {
   return (
@@ -32,6 +33,9 @@ const itemVariants = {
 };
 
 function TeacherDashboard() {
+  const { selectedSession, selectedTerm, activeSession, activeTerm } = useAcademic();
+  const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
+  const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [questionCounts, setQuestionCounts] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
@@ -72,7 +76,8 @@ function TeacherDashboard() {
 
     (async () => {
       try {
-        const subs = await api.getSubjects() ?? [];
+        setLoading(true);
+        const subs = await api.getSubjects(selectedSession?.id, selectedTerm?.id) ?? [];
         if (signal.aborted) return;
         
         const examSubs = subs.filter(s => s.is_assignment !== 1);
@@ -102,7 +107,7 @@ function TeacherDashboard() {
       }
     })();
     return () => abortController.abort();
-  }, [loadReportStudents]);
+  }, [loadReportStudents, selectedSession?.id, selectedTerm?.id]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -159,6 +164,40 @@ function TeacherDashboard() {
         animate="visible"
         className="flex flex-col gap-8 pb-12"
       >
+        {/* Welcome Banner Section */}
+        <motion.div 
+          variants={itemVariants} 
+          className="relative overflow-hidden rounded-[28px] bg-gradient-to-r from-slate-900 via-teal-950 to-slate-900 p-6 md:p-8 text-white shadow-xl border border-teal-500/20"
+        >
+          <div className="absolute -top-12 -right-12 w-64 h-64 bg-teal-500/15 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute -bottom-12 -left-12 w-64 h-64 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="max-w-2xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-300 text-xs font-bold uppercase tracking-wider mb-3">
+                <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+                Active Academic Session
+              </div>
+              <h1 className="text-2xl md:text-3xl font-black text-white m-0 tracking-tight leading-snug">
+                Welcome to {currentTermName} <span className="text-teal-400">({currentSessionName})</span>
+              </h1>
+              <p className="text-slate-300 mt-2 text-sm font-medium leading-relaxed">
+                Manage your exam content, question banks, and student results smoothly for this published academic term.
+              </p>
+            </div>
+            <div className="flex flex-wrap md:flex-nowrap gap-3 shrink-0">
+              <div className="bg-white/10 backdrop-blur-md border border-white/15 px-4 py-2.5 rounded-2xl text-xs font-semibold text-slate-200 flex items-center gap-2">
+                <span className="text-white font-black text-lg">{subjects.length}</span> Total Subjects
+              </div>
+              <div className="bg-emerald-500/20 backdrop-blur-md border border-emerald-400/30 px-4 py-2.5 rounded-2xl text-xs font-semibold text-emerald-200 flex items-center gap-2">
+                <span className="text-emerald-300 font-black text-lg">{published}</span> Live
+              </div>
+              <div className="bg-teal-500/20 backdrop-blur-md border border-teal-400/30 px-4 py-2.5 rounded-2xl text-xs font-semibold text-teal-200 flex items-center gap-2">
+                <span className="text-teal-300 font-black text-lg">{drafts}</span> Drafts
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
         {/* Header Section */}
         <motion.div variants={itemVariants} className="flex flex-col gap-4 md:flex-row md:items-end justify-between">
           <div>

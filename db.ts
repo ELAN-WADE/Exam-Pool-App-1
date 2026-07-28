@@ -128,6 +128,8 @@ export function initializeDatabase(): void {
   addColumnIfMissing("users", "phone",      "TEXT");
   addColumnIfMissing("users", "dob",        "TEXT");
   addColumnIfMissing("users", "image_url",  "TEXT");
+  addColumnIfMissing("users", "session_id", "INTEGER");
+  addColumnIfMissing("users", "term_id",    "INTEGER");
 
   // ── subjects ─────────────────────────────────────────────────────────────
   db.run(`
@@ -160,6 +162,8 @@ export function initializeDatabase(): void {
   addColumnIfMissing("subjects", "can_retake", "INTEGER NOT NULL DEFAULT 1");
   // Offline assignments
   addColumnIfMissing("subjects", "is_assignment", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("subjects", "session_id",    "INTEGER");
+  addColumnIfMissing("subjects", "term_id",       "INTEGER");
 
   // ── questions ────────────────────────────────────────────────────────────
   db.run(`
@@ -188,6 +192,8 @@ export function initializeDatabase(): void {
   // Offline assignments
   addColumnIfMissing("questions", "is_file_upload",  "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing("questions", "attached_file_url", "TEXT");
+  addColumnIfMissing("questions", "session_id", "INTEGER");
+  addColumnIfMissing("questions", "term_id",    "INTEGER");
 
   // ── exams (result table) ─────────────────────────────────────────────────
   db.run(`
@@ -220,6 +226,10 @@ export function initializeDatabase(): void {
   // v5: per-student per-exam remarks
   addColumnIfMissing("exams", "teacher_remark",    "TEXT");
   addColumnIfMissing("exams", "principal_remark",  "TEXT");
+  // v7 Academic Session & Term linkage + locking
+  addColumnIfMissing("exams", "session_id",        "INTEGER");
+  addColumnIfMissing("exams", "term_id",           "INTEGER");
+  addColumnIfMissing("exams", "is_locked",          "INTEGER NOT NULL DEFAULT 0");
 
   // ── exam_attempts — historical archive of every completed attempt (retakes) ──
   // The `exams` table only holds the CURRENT/LATEST attempt per student+subject.
@@ -289,6 +299,8 @@ export function initializeDatabase(): void {
 
   // Offline assignments
   addColumnIfMissing("student_answers", "file_url", "TEXT");
+  addColumnIfMissing("student_answers", "session_id", "INTEGER");
+  addColumnIfMissing("student_answers", "term_id",    "INTEGER");
 
   // v4: safe migration — add admin_password_hash to config
   addColumnIfMissing("config", "admin_password_hash", "TEXT");
@@ -368,6 +380,9 @@ export function initializeDatabase(): void {
       UNIQUE(student_id, term)
     )
   `);
+  
+  addColumnIfMissing("student_term_remarks", "session_id", "INTEGER");
+  addColumnIfMissing("student_term_remarks", "term_id",    "INTEGER");
 
   // ── notifications ──────────────────────────────────────────────────────────
   db.run(`
@@ -521,6 +536,35 @@ export function initializeDatabase(): void {
     console.log("[db v5] users table upgraded. Schema version = 5.");
   }
 
+  // ── ACADEMIC SESSIONS & TERMS — Platform Foundation ────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS academic_sessions (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT UNIQUE NOT NULL,
+      is_active   INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
+      status      TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived')),
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_academic_sessions_active ON academic_sessions(is_active)");
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS academic_terms (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id        INTEGER NOT NULL REFERENCES academic_sessions(id) ON DELETE CASCADE,
+      name              TEXT NOT NULL CHECK(name IN ('First Term', 'Second Term', 'Third Term')),
+      start_date        TEXT,
+      end_date          TEXT,
+      is_active         INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
+      status            TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived', 'locked')),
+      registration_open INTEGER NOT NULL DEFAULT 1 CHECK(registration_open IN (0,1)),
+      created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(session_id, name)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_academic_terms_active ON academic_terms(is_active)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_academic_terms_session ON academic_terms(session_id)");
+
   // ── TERMS — The single blocking primitive. Everything scopes to a term. ──
   db.run(`
     CREATE TABLE IF NOT EXISTS terms (
@@ -610,19 +654,50 @@ export function initializeDatabase(): void {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
       subject_id  INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-      term_id     INTEGER NOT NULL REFERENCES terms(id) ON DELETE CASCADE,
+      session_id  INTEGER NOT NULL REFERENCES academic_sessions(id) ON DELETE CASCADE,
+      term_id     INTEGER NOT NULL REFERENCES academic_terms(id) ON DELETE CASCADE,
       teacher_id  INTEGER REFERENCES users(id),
       day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
       start_time  TEXT NOT NULL,
       end_time    TEXT NOT NULL,
       classroom   TEXT,
       created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-      UNIQUE(class_id, term_id, day_of_week, start_time)
+      UNIQUE(class_id, session_id, term_id, day_of_week, start_time)
     )
   `);
-  db.run("CREATE INDEX IF NOT EXISTS idx_tt_class_term   ON timetables(class_id, term_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_class_term   ON timetables(class_id, session_id, term_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_tt_teacher_slot ON timetables(teacher_id, day_of_week, start_time)");
   db.run("CREATE INDEX IF NOT EXISTS idx_tt_room_slot    ON timetables(classroom, day_of_week, start_time)");
+
+  // ── Seeding Default Academic Session and Term if empty ──
+  const sessionRow = db.prepare("SELECT COUNT(*) as count FROM academic_sessions").get() as any;
+  const sessionCount = sessionRow?.count ? Number(sessionRow.count) : 0;
+  if (sessionCount === 0) {
+    db.run("INSERT INTO academic_sessions (name, is_active, status) VALUES ('2026/2027', 1, 'active')");
+  }
+  const termRow = db.prepare("SELECT COUNT(*) as count FROM academic_terms").get() as any;
+  const termCount = termRow?.count ? Number(termRow.count) : 0;
+  if (termCount === 0) {
+    db.run("INSERT INTO academic_terms (session_id, name, is_active, status, registration_open) VALUES (1, 'First Term', 1, 'active', 1)");
+  }
+
+  // ── Backfill legacy subjects/exams missing session_id or term_id ─────────────────
+  db.run(`UPDATE subjects SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE subjects SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_terms WHERE is_active = 1)`);
+  db.run(`UPDATE exams SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE exams SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  
+  db.run(`UPDATE users SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE users SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  
+  db.run(`UPDATE questions SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE questions SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  
+  db.run(`UPDATE student_answers SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE student_answers SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  
+  db.run(`UPDATE student_term_remarks SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+  db.run(`UPDATE student_term_remarks SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
 }
 
 // Initialize schema before preparing statements so new tables exist.
@@ -633,8 +708,10 @@ export const queries = {
   getUserByEmail: db.prepare("SELECT * FROM users WHERE email = ?"),
   getUserByEmailOrReg: db.prepare("SELECT * FROM users WHERE email = ? OR reg_id = ?"),
   createUser:     db.prepare(`
-    INSERT INTO users (name, email, role, password_hash, grade, reg_id, first_name, last_name, address, phone, dob)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO users (name, email, role, password_hash, grade, reg_id, first_name, last_name, address, phone, dob, session_id, term_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+      (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1), 
+      (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1))
   `),
   getUserById:    db.prepare("SELECT * FROM users WHERE id = ?"),
   getAllUsers:     db.prepare("SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users ORDER BY id DESC LIMIT 1000"),
@@ -700,7 +777,12 @@ export const queries = {
   getStudentAnswersByExam: db.prepare("SELECT sa.*, q.question_text, q.question_type, q.correct_answer, q.teacher_answer, q.options_json, q.marks FROM student_answers sa JOIN questions q ON q.id = sa.question_id WHERE sa.exam_id = ?"),
 
   // ── Exams / Results ───────────────────────────────────────────────────
-  createExam:              db.prepare("INSERT INTO exams (student_id, subject_id, start_time, answers_json, status, session, term, mode) VALUES (?, ?, ?, ?, 'in-progress', ?, ?, ?)"),
+  createExam: db.prepare(`
+    INSERT INTO exams (student_id, subject_id, start_time, answers_json, status, session, term, mode, session_id, term_id) 
+    VALUES (?, ?, ?, ?, 'in-progress', ?, ?, ?,
+      (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1), 
+      (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1))
+  `),
   getExamById:             db.prepare("SELECT * FROM exams WHERE id = ?"),
   getExamByStudentSubject: db.prepare("SELECT * FROM exams WHERE student_id = ? AND subject_id = ?"),
   saveExam:                db.prepare("UPDATE exams SET answers_json = ? WHERE id = ? AND student_id = ?"),
@@ -831,6 +913,23 @@ export const queries = {
   deactivateAllTerms: db.prepare("UPDATE terms SET is_active = 0"),
   activateTerm:       db.prepare("UPDATE terms SET is_active = 1 WHERE id = ?"),
   updateTerm:         db.prepare("UPDATE terms SET session=?, name=?, start_date=?, end_date=?, registration_open=? WHERE id=?"),
+
+  // ── v7: Academic Sessions & Academic Terms ─────────────────────────────────
+  getActiveAcademicSession: db.prepare("SELECT * FROM academic_sessions WHERE is_active = 1 LIMIT 1"),
+  getActiveAcademicTerm:    db.prepare("SELECT * FROM academic_terms WHERE is_active = 1 LIMIT 1"),
+  getAllAcademicSessions:   db.prepare("SELECT * FROM academic_sessions ORDER BY id DESC"),
+  getAcademicSessionById:   db.prepare("SELECT * FROM academic_sessions WHERE id = ?"),
+  getAcademicTermsBySession:db.prepare("SELECT * FROM academic_terms WHERE session_id = ? ORDER BY id ASC"),
+  getAllAcademicTerms:      db.prepare("SELECT t.*, s.name as session_name FROM academic_terms t JOIN academic_sessions s ON s.id = t.session_id ORDER BY t.id DESC"),
+  getAcademicTermById:      db.prepare("SELECT * FROM academic_terms WHERE id = ?"),
+  createAcademicSession:    db.prepare("INSERT INTO academic_sessions (name, is_active, status) VALUES (?, ?, ?)"),
+  createAcademicTerm:       db.prepare("INSERT INTO academic_terms (session_id, name, start_date, end_date, is_active, status) VALUES (?, ?, ?, ?, ?, ?)"),
+  deactivateAllAcademicSessions: db.prepare("UPDATE academic_sessions SET is_active = 0"),
+  activateAcademicSession:   db.prepare("UPDATE academic_sessions SET is_active = 1 WHERE id = ?"),
+  deactivateAllAcademicTerms:    db.prepare("UPDATE academic_terms SET is_active = 0"),
+  activateAcademicTerm:      db.prepare("UPDATE academic_terms SET is_active = 1 WHERE id = ?"),
+  lockExamsForTerm:          db.prepare("UPDATE exams SET is_locked = 1 WHERE term_id = ?"),
+  archiveAcademicTerm:       db.prepare("UPDATE academic_terms SET status = 'archived', is_active = 0 WHERE id = ?"),
 
   // ── v5: Classes ─────────────────────────────────────────────────────────────
   getAllClasses:  db.prepare("SELECT * FROM classes ORDER BY level, name, section"),

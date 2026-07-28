@@ -13,6 +13,7 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { ProgressRing } from "../../../components/ui/ProgressRing";
 import { getCachedAssignments, cacheAssignments, getPendingSubmissions, clearPendingSubmissions, OfflineSubmission } from "../../../lib/offlineSync";
 import { DownloadAppWidget } from "../../../components/ui/DownloadAppWidget";
+import { useAcademic } from "../../../components/context/AcademicContext";
 import styles from "./page.module.css";
 
 export default function StudentDashboardPage() {
@@ -25,6 +26,9 @@ export default function StudentDashboardPage() {
 
 function DashboardContent() {
   const { user } = useAuth();
+  const { activeSession, activeTerm, selectedSession, selectedTerm } = useAcademic();
+  const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
+  const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
   const router = useRouter();
   const [subjects,    setSubjects]    = useState<Subject[]>([]);
   const [results,     setResults]     = useState<ExamResult[]>([]);
@@ -37,7 +41,7 @@ function DashboardContent() {
   const fetchData = async (signal?: AbortSignal, isInitial = false) => {
     try {
       const [subjectsData, resultsData, activeData] = await Promise.all([
-        api.getSubjects(),
+        api.getSubjects(selectedSession?.id, selectedTerm?.id),
         api.getResults(),
         api.getActiveExams(),
       ]);
@@ -162,8 +166,16 @@ function DashboardContent() {
       {/* Welcome Banner */}
       <div className={`${styles.welcomeBanner} animate-enter`}>
         <div className={styles.welcomeText}>
-          <h1 className={styles.greeting}>Hello, {firstName}! 👋</h1>
-          <p className={styles.sub}>{new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} pending · {stats.examsTaken} completed</p>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-700 text-xs font-bold uppercase tracking-wider mb-2">
+            <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
+            {currentTermName} · {currentSessionName} Academic Session
+          </div>
+          <h1 className={styles.greeting}>
+            Welcome to {currentTermName} <span className="text-teal-600">({currentSessionName})</span>
+          </h1>
+          <p className={styles.sub}>
+            Hello, {firstName}! 👋 · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} pending · {stats.examsTaken} completed
+          </p>
         </div>
       </div>
 

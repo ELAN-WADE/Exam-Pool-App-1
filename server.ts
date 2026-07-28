@@ -953,21 +953,167 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess(queries.getTermRemark.get(studentId, term));
   }
 
+  // ── ACADEMIC SESSIONS & TERMS ENDPOINTS ───────────────────────────────────────
+  if (method === "GET" && pathname === "/api/academic/active") {
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    return apiSuccess({
+      activeSession: activeSession || { id: 1, name: "2026/2027", is_active: 1 },
+      activeTerm: activeTerm || { id: 1, session_id: 1, name: "First Term", is_active: 1 }
+    });
+  }
+
+  if (method === "GET" && pathname === "/api/academic/sessions") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const sessions = queries.getAllAcademicSessions.all() as any[];
+    const terms = queries.getAllAcademicTerms.all() as any[];
+    return apiSuccess({ sessions, terms });
+  }
+
+  if (method === "POST" && pathname === "/api/academic/sessions") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const name = trimStr(body?.name);
+    if (!name) return apiError(400, "Session name is required (e.g. 2026/2027)");
+    try {
+      queries.createAcademicSession.run(name, 0, "active");
+      const created = queries.getActiveAcademicSession.get() as any;
+      return apiSuccess({ success: true, message: `Academic Session ${name} created` });
+    } catch (err: any) {
+      return apiError(400, err.message || "Failed to create session");
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/academic/terms") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const sessionId = Number(body?.sessionId);
+    const name = trimStr(body?.name);
+    if (!sessionId || !["First Term", "Second Term", "Third Term"].includes(name)) {
+      return apiError(400, "Valid sessionId and term name ('First Term', 'Second Term', 'Third Term') required");
+    }
+    try {
+      queries.createAcademicTerm.run(sessionId, name, body?.startDate || null, body?.endDate || null, 0, "active");
+      return apiSuccess({ success: true, message: `${name} created for session` });
+    } catch (err: any) {
+      return apiError(400, err.message || "Failed to create term");
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/academic/activate-session") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const sessionId = Number(body?.sessionId);
+    if (!isPositiveIntId(sessionId)) return apiError(400, "Invalid sessionId");
+    queries.deactivateAllAcademicSessions.run();
+    queries.activateAcademicSession.run(sessionId);
+    return apiSuccess({ success: true, message: "Academic session activated" });
+  }
+
+  if (method === "POST" && pathname === "/api/academic/activate-term") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const termId = Number(body?.termId);
+    if (!isPositiveIntId(termId)) return apiError(400, "Invalid termId");
+    queries.deactivateAllAcademicTerms.run();
+    queries.activateAcademicTerm.run(termId);
+    return apiSuccess({ success: true, message: "Academic term activated" });
+  }
+
+  if (method === "POST" && pathname === "/api/academic/end-term") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    
+    // Deactivate the current active term
+    queries.deactivateAllAcademicTerms.run();
+    
+    return apiSuccess({ success: true, message: "Active term ended successfully. Awaiting new term activation." });
+  }
+
+  if (method === "GET" && pathname === "/api/academic/stats") {
+    const auth = requireAuth(req);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+    
+    let subjectQuery = "SELECT COUNT(*) as count FROM subjects";
+    let examQuery = "SELECT COUNT(*) as count FROM exams";
+    const params: any[] = [];
+    if (targetSessionId && targetTermId) {
+      subjectQuery += " WHERE session_id = ? AND term_id = ?";
+      examQuery += " WHERE session_id = ? AND term_id = ?";
+      params.push(targetSessionId, targetTermId);
+    }
+    
+    let usersQueryBase = "SELECT COUNT(*) as count FROM users WHERE role=? AND is_active=1";
+    const userParamsStudent: any[] = ["student"];
+    const userParamsTeacher: any[] = ["teacher"];
+    const students = rowCount(db.prepare(usersQueryBase).get(...userParamsStudent) as any);
+    const teachers = rowCount(db.prepare(usersQueryBase).get(...userParamsTeacher) as any);
+    const subjectsCount = rowCount(db.prepare(subjectQuery).get(...params) as any);
+    const examsCount = rowCount(db.prepare(examQuery).get(...params) as any);
+    
+    return apiSuccess({
+      students,
+      teachers,
+      subjects: subjectsCount,
+      completedExams: examsCount
+    });
+  }
+
   if (method === "GET" && pathname === "/api/subjects") {
     const auth = requireAuth(req);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+
     if (auth.role === "student") {
-      // Students only see subjects they are enrolled in AND published.
-      return apiSuccess(
-        db.prepare(`
-          SELECT s.* FROM subjects s
-          INNER JOIN subject_enrollments se ON se.subject_id = s.id AND se.student_id = ?
-          WHERE s.is_timetable_published = 1
-          ORDER BY s.name
-        `).all(auth.userId)
-      );
+      let query = `
+        SELECT s.* FROM subjects s
+        INNER JOIN subject_enrollments se ON se.subject_id = s.id AND se.student_id = ?
+        WHERE s.is_timetable_published = 1
+      `;
+      const params: any[] = [auth.userId];
+      if (targetSessionId && targetTermId) {
+        query += " AND (s.session_id = ? AND s.term_id = ? OR s.session_id IS NULL)";
+        params.push(targetSessionId, targetTermId);
+      }
+      query += " ORDER BY s.name";
+      return apiSuccess(db.prepare(query).all(...params));
     }
-    if (auth.role === "teacher") return apiSuccess(queries.getSubjectsByTeacher.all(auth.userId));
-    return apiSuccess(queries.getAllSubjects.all());
+
+    if (auth.role === "teacher") {
+      let query = "SELECT * FROM subjects WHERE teacher_id = ?";
+      const params: any[] = [auth.userId];
+      if (targetSessionId && targetTermId) {
+        query += " AND (session_id = ? AND term_id = ? OR session_id IS NULL)";
+        params.push(targetSessionId, targetTermId);
+      }
+      query += " ORDER BY name";
+      return apiSuccess(db.prepare(query).all(...params));
+    }
+
+    let query = "SELECT * FROM subjects";
+    const params: any[] = [];
+    if (targetSessionId && targetTermId) {
+      query += " WHERE session_id = ? AND term_id = ? OR session_id IS NULL";
+      params.push(targetSessionId, targetTermId);
+    }
+    query += " ORDER BY id DESC";
+    return apiSuccess(db.prepare(query).all(...params));
   }
 
   if (method === "POST" && pathname === "/api/subjects") {
@@ -998,7 +1144,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const window_duration = Number(body?.window_duration) || 120;
     const can_retake = body?.can_retake !== undefined ? Number(body.can_retake) : 1;
     const is_assignment = body?.is_assignment !== undefined ? Number(body.is_assignment) : 0;
-    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake, is_assignment) as {
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const sessionId = Number(body?.session_id || activeSession?.id || 1);
+    const termId = Number(body?.term_id || activeTerm?.id || 1);
+
+    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake, is_assignment, sessionId, termId) as {
       lastInsertRowid: number | bigint;
     };
     auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
@@ -1631,22 +1782,39 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   if (method === "GET" && pathname === "/api/exams/results") {
     const auth = requireAuth(req);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+
+    let baseFilter = "e.status = 'completed'";
+    const params: any[] = [];
+    
+    if (targetSessionId && targetTermId) {
+      baseFilter += " AND (e.session_id = ? AND e.term_id = ? OR e.session_id IS NULL)";
+      params.push(targetSessionId, targetTermId);
+    }
+
     if (auth.role === "student") {
+      params.unshift(auth.userId);
       return apiSuccess(
-        db.prepare("SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'").all(auth.userId)
+        db.prepare(`SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND ${baseFilter}`).all(...params)
       );
     }
     if (auth.role === "teacher") {
+      params.unshift(auth.userId);
       return apiSuccess(
         db.prepare(
-          "SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC",
-        ).all(auth.userId),
+          `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE s.teacher_id = ? AND ${baseFilter} ORDER BY e.end_time DESC`
+        ).all(...params)
       );
     }
     return apiSuccess(
       db.prepare(
-        "SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY e.end_time DESC",
-      ).all(),
+        `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE ${baseFilter} ORDER BY e.end_time DESC`
+      ).all(...params)
     );
   }
 
@@ -1834,14 +2002,29 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     // Operators get full access; teachers may only fetch student list (role=student)
     if (auth.role === "teacher") {
       if (role !== "student") return apiError(403, "Forbidden");
-      if (grade) return apiSuccess(db.prepare("SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND u.grade = ? AND s.teacher_id = ?").all(grade, auth.userId));
-      return apiSuccess(db.prepare("SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND s.teacher_id = ?").all(auth.userId));
+      let q = "SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND s.teacher_id = ?";
+      const params: any[] = [auth.userId];
+      if (grade) {
+        q += " AND u.grade = ?";
+        params.push(grade);
+      }
+      return apiSuccess(db.prepare(q).all(...params));
     }
     requireRole(auth.role, ["operator"]);
     if (role && !isValidRoleParam(role)) return apiError(400, "Invalid role filter");
-    if (role && grade) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ? AND grade = ? ORDER BY id DESC LIMIT 1000").all(role, grade));
-    if (role) return apiSuccess(db.prepare("SELECT id, name, email, role, grade, is_active, created_at FROM users WHERE role = ? ORDER BY id DESC LIMIT 1000").all(role));
-    return apiSuccess(queries.getAllUsers.all());
+    
+    let q = "SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users WHERE 1=1";
+    const params: any[] = [];
+    if (role) {
+      q += " AND role = ?";
+      params.push(role);
+    }
+    if (grade) {
+      q += " AND grade = ?";
+      params.push(grade);
+    }
+    q += " ORDER BY id DESC LIMIT 1000";
+    return apiSuccess(db.prepare(q).all(...params));
   }
 
   if (method === "POST" && pathname === "/api/users/operator") {
@@ -3220,6 +3403,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 const server = serve({
   port: Number(Bun.env.PORT ?? 8001),
   hostname: "0.0.0.0",
+  idleTimeout: 255,
   async fetch(req) {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
     const url = new URL(req.url);
