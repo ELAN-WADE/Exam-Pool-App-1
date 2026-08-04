@@ -14,7 +14,7 @@ type Subject = {
   id: number; name: string; code: string; term: string;
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
-  description?: string; class?: string; session?: string; mode?: string;
+  description?: string; class?: string; grade_level_id?: number; session?: string; mode?: string;
   is_timetable_published?: number; window_duration?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
@@ -40,9 +40,11 @@ function TimetableContent() {
   const [saving,    setSaving]    = useState(false);
   const [teachers,  setTeachers]  = useState<User[]>([]);
 
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
+
   // Create Form State
   const [form, setForm] = useState({
-    name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam"
+    name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", grade_level_id: "", session: "", mode: "exam"
   });
 
   const [examDate, setExamDate] = useState("");
@@ -58,9 +60,10 @@ function TimetableContent() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [s, u] = await Promise.all([api.getSubjects(selectedSession?.id, selectedTerm?.id), api.getUsers()]);
+      const [s, u, g] = await Promise.all([api.getSubjects(selectedSession?.id, selectedTerm?.id), api.getUsers(), api.getGradeLevels()]);
       setSubjects((s as Subject[]) ?? []);
       setTeachers(((u as User[]) ?? []).filter(user => user.role === "teacher" && user.is_active));
+      setGradeLevels((g as any)?.grades ?? []);
     } catch {
       showToast("error", "Failed to load subjects.");
     } finally {
@@ -132,13 +135,13 @@ function TimetableContent() {
       await api.createSubject({
         name: form.name, code: form.code, term: form.term,
         duration: Number(form.duration), window_duration: Number(form.window_duration), exam_datetime: form.exam_datetime,
-        teacher_id: Number(form.teacher_id), class: form.class || null,
+        teacher_id: Number(form.teacher_id), grade_level_id: form.grade_level_id ? Number(form.grade_level_id) : null,
         session: form.session || null, mode: form.mode || "exam",
         session_id: selectedSession?.id, term_id: selectedTerm?.id
       });
       showToast("success", `Subject "${form.name}" created and scheduled.`);
       setCreateModalOpen(false);
-      setForm({ name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam" });
+      setForm({ name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", grade_level_id: "", session: "", mode: "exam" });
       await load();
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Create failed.");
@@ -303,7 +306,10 @@ function TimetableContent() {
             </div>
             <div className="field">
               <label>Class</label>
-              <input className="input" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })} />
+              <select className="select" value={form.grade_level_id} onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })}>
+                <option value="">Select a class...</option>
+                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
             </div>
             <div className="field">
               <label>Session</label>

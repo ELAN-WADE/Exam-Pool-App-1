@@ -18,9 +18,8 @@ export default function TeacherResultsPage() {
   );
 }
 
-const GRADE_OPTIONS = ["JSS1","JSS2","JSS3","SS1","SS2","SS3","Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6","Grade 7","Grade 8","Grade 9","Grade 10","Grade 11","Grade 12"];
-
 function TeacherResults() {
+  const [gradeLevels, setGradeLevels] = useState<{ id: number; name: string }[]>([]);
   const [rows,            setRows]            = useState<ExamResult[]>([]);
   const [query,           setQuery]           = useState("");
   const { selectedSession, selectedTerm } = useAcademic();
@@ -43,15 +42,19 @@ function TeacherResults() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const data = (await api.getResults(selectedSession?.id, selectedTerm?.id)) as ExamResult[];
+      const [data, grades] = await Promise.all([
+        api.getResults(selectedSession?.id, selectedTerm?.id) as Promise<ExamResult[]>,
+        api.getGradeLevels() as Promise<{ grades: { id: number; name: string }[] }>
+      ]);
       if (signal?.aborted) return;
       setRows(data ?? []);
+      setGradeLevels(grades?.grades ?? []);
     } catch (err) {
       if (!signal?.aborted) setError(err instanceof Error ? err.message : "Failed to load results");
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, []);
+  }, [selectedSession?.id, selectedTerm?.id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -118,15 +121,17 @@ function TeacherResults() {
   // Promote / demote
   const openGradeModal = (row: any) => {
     setGradeModal(row);
-    setGradeValue(row.grade || "");
+    const matched = gradeLevels.find(g => g.name === row.grade || g.id === Number(row.grade_level_id || row.grade));
+    setGradeValue(matched ? String(matched.id) : (row.grade_level_id ? String(row.grade_level_id) : ""));
   };
 
   const saveGrade = async () => {
     if (!gradeModal || !gradeValue.trim()) return;
     setGradeSaving(true);
     try {
-      await api.updateStudentGrade(Number(gradeModal.student_user_id), gradeValue.trim());
-      showToast("success", `${gradeModal.student_name} moved to ${gradeValue}`);
+      const selectedGradeName = gradeLevels.find(g => g.id === Number(gradeValue))?.name || gradeValue;
+      await api.updateStudentGrade(Number(gradeModal.student_user_id), Number(gradeValue));
+      showToast("success", `${gradeModal.student_name} moved to ${selectedGradeName}`);
       setGradeModal(null);
       await load();
     } catch (err) {
@@ -268,16 +273,9 @@ function TeacherResults() {
             <div className="field" style={{ marginTop: "1rem" }}>
               <label>New Grade / Class *</label>
               <select className="select" value={gradeValue} onChange={(e) => setGradeValue(e.target.value)}>
-                <option value="">Select grade…</option>
-                {GRADE_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
+                <option value="">Select class...</option>
+                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
-              <input
-                className="input"
-                style={{ marginTop: "0.5rem" }}
-                placeholder="Or type a custom grade…"
-                value={gradeValue}
-                onChange={(e) => setGradeValue(e.target.value)}
-              />
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
               <button className="btn btn-ghost" onClick={() => setGradeModal(null)}>Cancel</button>

@@ -9,6 +9,13 @@ export interface User {
   reg_id?: string | null;
 }
 
+export interface GradeLevel {
+  id: number;
+  name: string;
+  category: string;
+  sort_order: number;
+}
+
 export interface EnrolledStudent {
   id: number;
   name: string;

@@ -79,6 +79,27 @@ function auditLog(actorId: number, action: string, resource: string, resourceId:
 
 let setupRequired = rowCount(queries.countActiveOperators.get() as { count?: unknown }) === 0;
 
+// ── In-Memory Log Ring Buffer ─────────────────────────────────────────────
+// Captures last 200 console.log/warn/error lines so /api/system/logs can
+// surface them in the admin terminal panel without writing to a file.
+const LOG_BUFFER_MAX = 200;
+type LogEntry = { ts: string; level: "info" | "warn" | "error"; msg: string };
+const logBuffer: LogEntry[] = [];
+
+function pushLog(level: LogEntry["level"], args: any[]) {
+  const msg = args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ");
+  logBuffer.push({ ts: new Date().toISOString(), level, msg });
+  if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
+}
+
+const _origLog   = console.log.bind(console);
+const _origWarn  = console.warn.bind(console);
+const _origError = console.error.bind(console);
+console.log   = (...a) => { _origLog(...a);   pushLog("info",  a); };
+console.warn  = (...a) => { _origWarn(...a);  pushLog("warn",  a); };
+console.error = (...a) => { _origError(...a); pushLog("error", a); };
+// ─────────────────────────────────────────────────────────────────────────
+
 const ALLOWED_ORIGIN = Bun.env.ALLOWED_ORIGIN || "http://localhost:3000";
 
 const securityHeaders = {
@@ -151,7 +172,7 @@ function getClientIp(req: Request): string {
 }
 
 function checkRateLimit(key: string, limit: number, windowMs: number) {
-  if (key.includes("127.0.0.1") || key.includes("::1") || key.includes("localhost")) return;
+  // [SECURITY FIX] Removed hardcoded localhost bypass to prevent rate limit evasion behind unconfigured proxies
   const now = Date.now();
   let record = rateLimits.get(key);
   if (!record || now > record.resetAt) {
@@ -177,11 +198,14 @@ function notifyUser(userId: number, eventData: any) {
     ) as any;
 
     const clients = sseClients.get(userId);
-    if (clients) {
+    if (clients && clients.size > 0) {
       const payload = `data: ${jsonSafeStringify(record)}\n\n`;
-      for (const client of clients) {
-        try { client.enqueue(payload); } catch (e) {}
-      }
+      // Push to next tick to avoid blocking the synchronous event loop
+      setTimeout(() => {
+        for (const client of clients) {
+          try { client.enqueue(payload); } catch (e) {}
+        }
+      }, 0);
     }
   } catch (err) {
     console.error("[exampool] Failed to send notification", err);
@@ -259,13 +283,18 @@ function parseCookies(req: Request): Record<string, string> {
   return out;
 }
 
-function requireAuth(req: Request): { userId: number; role: string } {
+function requireAuth(req: Request): { userId: number; role: string; token: string } {
   const cookies = parseCookies(req);
   const cookieToken = cookies.__exampool_session;
   const authHeader = req.headers.get("authorization");
   const headerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const token = cookieToken || headerToken;
   if (!token) throw new HttpError(401, "Not authenticated");
+  
+  if (queries.isTokenBlacklisted.get(token)) {
+    throw new HttpError(401, "Session invalidated (Logged out)");
+  }
+  
   const decoded = verifyToken(token);
   if (!decoded) throw new HttpError(401, "Not authenticated");
 
@@ -275,7 +304,7 @@ function requireAuth(req: Request): { userId: number; role: string } {
     throw new HttpError(401, "Session invalidated or user suspended");
   }
 
-  return decoded;
+  return { ...decoded, token };
 }
 
 function requireRole(role: string, allowed: string[]) {
@@ -323,6 +352,29 @@ function stripPassword(user: any) {
   const safe: Record<string, unknown> = { ...rest };
   if (safe.id != null) safe.id = Number(safe.id);
   if (safe.is_active != null) safe.is_active = Number(safe.is_active);
+
+  // If user is a teacher, enrich with their assigned class teacher status
+  if (safe.role === "teacher" && safe.id) {
+    try {
+      const teacherClass = db.prepare("SELECT * FROM classes WHERE class_teacher_id = ? LIMIT 1").get(Number(safe.id)) as any;
+      if (teacherClass) {
+        safe.is_class_teacher = true;
+        safe.assigned_class_id = Number(teacherClass.id);
+        safe.assigned_class_name = teacherClass.name;
+        safe.assigned_class_section = teacherClass.section || null;
+      } else {
+        safe.is_class_teacher = false;
+        safe.assigned_class_id = null;
+        safe.assigned_class_name = null;
+        safe.assigned_class_section = null;
+      }
+    } catch {
+      safe.is_class_teacher = false;
+      safe.assigned_class_id = null;
+      safe.assigned_class_name = null;
+    }
+  }
+
   return safe;
 }
 
@@ -416,12 +468,14 @@ async function serveStatic(urlPath: string): Promise<Response> {
     }
     const file = Bun.file(filePath);
     if (await file.exists()) {
+      const isSvg = filePath.toLowerCase().endsWith(".svg");
       return new Response(file, {
         headers: {
           ...corsHeaders,
           "Content-Type": getMimeType(filePath),
           "Cache-Control": getCacheControl(filePath),
           "Pragma": (filePath.endsWith(".html") || filePath.endsWith(".txt") || filePath.endsWith(".rsc") || filePath.endsWith(".meta")) ? "no-cache" : "",
+          ...(isSvg ? { "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox" } : {}),
         },
       });
     }
@@ -521,12 +575,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
     return new Response(new ReadableStream({
       start(controller) {
+        // Cache subject duration outside the interval to prevent N+1 queries
+        const subject = queries.getSubjectById.get(exam.subject_id) as any;
+        const durationSeconds = Number(subject?.duration || 60) * 60;
+        
+        // Prepare a lightweight query to avoid fetching the massive answers_json payload every 15s
+        const statusStmt = db.prepare("SELECT status, start_time FROM exams WHERE id = ?");
+
         const sendTimeSync = () => {
-          const e = queries.getExamById.get(examId) as any;
+          const e = statusStmt.get(examId) as any;
           if (e && e.status === "in-progress") {
-             const s = queries.getSubjectById.get(e.subject_id) as any;
              const elapsed = Math.floor((Date.now() - Date.parse(e.start_time)) / 1000);
-             const remaining = Math.max(0, s.duration * 60 - elapsed);
+             const remaining = Math.max(0, durationSeconds - elapsed);
              if (remaining === 0) {
                try { controller.enqueue(`data: ${JSON.stringify({type: "force_submit"})}\n\n`); } catch {}
              } else {
@@ -581,7 +641,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const hash = await hashPassword(password);
     let result: { lastInsertRowid: number | bigint };
     try {
-      result = queries.createUser.run(name, email, "operator", hash, null, null, null, null, null, null, null) as { lastInsertRowid: number | bigint };
+      result = queries.createUser.run(name, email, "operator", hash, null, null, null, null, null, null, null, null) as { lastInsertRowid: number | bigint };
     } catch (e) {
       if (isSqliteUniqueError(e)) return apiError(409, "Email already registered");
       throw e;
@@ -643,7 +703,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
       const token = generateToken(userId, role);
       auditLog(userId, "LOGIN", "user", userId, JSON.stringify({ email: user.email }));
-      return apiSuccess({ user: stripPassword(user) }, 200, { "Set-Cookie": buildSessionCookie(token) });
+      let is_class_teacher = false;
+      let assigned_class_id: number | null = null;
+      let assigned_class_name: string | null = null;
+      if (user.role === "teacher") {
+        const cls = queries.getClassForTeacher.get(Number(user.id)) as any;
+        if (cls) {
+          is_class_teacher = true;
+          assigned_class_id = cls.id;
+          assigned_class_name = [cls.name, cls.section].filter(Boolean).join(" ");
+        }
+      }
+      return apiSuccess({ user: { ...stripPassword(user), is_class_teacher, assigned_class_id, assigned_class_name } }, 200, { "Set-Cookie": buildSessionCookie(token) });
     } catch (error) {
       if (error instanceof HttpError) throw error;
       console.error("[Login] Unexpected error:", error);
@@ -669,7 +740,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     let email = normalizeEmail(trimStr(body?.email));
     const password = body?.password;
     const role = body?.role;
-    const grade = trimStr(body?.grade);
+    const gradeLevelId = body?.grade_level_id ? Number(body.grade_level_id) : null;
     const dob = trimStr(body?.dob) || null;
     const phone = trimStr(body?.phone) || null;
     
@@ -682,7 +753,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     if (role === "operator" && (!auth || auth.role !== "operator")) return apiError(403, "operator cannot self-register");
     if (role !== "student" && role !== "teacher" && role !== "operator") return apiError(403, "Invalid role");
-    if (role === "student" && !grade) return apiError(400, "Grade is required for student accounts");
+    if (role === "student" && !gradeLevelId) return apiError(400, "Grade Level ID is required for student accounts");
     if (role === "student" && !dob) return apiError(400, "Date of Birth is required for student accounts");
     if (role === "teacher" && !phone) return apiError(400, "Phone number is required for teacher accounts");
     
@@ -696,9 +767,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     if (queries.getUserByEmail.get(email)) return apiError(400, "Email already registered");
     const hash = await hashPassword(password);
+    let resolvedGradeString = "";
+    if (role === "student" && gradeLevelId) {
+      const gl = db.prepare("SELECT name FROM grade_levels WHERE id = ?").get(gradeLevelId) as any;
+      if (gl) resolvedGradeString = gl.name;
+    }
+    
     let result: { lastInsertRowid: number | bigint };
     try {
-      result = queries.createUser.run(name, email, role, hash, role === "student" ? grade : null, regId, null, null, null, role === "teacher" ? phone : null, role === "student" ? dob : null) as {
+      result = queries.createUser.run(name, email, role, hash, resolvedGradeString, regId, null, null, null, role === "teacher" ? phone : null, role === "student" ? dob : null, role === "student" ? gradeLevelId : null) as {
         lastInsertRowid: number | bigint;
       };
     } catch (e) {
@@ -708,18 +785,54 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const newUserId = Number(result.lastInsertRowid);
     const actorId = auth != null ? Number(auth.userId) : newUserId;
     auditLog(actorId, "USER_CREATE", "user", newUserId, JSON.stringify({ role }));
-    return apiSuccess({ user: { id: newUserId, name, email, role, reg_id: regId, grade: role === "student" ? grade : null } }, 201);
+
+    // Auto-enroll student into class and matching subjects
+    if (role === "student" && resolvedGradeString) {
+      try {
+        const targetClass = db.prepare("SELECT id FROM classes WHERE name = ? LIMIT 1").get(resolvedGradeString) as any;
+        const activeTerm = queries.getActiveAcademicTerm.get() as any;
+        if (targetClass && activeTerm) {
+          db.prepare("INSERT OR IGNORE INTO class_enrollments (student_id, class_id, term_id) VALUES (?, ?, ?)").run(newUserId, targetClass.id, activeTerm.id);
+        }
+        const matchingSubjects = db.prepare(`
+          SELECT id FROM subjects 
+          WHERE (grade_level_id = ? OR class = ?) 
+            AND is_published = 1
+        `).all(gradeLevelId, resolvedGradeString) as any[];
+        const enrollStmt = db.prepare("INSERT OR IGNORE INTO subject_enrollments (subject_id, student_id, enrolled_by) VALUES (?, ?, ?)");
+        for (const subj of matchingSubjects) {
+          enrollStmt.run(subj.id, newUserId, actorId);
+        }
+      } catch (err) {
+        console.warn("[Register] Auto-enrollment error:", err);
+      }
+    }
+
+    return apiSuccess({ user: { id: newUserId, name, email, role, reg_id: regId, grade_level_id: role === "student" ? gradeLevelId : null } }, 201);
   }
 
   if (method === "GET" && pathname === "/api/auth/me") {
     const auth = requireAuth(req);
     const user = queries.getUserById.get(auth.userId) as any;
     if (!user || sqlInt(user.is_active) !== 1) return apiError(401, "Not authenticated");
-    return apiSuccess({ user: stripPassword(user) });
+    // Enrich teachers with class teacher assignment info
+    let is_class_teacher = false;
+    let assigned_class_id: number | null = null;
+    let assigned_class_name: string | null = null;
+    if (user.role === "teacher") {
+      const cls = queries.getClassForTeacher.get(user.id) as any;
+      if (cls) {
+        is_class_teacher = true;
+        assigned_class_id = cls.id;
+        assigned_class_name = [cls.name, cls.section].filter(Boolean).join(" ");
+      }
+    }
+    return apiSuccess({ user: { ...stripPassword(user), is_class_teacher, assigned_class_id, assigned_class_name } });
   }
 
   if (method === "POST" && pathname === "/api/auth/logout") {
     const auth = requireAuth(req);
+    queries.insertTokenBlacklist.run(auth.token);
     auditLog(auth.userId, "LOGOUT", "user", auth.userId, "{}");
     return apiMessage("Logged out", 200, { "Set-Cookie": "__exampool_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
   }
@@ -753,6 +866,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const normalizedIdentifier = identifier.includes("@") ? normalizeEmail(identifier) : identifier.toUpperCase();
     const user = queries.getUserByEmailOrReg.get(normalizedIdentifier, normalizedIdentifier) as any;
     if (!user) return apiError(404, "User not found");
+    
+    // [SECURITY FIX] Apply a targeted rate limit per-account to prevent distributed brute-force attacks
+    checkRateLimit(`pwreset_target_${user.id}`, 5, 60_000);
+    
     if (sqlInt(user.is_active) !== 1) return apiError(423, "Account deactivated");
     
     // [SECURITY FIX] Use timing-safe comparison to prevent timing-based enumeration of DOB/phone
@@ -800,9 +917,54 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["teacher", "operator"]);
     const studentId = Number(studentExamsMatch[1]);
     
-    const exams = queries.getStudentExamsForRoster.all(studentId);
+    let exams = queries.getStudentExamsForRoster.all(studentId) as any[];
+    
+    // [SECURITY FIX] Filter out exams for subjects that the teacher does not own, UNLESS they are the student's Class Teacher.
+    if (auth.role === "teacher") {
+      let isClassTeacherForStudent = false;
+      const teacherClass = queries.getClassForTeacher.get(auth.userId) as any;
+      if (teacherClass) {
+        const isEnrolled = db.prepare("SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.id = ? AND COALESCE(gl.name, u.grade) = ? LIMIT 1").get(studentId, teacherClass.name);
+        if (isEnrolled) isClassTeacherForStudent = true;
+      }
+      if (!isClassTeacherForStudent) {
+        exams = exams.filter((e) => sameUserId(e.teacher_id, auth.userId));
+      }
+    }
     
     return apiSuccess(exams);
+  }
+
+  const reportCardMatch = pathname.match(/^\/api\/users\/(\d+)\/report-card-results$/);
+  if (reportCardMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const studentId = Number(reportCardMatch[1]);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    
+    let results = queries.getStudentTermResultsForReportCard.all(studentId) as any[];
+    
+    // [SECURITY FIX] Allow Class Teachers to see all results for their class
+    if (auth.role === "teacher") {
+      let isClassTeacherForStudent = false;
+      const isEnrolled = db.prepare(
+        "SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN classes c ON c.name = COALESCE(gl.name, u.grade) WHERE u.id = ? AND c.class_teacher_id = ? LIMIT 1"
+      ).get(studentId, auth.userId);
+      if (isEnrolled) isClassTeacherForStudent = true;
+      if (!isClassTeacherForStudent) {
+        results = results.filter((r) => sameUserId(r.teacher_id, auth.userId));
+      }
+    }
+
+    if (qSessionId) {
+      results = results.filter((r) => Number(r.session_id) === qSessionId);
+    }
+    if (qTermId) {
+      results = results.filter((r) => Number(r.term_id) === qTermId);
+    }
+    
+    return apiSuccess(results);
   }
 
   // ── Save teacher remark for a specific completed exam ────────────────────────
@@ -832,7 +994,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     notifyOperators({
       type: "remark_added",
       message: `Teacher added a remark for ${subjectRow?.code || 'an exam'}`,
-      link: `/ADMIN/report-card`
+      link: `/operator/report-card`
     });
 
     return apiSuccess({ exam_id: examId, teacher_remark: remark || null });
@@ -853,6 +1015,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     const subject = queries.getSubjectById.get(exam.subject_id) as any;
     if (!subject || subject.can_retake !== 1) return apiError(403, "Retaking is not allowed for this subject");
+    
+    // [SECURITY FIX] Ensure the global exam window is still open before allowing a retake
+    if (subject.exam_datetime) {
+      const now = Date.now();
+      const start = Date.parse(subject.exam_datetime);
+      if (!Number.isFinite(start)) return apiError(500, "Invalid subject schedule");
+      const end = start + Number(subject.window_duration || 120) * 60_000;
+      if (now >= end) return apiError(403, "The scheduled time window for this exam has already closed. Retakes are no longer permitted.");
+    }
     
     // Archive the completed attempt BEFORE resetting — preserves historical data
     db.transaction(() => {
@@ -884,7 +1055,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     // Notify teacher when admin adds principal remark
     const subjectRow = queries.getSubjectById.get(exam.subject_id) as any;
-    if (subjectRow && subjectRow.teacher_id) {
+    if (subjectRow && subjectRow.teacher_id && Number(subjectRow.teacher_id) !== auth.userId) {
       notifyUser(Number(subjectRow.teacher_id), {
         type: "remark_added",
         message: `Admin added a principal remark for an exam in ${subjectRow.code}`,
@@ -901,10 +1072,24 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator", "student"]);
     const studentId = Number(termRemarkMatch[1]);
+    
+    // [SECURITY FIX] Student IDOR Prevention: Ensure students can only fetch their own term remarks
+    if (auth.role === "student" && auth.userId !== studentId) {
+      return apiError(403, "You do not have permission to view remarks for other students");
+    }
     // [SECURITY FIX] Sanitize term parameter -- trim and cap length
     const term = decodeURIComponent(termRemarkMatch[2] || "").trim().slice(0, 64);
     if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student id");
-    const remark = queries.getTermRemark.get(studentId, term);
+    
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+    
+    if (!targetSessionId || !targetTermId) return apiSuccess(null);
+    const remark = queries.getTermRemark.get(studentId, targetSessionId, targetTermId);
     return apiSuccess(remark || { student_id: studentId, term, teacher_remark: null, principal_remark: null });
   }
 
@@ -912,6 +1097,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator"]);
     const studentId = Number(termRemarkMatch[1]);
+    
     // [SECURITY FIX] Sanitize term parameter -- trim and cap length
     const term = decodeURIComponent(termRemarkMatch[2] || "").trim().slice(0, 64);
     if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student id");
@@ -919,10 +1105,43 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     // [SECURITY FIX] Cap remark length to prevent excessively large DB entries
     const remark = typeof body?.remark === "string" ? body.remark.trim().slice(0, 4000) : "";
     
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+    if (!targetSessionId || !targetTermId) return apiError(400, "No active term for remark");
+
+    // [SECURITY FIX] Ensure teacher actually teaches this student in the target session and term, OR is their Class Teacher
     if (auth.role === "teacher") {
-      queries.upsertTeacherRemark.run(studentId, term, remark || null);
+      const linked = db.prepare(
+        "SELECT se.id FROM subject_enrollments se JOIN subjects s ON s.id = se.subject_id WHERE se.student_id = ? AND s.teacher_id = ? AND (s.session_id = ? AND s.term_id = ? OR s.session_id IS NULL) LIMIT 1"
+      ).get(studentId, auth.userId, targetSessionId, targetTermId);
+
+      const linkedGrading = db.prepare(
+        "SELECT tr.id FROM term_results tr JOIN grading_subjects gs ON gs.id = tr.grading_subject_id WHERE tr.student_id = ? AND gs.teacher_id = ? AND tr.session_id = ? AND tr.term_id = ? LIMIT 1"
+      ).get(studentId, auth.userId, targetSessionId, targetTermId);
+      
+      let isClassTeacher = false;
+      const teacherClass = queries.getClassForTeacher.get(auth.userId) as any;
+      if (teacherClass) {
+        const isEnrolled = db.prepare("SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.id = ? AND COALESCE(gl.name, u.grade) = ? LIMIT 1").get(studentId, teacherClass.name);
+        if (isEnrolled) isClassTeacher = true;
+      }
+      
+      if (!linked && !linkedGrading && !isClassTeacher) return apiError(403, "Student is not enrolled in your subjects or class for this term");
+    }
+
+    const uniqueTermStr = `${targetSessionId}-${targetTermId}`;
+    const existing = queries.getTermRemark.get(studentId, targetSessionId, targetTermId);
+    
+    if (auth.role === "teacher") {
+      if (existing) queries.updateTeacherRemark.run(remark || null, studentId, targetSessionId, targetTermId);
+      else queries.insertTeacherRemark.run(studentId, targetSessionId, targetTermId, remark || null, uniqueTermStr);
     } else {
-      queries.upsertPrincipalRemark.run(studentId, term, remark || null);
+      if (existing) queries.updatePrincipalRemark.run(remark || null, studentId, targetSessionId, targetTermId);
+      else queries.insertPrincipalRemark.run(studentId, targetSessionId, targetTermId, remark || null, uniqueTermStr);
     }
     
     auditLog(auth.userId, "TERM_REMARK", "user", studentId, JSON.stringify({ term, role: auth.role }));
@@ -934,13 +1153,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       notifyOperators({
         type: "remark_added",
         message: `${teacherRow?.name || 'Teacher'} added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
-        link: `/ADMIN/report-card`
+        link: `/operator/report-card`
       });
     } else if (auth.role === "operator") {
       const studentRow = queries.getUserById.get(studentId) as any;
       const teachers = db.prepare('SELECT DISTINCT s.teacher_id FROM subjects s JOIN subject_enrollments se ON se.subject_id = s.id WHERE se.student_id = ? AND s.term = ?').all(studentId, term) as Array<{ teacher_id: number }>;
       for (const t of teachers) {
-        if (t.teacher_id) {
+        if (t.teacher_id && t.teacher_id !== auth.userId) {
           notifyUser(t.teacher_id, {
             type: "remark_added",
             message: `Admin added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
@@ -950,7 +1169,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
     }
 
-    return apiSuccess(queries.getTermRemark.get(studentId, term));
+    return apiSuccess(queries.getTermRemark.get(studentId, targetSessionId, targetTermId));
   }
 
   // ── ACADEMIC SESSIONS & TERMS ENDPOINTS ───────────────────────────────────────
@@ -1045,6 +1264,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const targetSessionId = qSessionId || activeSession?.id;
     const targetTermId = qTermId || activeTerm?.id;
     
+    if (!targetSessionId || !targetTermId) {
+      const usersQueryBase = "SELECT COUNT(*) as count FROM users WHERE role=? AND is_active=1";
+      const students = rowCount(db.prepare(usersQueryBase).get("student") as any);
+      const teachers = rowCount(db.prepare(usersQueryBase).get("teacher") as any);
+      return apiSuccess({ students, teachers, subjects: 0, completedExams: 0 });
+    }
+    
     let subjectQuery = "SELECT COUNT(*) as count FROM subjects";
     let examQuery = "SELECT COUNT(*) as count FROM exams";
     const params: any[] = [];
@@ -1070,6 +1296,1078 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     });
   }
 
+  // ── v8: Grading Config ────────────────────────────────────────────────────
+  const DEFAULT_GRADING_CONFIG = {
+    ca_max: 40,
+    exam_max: 60,
+    passing_score: 40,
+    grade_scale: [
+      { grade: "A", min: 75, label: "Excellent" },
+      { grade: "B", min: 65, label: "Very Good" },
+      { grade: "C", min: 55, label: "Credit" },
+      { grade: "D", min: 45, label: "Pass" },
+      { grade: "E", min: 40, label: "Poor Pass" },
+      { grade: "F", min: 0,  label: "Fail" }
+    ],
+    default_ca_template: [
+      { name: "CBT Test", type: "cbt_test", marks: 20 },
+      { name: "Assignment", type: "manual", marks: 10 },
+      { name: "Classwork",  type: "manual", marks: 10 }
+    ]
+  };
+
+  function getGradingConfig() {
+    const cfg = queries.getConfig.get() as any;
+    try {
+      if (cfg?.grading_config_json) {
+        return { ...DEFAULT_GRADING_CONFIG, ...JSON.parse(cfg.grading_config_json) };
+      }
+    } catch {}
+    return { ...DEFAULT_GRADING_CONFIG };
+  }
+
+  function applyGradeScale(total: number, scale: typeof DEFAULT_GRADING_CONFIG.grade_scale) {
+    const sorted = [...scale].sort((a, b) => b.min - a.min);
+    for (const s of sorted) {
+      if (total >= s.min) return { grade: s.grade, remark: s.label };
+    }
+    return { grade: "F", remark: "Fail" };
+  }
+
+  if (method === "GET" && pathname === "/api/grading/config") {
+    requireAuth(req);
+    return apiSuccess(getGradingConfig());
+  }
+
+  if (method === "PUT" && pathname === "/api/grading/config") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    if (!body) return apiError(400, "Invalid body");
+    db.prepare("UPDATE config SET grading_config_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = 1")
+      .run(JSON.stringify(body));
+    auditLog(auth.userId, "CONFIG_UPDATE", "grading_config", null, "Updated grading config");
+    return apiSuccess({ success: true });
+  }
+
+  // ── v8: Grading System APIs ───────────────────────────────────────────────
+
+  if (method === "GET" && pathname === "/api/grading/subjects") {
+    const auth = requireAuth(req);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId    = Number(url.searchParams.get("termId")    || 0);
+    const activeTerm    = queries.getActiveAcademicTerm.get()    as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const targetTermId    = qTermId    || activeTerm?.id;
+    const targetSessionId = qSessionId || activeSession?.id;
+
+    if (!targetTermId) return apiSuccess([]);
+
+    const gradingCfg = getGradingConfig();
+
+    if (auth.role === "teacher") {
+      // 1. Find all CBT subjects this teacher owns that have ≥1 completed submission for the target term
+      const cbtWithSubmissions = db.prepare(`
+        SELECT s.*,
+          COUNT(DISTINCT e.student_id) as students_completed,
+          (SELECT COUNT(*) FROM subject_enrollments se WHERE se.subject_id = s.id) as students_enrolled,
+          ROUND(AVG(CASE WHEN e.total_score > 0 THEN e.score * 100.0 / e.total_score ELSE 0 END), 1) as avg_score_pct
+        FROM subjects s
+        JOIN exams e ON e.subject_id = s.id AND e.status = 'completed'
+        LEFT JOIN terms t ON (s.term_id = t.id OR s.term = t.name)
+        WHERE s.teacher_id = ? AND (s.term_id = ? OR t.id = ?)
+        GROUP BY s.id
+      `).all(auth.userId, targetTermId, targetTermId) as any[];
+
+      // 2. Auto-create grading_subject rows for any not yet created
+      if (targetSessionId) {
+        for (const cbt of cbtWithSubmissions) {
+          const existing = queries.getGradingSubjectBySource.get(cbt.id, targetTermId) as any
+            ?? queries.getGradingSubjectByTeacherCodeTerm.get(auth.userId, cbt.code, targetTermId) as any;
+
+          if (!existing) {
+            try {
+              const gsRes = queries.createGradingSubject.run(
+                cbt.name, cbt.code, null, targetTermId, targetSessionId, auth.userId
+              ) as any;
+              const newGsId = Number(gsRes.lastInsertRowid);
+              queries.updateGradingSubjectMeta.run(cbt.mode || "exam", cbt.id, newGsId);
+
+              // Auto-create grading policies from school template
+              const mode   = cbt.mode || "exam";
+              const isExam = mode === "exam";
+
+              if (isExam) {
+                // Exam component (auto-linked)
+                queries.createGradingPolicy.run(
+                  newGsId, "CBT Examination", "cbt_exam", cbt.id, gradingCfg.exam_max, 1
+                );
+                // CA components from school default template (manual ones)
+                for (const tmpl of gradingCfg.default_ca_template) {
+                  if (tmpl.type === "manual") {
+                    queries.createGradingPolicy.run(newGsId, tmpl.name, "manual", null, tmpl.marks, 0);
+                  }
+                }
+                // Also a CBT test CA slot if template asks for it
+                for (const tmpl of gradingCfg.default_ca_template) {
+                  if (tmpl.type === "cbt_test") {
+                    queries.createGradingPolicy.run(newGsId, tmpl.name, "cbt_test", null, tmpl.marks, 0);
+                  }
+                }
+              } else {
+                // Test/quiz/assignment component (auto-linked as CA)
+                const policyName = mode === "test" ? "CBT Test"
+                  : mode === "quiz" ? "CBT Quiz"
+                  : mode === "assignment" ? "CBT Assignment"
+                  : `CBT ${mode.charAt(0).toUpperCase() + mode.slice(1)}`;
+                const caSlot = Math.min(gradingCfg.ca_max, 40);
+                queries.createGradingPolicy.run(newGsId, policyName, "cbt_test", cbt.id, caSlot, 0);
+              }
+            } catch (e: any) {
+              console.error("[GradingSubject AutoCreate Error]", e.message);
+            }
+          } else if (!existing.source_cbt_subject_id) {
+            // Backfill source on old rows
+            queries.updateGradingSubjectMeta.run(cbt.mode || existing.mode || "exam", cbt.id, existing.id);
+          }
+        }
+      }
+
+      // 3. Fetch all grading subjects for this teacher this term (includes auto-created + manually created)
+      const gsubs = queries.getGradingSubjectsByTeacher.all(auth.userId, targetTermId) as any[];
+
+      // 4. Enrich with live stats and filter out cross-term leaked grading subjects
+      const enriched = gsubs.filter((gs: any) => {
+        if (gs.source_cbt_subject_id) {
+          const sourceSub = db.prepare("SELECT s.term_id, s.term, t.id as term_id_from_name FROM subjects s LEFT JOIN terms t ON s.term = t.name WHERE s.id = ?").get(gs.source_cbt_subject_id) as any;
+          if (sourceSub) {
+            const matchesTerm = sourceSub.term_id === targetTermId || sourceSub.term_id_from_name === targetTermId;
+            if (!matchesTerm) return false;
+          }
+        }
+        return true;
+      }).map((gs: any) => {
+        let students_completed = 0, students_enrolled = 0, avg_score_pct: number | null = null;
+        let is_approved = false;
+
+        if (gs.source_cbt_subject_id) {
+          const cbt = cbtWithSubmissions.find((c: any) => c.id === gs.source_cbt_subject_id);
+          if (cbt) {
+            students_completed = cbt.students_completed || 0;
+            students_enrolled  = cbt.students_enrolled  || 0;
+            avg_score_pct      = cbt.avg_score_pct;
+          }
+        }
+        // Check approval status
+        const approved = db.prepare("SELECT is_approved FROM term_results WHERE grading_subject_id = ? AND is_approved = 1 LIMIT 1").get(gs.id);
+        is_approved = !!approved;
+
+        return { ...gs, students_completed, students_enrolled, avg_score_pct, is_approved };
+      });
+
+      return apiSuccess(enriched);
+    } else {
+      // operator / admin — return all
+      const result = queries.getAllGradingSubjects.all(targetTermId) as any[];
+      return apiSuccess(result.map((r: any) => {
+        const approved = db.prepare("SELECT is_approved FROM term_results WHERE grading_subject_id = ? AND is_approved = 1 LIMIT 1").get(r.id);
+        return { ...r, is_approved: !!approved };
+      }));
+    }
+  }
+
+  if (method === "POST" && pathname === "/api/grading/subjects") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]); // Teachers no longer create manually — auto-created on submission
+    const body = await readJson(req);
+
+    const name      = trimStr(body?.name);
+    const code      = trimStr(body?.code);
+    const classId   = Number(body?.class_id) || null;
+    const termId    = Number(body?.term_id    || (queries.getActiveAcademicTerm.get()    as any)?.id);
+    const sessionId = Number(body?.session_id || (queries.getActiveAcademicSession.get() as any)?.id);
+    const teacherId = Number(body?.teacher_id);
+    const mode      = trimStr(body?.mode) || "exam";
+
+    if (!name || !code) return apiError(400, "Missing name or code");
+    if (!termId)        return apiError(400, "No active academic term found. Please activate a term first.");
+    if (!sessionId)     return apiError(400, "No active academic session found. Please activate a session first.");
+    if (!teacherId)     return apiError(400, "teacher_id is required for operator-created grading subjects");
+
+    try {
+      const result = queries.createGradingSubject.run(name, code, classId, termId, sessionId, teacherId) as any;
+      const newId  = Number(result.lastInsertRowid);
+      queries.updateGradingSubjectMeta.run(mode, null, newId);
+
+      const gradingCfg = getGradingConfig();
+      queries.createGradingPolicy.run(newId, "Written Exam", "manual", null, gradingCfg.exam_max, 1);
+      for (const tmpl of gradingCfg.default_ca_template) {
+        queries.createGradingPolicy.run(newId, tmpl.name, "manual", null, tmpl.marks, 0);
+      }
+      return apiSuccess({ id: newId }, 201);
+    } catch (e: any) {
+      console.error("[GradingSubject Create Error]", e);
+      if (e.message?.includes("UNIQUE")) return apiError(409, "A grading subject with this code already exists for this term");
+      return apiError(500, "Database error: " + e.message);
+    }
+  }
+
+  const gradingPolicyMatch = pathname.match(/^\/api\/grading\/policies\/(\d+)$/);
+  if (gradingPolicyMatch) {
+    const subjectId = Number(gradingPolicyMatch[1]);
+    const subject = queries.getGradingSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Grading Subject not found");
+    
+    if (method === "GET") {
+      const auth = requireAuth(req);
+      requireRole(auth.role, ["teacher", "operator"]);
+      const policies = queries.getGradingPoliciesBySubject.all(subjectId);
+      return apiSuccess(policies);
+    }
+    
+    if (method === "PUT") {
+      const auth = requireAuth(req);
+      if (auth.role !== "operator" && subject.teacher_id !== auth.userId) return apiError(403, "Not authorized");
+      
+      const body = await readJson(req);
+      const policyList = Array.isArray(body) ? body : (body.policies || []);
+      const passMark = !Array.isArray(body) && body.pass_mark !== undefined ? (body.pass_mark === "" || body.pass_mark === null ? null : Number(body.pass_mark)) : null;
+
+      if (!Array.isArray(policyList)) return apiError(400, "Expected an array of policies");
+      
+      let caTotal = 0;
+      let examTotal = 0;
+      for (const p of policyList) {
+        if (p.is_exam) examTotal += Number(p.max_marks);
+        else caTotal += Number(p.max_marks);
+      }
+      
+      const gradingCfg = getGradingConfig();
+      const expectedCa = gradingCfg.ca_max ?? 40;
+      const expectedExam = gradingCfg.exam_max ?? 60;
+
+      if (caTotal !== expectedCa) return apiError(400, `Continuous Assessment total must be exactly ${expectedCa} marks. Currently: ${caTotal}`);
+      if (examTotal !== expectedExam) return apiError(400, `Examination total must be exactly ${expectedExam} marks. Currently: ${examTotal}`);
+      
+      const termResultsCheck = queries.getTermResultsBySubject.all(subjectId) as any[];
+      if (termResultsCheck.some((r: any) => r.is_approved === 1)) return apiError(403, "Results are already approved and locked");
+      
+      db.transaction(() => {
+        db.prepare("UPDATE grading_subjects SET pass_mark = ? WHERE id = ?").run(passMark, subjectId);
+
+        const existingPolicies = queries.getGradingPoliciesBySubject.all(subjectId) as any[];
+        const incomingIds = new Set(policyList.filter((p: any) => p.id).map((p: any) => Number(p.id)));
+
+        // Delete only policies removed by user (preserves manual scores for kept policies)
+        for (const ep of existingPolicies) {
+          if (!incomingIds.has(ep.id)) {
+            db.prepare("DELETE FROM grading_policies WHERE id = ?").run(ep.id);
+          }
+        }
+
+        // Update existing or create new policies
+        for (const p of policyList) {
+          if (p.id) {
+            db.prepare(`
+              UPDATE grading_policies
+              SET name = ?, type = ?, mapped_cbt_subject_id = ?, max_marks = ?, is_exam = ?
+              WHERE id = ? AND grading_subject_id = ?
+            `).run(
+              trimStr(p.name),
+              trimStr(p.type),
+              p.mapped_cbt_subject_id || null,
+              Number(p.max_marks),
+              p.is_exam ? 1 : 0,
+              Number(p.id),
+              subjectId
+            );
+          } else {
+            queries.createGradingPolicy.run(
+              subjectId,
+              trimStr(p.name),
+              trimStr(p.type),
+              p.mapped_cbt_subject_id || null,
+              Number(p.max_marks),
+              p.is_exam ? 1 : 0
+            );
+          }
+        }
+      })();
+      
+      return apiSuccess({ success: true });
+    }
+  }
+
+  const gradingScoresMatch = pathname.match(/^\/api\/grading\/scores\/(\d+)$/);
+  if (gradingScoresMatch) {
+    const subjectId = Number(gradingScoresMatch[1]);
+    const subject = queries.getGradingSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Grading Subject not found");
+    
+    if (method === "GET") {
+      const auth = requireAuth(req);
+
+      const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
+
+      const policies = queries.getGradingPoliciesBySubject.all(subjectId) as any[];
+      const manualScores = queries.getManualScoresBySubject.all(subjectId) as any[];
+      const termResults = queries.getTermResultsBySubject.all(subjectId) as any[];
+      
+      const cbtScores: Record<number, Record<number, number>> = {}; 
+      for (const p of policies) {
+        if ((p.type === 'cbt_test' || p.type === 'cbt_exam') && p.mapped_cbt_subject_id) {
+          const exams = queries.getExamsBySubject.all(p.mapped_cbt_subject_id) as any[];
+          for (const e of exams) {
+             if (!cbtScores[e.student_id]) cbtScores[e.student_id] = {};
+             let scaledScore = 0;
+             if (e.total_score > 0 && e.score != null) {
+               scaledScore = (e.score / e.total_score) * p.max_marks;
+             }
+             cbtScores[e.student_id]![p.id] = Number(scaledScore.toFixed(2));
+          }
+        }
+      }
+      
+      return apiSuccess({ students, policies, manualScores, cbtScores, termResults, pass_mark: subject.pass_mark });
+    }
+    
+    if (method === "POST") {
+      const auth = requireAuth(req);
+      if (auth.role !== "operator" && subject.teacher_id !== auth.userId) return apiError(403, "Not authorized");
+      
+      const termResultsCheck = db.prepare("SELECT is_approved FROM term_results WHERE grading_subject_id = ? LIMIT 1").get(subjectId) as any;
+      if (termResultsCheck?.is_approved) return apiError(403, "Results are locked");
+      
+      const body = await readJson(req); 
+      if (!Array.isArray(body)) return apiError(400, "Expected array");
+      
+      db.transaction(() => {
+        for (const entry of body) {
+           queries.upsertManualScore.run(entry.grading_policy_id, entry.student_id, Number(entry.score), auth.userId);
+        }
+
+        // Recompute draft term_results so Report Cards immediately reflect saved grades
+        const policies = queries.getGradingPoliciesBySubject.all(subjectId) as any[];
+        const termId = subject.term_id;
+        const sessionId = subject.session_id;
+        
+        const cbtScoresByPolicy: Record<number, Record<number, number>> = {};
+        for (const p of policies) {
+          if ((p.type === 'cbt_test' || p.type === 'cbt_exam') && p.mapped_cbt_subject_id) {
+            const exams = queries.getExamsBySubject.all(p.mapped_cbt_subject_id) as any[];
+            for (const e of exams) {
+              if (!cbtScoresByPolicy[p.id]) cbtScoresByPolicy[p.id] = {};
+              let scaledScore = 0;
+              if (e.total_score > 0 && e.score != null) {
+                scaledScore = (e.score / e.total_score) * p.max_marks;
+              }
+              cbtScoresByPolicy[p.id]![e.student_id] = Number(scaledScore.toFixed(2));
+            }
+          }
+        }
+        
+        const manualScores = queries.getManualScoresBySubject.all(subjectId) as any[];
+        const manualMap: Record<number, Record<number, number>> = {};
+        for (const ms of manualScores) {
+          if (!manualMap[ms.grading_policy_id]) manualMap[ms.grading_policy_id] = {};
+          manualMap[ms.grading_policy_id]![ms.student_id] = ms.score;
+        }
+        
+        const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
+        const schoolCfg = getGradingConfig();
+        function getGradeScale(total: number) {
+          if (subject.pass_mark != null && Number(subject.pass_mark) > 0) {
+            const pm = Number(subject.pass_mark);
+            if (total >= pm) return { grade: "PASS", remark: "Pass" };
+            return { grade: "FAIL", remark: "Fail" };
+          }
+          return applyGradeScale(total, schoolCfg.grade_scale);
+        }
+
+        for (const st of students) {
+          let caScore = 0;
+          let examScore = 0;
+          for (const p of policies) {
+            let score = 0;
+            if (p.type === 'manual') {
+              score = manualMap[p.id]?.[st.id] || 0;
+            } else {
+              score = cbtScoresByPolicy[p.id]?.[st.id] || 0;
+            }
+            if (p.is_exam) examScore += score;
+            else caScore += score;
+          }
+          const totalScore = Number((caScore + examScore).toFixed(2));
+          const scale = getGradeScale(totalScore);
+          queries.upsertTermResult.run(
+            st.id, subjectId,
+            Number(caScore.toFixed(2)), Number(examScore.toFixed(2)), totalScore,
+            scale.grade, scale.remark,
+            0, // draft
+            termId, sessionId
+          );
+        }
+      })();
+      return apiSuccess({ success: true });
+    }
+  }
+
+  const gradingApproveMatch = pathname.match(/^\/api\/grading\/approve\/(\d+)$/);
+  if (gradingApproveMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    
+    const subjectId = Number(gradingApproveMatch[1]);
+    const subject = queries.getGradingSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Grading Subject not found");
+    if (auth.role !== "operator" && subject.teacher_id !== auth.userId) return apiError(403, "Not authorized");
+    
+    // --- Server-side recompute (never trust frontend math) ---
+    const policies = queries.getGradingPoliciesBySubject.all(subjectId) as any[];
+    const termId = subject.term_id;
+    const sessionId = subject.session_id;
+    
+    // Build CBT score map keyed by policy.id
+    const cbtScoresByPolicy: Record<number, Record<number, number>> = {};
+    for (const p of policies) {
+      if ((p.type === 'cbt_test' || p.type === 'cbt_exam') && p.mapped_cbt_subject_id) {
+        const exams = queries.getExamsBySubject.all(p.mapped_cbt_subject_id) as any[];
+        for (const e of exams) {
+          if (!cbtScoresByPolicy[p.id]) cbtScoresByPolicy[p.id] = {};
+          let scaledScore = 0;
+          if (e.total_score > 0 && e.score != null) {
+            scaledScore = (e.score / e.total_score) * p.max_marks;
+          }
+          cbtScoresByPolicy[p.id]![e.student_id] = Number(scaledScore.toFixed(2));
+        }
+      }
+    }
+    
+    // Build manual score map: { policy_id: { student_id: score } }
+    const manualScores = queries.getManualScoresBySubject.all(subjectId) as any[];
+    const manualMap: Record<number, Record<number, number>> = {};
+    for (const ms of manualScores) {
+      if (!manualMap[ms.grading_policy_id]) manualMap[ms.grading_policy_id] = {};
+      manualMap[ms.grading_policy_id]![ms.student_id] = ms.score;
+    }
+    
+    const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
+    
+    const schoolCfg = getGradingConfig();
+    function getGradeScale(total: number) {
+      if (subject.pass_mark != null && Number(subject.pass_mark) > 0) {
+        const pm = Number(subject.pass_mark);
+        if (total >= pm) return { grade: "PASS", remark: "Pass" };
+        return { grade: "FAIL", remark: "Fail" };
+      }
+      return applyGradeScale(total, schoolCfg.grade_scale);
+    }
+    
+    db.transaction(() => {
+      for (const st of students) {
+        let caScore = 0;
+        let examScore = 0;
+        for (const p of policies) {
+          let score = 0;
+          if (p.type === 'manual') {
+            score = manualMap[p.id]?.[st.id] || 0;
+          } else {
+            score = cbtScoresByPolicy[p.id]?.[st.id] || 0;
+          }
+          if (p.is_exam) examScore += score;
+          else caScore += score;
+        }
+        const totalScore = Number((caScore + examScore).toFixed(2));
+        const scale = getGradeScale(totalScore);
+        queries.upsertTermResult.run(
+          st.id, subjectId,
+          Number(caScore.toFixed(2)), Number(examScore.toFixed(2)), totalScore,
+          scale.grade, scale.remark,
+          1, // is_approved
+          termId, sessionId
+        );
+      }
+      queries.approveTermResults.run(subjectId);
+    })();
+    return apiSuccess({ success: true });
+  }
+
+  const gradingUnapproveMatch = pathname.match(/^\/api\/grading\/approve\/(\d+)\/unapprove$/);
+  if (gradingUnapproveMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const subjectId = Number(gradingUnapproveMatch[1]);
+    const subject = queries.getGradingSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Grading Subject not found");
+    if (auth.role !== "operator" && subject.teacher_id !== auth.userId) return apiError(403, "Not authorized");
+    
+    db.prepare("UPDATE term_results SET is_approved = 0 WHERE grading_subject_id = ?").run(subjectId);
+    return apiSuccess({ success: true });
+  }
+
+  if (method === "GET" && pathname === "/api/grading/annual") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const sessionId = qSessionId || (queries.getActiveAcademicSession.get() as any)?.id;
+    if (!sessionId) return apiSuccess({ studentAverages: [], classEnrollments: [] });
+    
+    // Server-side average computation:
+    // Average each student's total_score across ALL their approved subjects in this session.
+    const studentAverages = db.prepare(`
+      SELECT
+        tr.student_id,
+        u.name as student_name,
+        u.reg_id,
+        ROUND(AVG(tr.total_score), 2) as annual_average,
+        COUNT(DISTINCT tr.grading_subject_id) as subjects_count,
+        COUNT(DISTINCT tr.term_id) as terms_count
+      FROM term_results tr
+      JOIN users u ON u.id = tr.student_id
+      WHERE tr.session_id = ? AND tr.is_approved = 1
+      GROUP BY tr.student_id
+    `).all(sessionId) as any[];
+    
+    const classEnrollments = db.prepare(`
+      SELECT ce.student_id, ce.class_id, ce.term_id, c.name as class_name
+      FROM class_enrollments ce
+      JOIN classes c ON c.id = ce.class_id
+      WHERE ce.term_id IN (SELECT id FROM academic_terms WHERE session_id = ?)
+    `).all(sessionId) as any[];
+    
+    // Also return existing promotion decisions for this session
+    const existingResults = queries.getAnnualResultsBySession.all(sessionId) as any[];
+    
+    return apiSuccess({ studentAverages, classEnrollments, existingResults });
+  }
+
+  if (method === "POST" && pathname === "/api/grading/annual/promote") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    
+    const body = await readJson(req);
+    const studentId = Number(body.student_id);
+    const sessionId = Number(body.session_id);
+    const promotionStatus: string = body.promotion_status;
+    const totalAverage = Number(body.total_average);
+    const classId = body.class_id ? Number(body.class_id) : null;
+    
+    if (!studentId || !sessionId || !promotionStatus) return apiError(400, "Missing required fields");
+    if (!['Promoted', 'Repeated', 'Graduated'].includes(promotionStatus)) return apiError(400, "Invalid promotion status");
+    
+    db.transaction(() => {
+      // 1. Write the annual result record
+      queries.upsertAnnualResult.run(studentId, classId, sessionId, totalAverage, promotionStatus, auth.userId);
+      
+      // 2. If promoted, advance the student's grade level
+      if (promotionStatus === 'Promoted' || promotionStatus === 'Graduated') {
+        // Find next grade level above current one
+        const currentGrade = db.prepare(
+          "SELECT gl.id, gl.sort_order FROM grade_levels gl JOIN users u ON u.grade_level_id = gl.id WHERE u.id = ?"
+        ).get(studentId) as any;
+        
+        if (currentGrade) {
+          const nextGrade = db.prepare(
+            "SELECT id FROM grade_levels WHERE sort_order > ? ORDER BY sort_order ASC LIMIT 1"
+          ).get(currentGrade.sort_order) as any;
+          
+          if (nextGrade) {
+            db.prepare("UPDATE users SET grade_level_id = ? WHERE id = ?").run(nextGrade.id, studentId);
+          }
+        }
+      }
+    })();
+    return apiSuccess({ success: true });
+  }
+
+  // ── Global Admin Search & Historical Data Crawler ──────────────────────────
+  if (method === "GET" && pathname === "/api/admin/global-search") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+
+    const q = (url.searchParams.get("q") || "").trim();
+    const type = (url.searchParams.get("type") || "all").trim(); // all | report_cards | exams | subjects | teachers | sessions
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 50), 1), 200);
+
+    const searchLike = `%${q}%`;
+    const results: any[] = [];
+
+    // 1. REPORT CARDS CRAWLER
+    if (type === "all" || type === "report_cards") {
+      let rcQuery = `
+        SELECT 
+          tr.student_id,
+          u.name as student_name,
+          u.reg_id as student_reg_id,
+          COALESCE(gl.name, u.grade) as student_grade,
+          tr.session_id,
+          acs.name as session_name,
+          tr.term_id,
+          at.name as term_name,
+          COUNT(DISTINCT tr.grading_subject_id) as total_subjects,
+          ROUND(AVG(tr.total_score), 2) as average_score,
+          MIN(tr.is_approved) as is_approved,
+          (
+            SELECT teacher_remark 
+            FROM student_term_remarks 
+            WHERE student_id = tr.student_id AND session_id = tr.session_id AND term_id = tr.term_id 
+            ORDER BY id DESC LIMIT 1
+          ) as teacher_remark,
+          (
+            SELECT principal_remark 
+            FROM student_term_remarks 
+            WHERE student_id = tr.student_id AND session_id = tr.session_id AND term_id = tr.term_id 
+            ORDER BY id DESC LIMIT 1
+          ) as principal_remark
+        FROM term_results tr
+        JOIN users u ON u.id = tr.student_id
+        LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id
+        JOIN academic_sessions acs ON acs.id = tr.session_id
+        JOIN academic_terms at ON at.id = tr.term_id
+        WHERE 1=1
+      `;
+      const rcParams: any[] = [];
+      if (q) {
+        rcQuery += ` AND (u.name LIKE ? OR u.reg_id LIKE ? OR u.email LIKE ? OR acs.name LIKE ? OR at.name LIKE ?)`;
+        rcParams.push(searchLike, searchLike, searchLike, searchLike, searchLike);
+      }
+      if (qSessionId) {
+        rcQuery += ` AND tr.session_id = ?`;
+        rcParams.push(qSessionId);
+      }
+      if (qTermId) {
+        rcQuery += ` AND tr.term_id = ?`;
+        rcParams.push(qTermId);
+      }
+      rcQuery += ` GROUP BY tr.student_id, tr.session_id, tr.term_id ORDER BY tr.session_id DESC, tr.term_id DESC, u.name ASC LIMIT ?`;
+      rcParams.push(limit);
+
+      try {
+        const rcRows = db.prepare(rcQuery).all(...rcParams) as any[];
+        for (const row of rcRows) {
+          results.push({
+            type: "report_card",
+            id: `rc-${row.student_id}-${row.session_id}-${row.term_id}`,
+            student_id: row.student_id,
+            student_name: row.student_name,
+            student_reg_id: row.student_reg_id,
+            student_grade: row.student_grade,
+            session_id: row.session_id,
+            session_name: row.session_name,
+            term_id: row.term_id,
+            term_name: row.term_name,
+            total_subjects: row.total_subjects,
+            average_score: row.average_score,
+            is_approved: row.is_approved,
+            teacher_remark: row.teacher_remark,
+            principal_remark: row.principal_remark,
+          });
+        }
+      } catch (e: any) {
+        console.error("[GlobalSearch RC Error]", e.message);
+      }
+    }
+
+    // 2. EXAM ATTEMPTS & CBT RECORDS
+    if (type === "all" || type === "exams") {
+      let examQuery = `
+        SELECT 
+          e.id,
+          e.student_id,
+          u.name as student_name,
+          u.reg_id as student_reg_id,
+          e.subject_id,
+          s.name as subject_title,
+          s.code as subject_code,
+          s.mode as exam_mode,
+          e.score,
+          e.total_score,
+          e.status,
+          e.start_time,
+          e.end_time,
+          e.session_id,
+          acs.name as session_name,
+          e.term_id,
+          at.name as term_name,
+          e.teacher_remark,
+          e.principal_remark
+        FROM exams e
+        JOIN users u ON u.id = e.student_id
+        JOIN subjects s ON s.id = e.subject_id
+        LEFT JOIN academic_sessions acs ON acs.id = e.session_id
+        LEFT JOIN academic_terms at ON at.id = e.term_id
+        WHERE 1=1
+      `;
+      const examParams: any[] = [];
+      if (q) {
+        examQuery += ` AND (u.name LIKE ? OR u.reg_id LIKE ? OR s.name LIKE ? OR s.code LIKE ? OR acs.name LIKE ? OR at.name LIKE ?)`;
+        examParams.push(searchLike, searchLike, searchLike, searchLike, searchLike, searchLike);
+      }
+      if (qSessionId) {
+        examQuery += ` AND e.session_id = ?`;
+        examParams.push(qSessionId);
+      }
+      if (qTermId) {
+        examQuery += ` AND e.term_id = ?`;
+        examParams.push(qTermId);
+      }
+      examQuery += ` ORDER BY e.id DESC LIMIT ?`;
+      examParams.push(limit);
+
+      try {
+        const examRows = db.prepare(examQuery).all(...examParams) as any[];
+        for (const row of examRows) {
+          const scorePct = (row.total_score > 0 && row.score != null) ? Number(((row.score / row.total_score) * 100).toFixed(1)) : null;
+          results.push({
+            type: "exam",
+            id: row.id,
+            student_id: row.student_id,
+            student_name: row.student_name,
+            student_reg_id: row.student_reg_id,
+            subject_id: row.subject_id,
+            subject_title: row.subject_title,
+            subject_code: row.subject_code,
+            exam_mode: row.exam_mode || "cbt",
+            score: row.score,
+            total_score: row.total_score,
+            score_pct: scorePct,
+            status: row.status,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            session_id: row.session_id,
+            session_name: row.session_name || "N/A",
+            term_id: row.term_id,
+            term_name: row.term_name || "N/A",
+            teacher_remark: row.teacher_remark,
+            principal_remark: row.principal_remark,
+          });
+        }
+      } catch (e: any) {
+        console.error("[GlobalSearch Exam Error]", e.message);
+      }
+    }
+
+    // 3. SUBJECTS & CURRICULA (both Grading Subjects and CBT Subjects)
+    if (type === "all" || type === "subjects") {
+      let subQuery = `
+        SELECT 
+          gs.id,
+          'grading' as category,
+          gs.name,
+          gs.code,
+          gs.teacher_id,
+          u.name as teacher_name,
+          u.email as teacher_email,
+          gs.class_id,
+          c.name as class_name,
+          gs.session_id,
+          acs.name as session_name,
+          gs.term_id,
+          at.name as term_name,
+          (SELECT COUNT(*) FROM term_results tr WHERE tr.grading_subject_id = gs.id) as enrolled_count
+        FROM grading_subjects gs
+        LEFT JOIN users u ON u.id = gs.teacher_id
+        LEFT JOIN classes c ON c.id = gs.class_id
+        LEFT JOIN academic_sessions acs ON acs.id = gs.session_id
+        LEFT JOIN academic_terms at ON at.id = gs.term_id
+        WHERE 1=1
+      `;
+      const subParams: any[] = [];
+      if (q) {
+        subQuery += ` AND (gs.name LIKE ? OR gs.code LIKE ? OR u.name LIKE ? OR c.name LIKE ? OR acs.name LIKE ? OR at.name LIKE ?)`;
+        subParams.push(searchLike, searchLike, searchLike, searchLike, searchLike, searchLike);
+      }
+      if (qSessionId) {
+        subQuery += ` AND gs.session_id = ?`;
+        subParams.push(qSessionId);
+      }
+      if (qTermId) {
+        subQuery += ` AND gs.term_id = ?`;
+        subParams.push(qTermId);
+      }
+      subQuery += ` ORDER BY gs.id DESC LIMIT ?`;
+      subParams.push(limit);
+
+      try {
+        const subRows = db.prepare(subQuery).all(...subParams) as any[];
+        for (const row of subRows) {
+          results.push({
+            type: "subject",
+            id: row.id,
+            category: "grading",
+            name: row.name,
+            code: row.code,
+            teacher_id: row.teacher_id,
+            teacher_name: row.teacher_name || "Unassigned",
+            teacher_email: row.teacher_email,
+            class_id: row.class_id,
+            class_name: row.class_name,
+            session_id: row.session_id,
+            session_name: row.session_name,
+            term_id: row.term_id,
+            term_name: row.term_name,
+            enrolled_count: row.enrolled_count,
+          });
+        }
+      } catch (e: any) {
+        console.error("[GlobalSearch Subject Error]", e.message);
+      }
+    }
+
+    // 4. TEACHER & CLASS ASSIGNMENTS AUDIT
+    if (type === "all" || type === "teachers") {
+      let tQuery = `
+        SELECT 
+          cta.id,
+          cta.class_id,
+          c.name as class_name,
+          c.section as class_section,
+          c.level as class_level,
+          cta.teacher_id,
+          tu.name as teacher_name,
+          tu.email as teacher_email,
+          tu.phone as teacher_phone,
+          cta.assigned_by,
+          au.name as assigned_by_name,
+          cta.action,
+          cta.assigned_at,
+          cta.notes
+        FROM class_teacher_assignments cta
+        JOIN classes c ON c.id = cta.class_id
+        LEFT JOIN users tu ON tu.id = cta.teacher_id
+        LEFT JOIN users au ON au.id = cta.assigned_by
+        WHERE 1=1
+      `;
+      const tParams: any[] = [];
+      if (q) {
+        tQuery += ` AND (c.name LIKE ? OR tu.name LIKE ? OR tu.email LIKE ? OR au.name LIKE ? OR cta.notes LIKE ?)`;
+        tParams.push(searchLike, searchLike, searchLike, searchLike, searchLike);
+      }
+      tQuery += ` ORDER BY cta.id DESC LIMIT ?`;
+      tParams.push(limit);
+
+      try {
+        const tRows = db.prepare(tQuery).all(...tParams) as any[];
+        for (const row of tRows) {
+          results.push({
+            type: "teacher_assignment",
+            id: row.id,
+            class_id: row.class_id,
+            class_name: row.class_name,
+            class_section: row.class_section,
+            class_level: row.class_level,
+            teacher_id: row.teacher_id,
+            teacher_name: row.teacher_name || "Unassigned",
+            teacher_email: row.teacher_email,
+            teacher_phone: row.teacher_phone,
+            assigned_by_name: row.assigned_by_name,
+            action: row.action,
+            assigned_at: row.assigned_at,
+            notes: row.notes,
+          });
+        }
+      } catch (e: any) {
+        console.error("[GlobalSearch Teachers Error]", e.message);
+      }
+    }
+
+    // 5. SESSIONS & ACADEMIC TERMS
+    if (type === "all" || type === "sessions") {
+      let sesQuery = `
+        SELECT 
+          s.id,
+          s.name,
+          s.is_active,
+          s.status,
+          s.created_at
+        FROM academic_sessions s
+        WHERE 1=1
+      `;
+      const sesParams: any[] = [];
+      if (q) {
+        sesQuery += ` AND s.name LIKE ?`;
+        sesParams.push(searchLike);
+      }
+      sesQuery += ` ORDER BY s.id DESC LIMIT ?`;
+      sesParams.push(limit);
+
+      try {
+        const sesRows = db.prepare(sesQuery).all(...sesParams) as any[];
+        for (const row of sesRows) {
+          const terms = queries.getAcademicTermsBySession.all(row.id) as any[];
+          results.push({
+            type: "session",
+            id: row.id,
+            name: row.name,
+            is_active: row.is_active,
+            status: row.status,
+            terms: terms.map((t: any) => ({ id: t.id, name: t.name, is_active: t.is_active, status: t.status })),
+            created_at: row.created_at,
+          });
+        }
+      } catch (e: any) {
+        console.error("[GlobalSearch Session Error]", e.message);
+      }
+    }
+
+    return apiSuccess({
+      results,
+      total: results.length,
+      query: q,
+      type,
+      sessionId: qSessionId || null,
+      termId: qTermId || null,
+    });
+  }
+
+  // ── Global Session Snapshot & Historical Analytics ─────────────────────────
+  if (method === "GET" && pathname === "/api/admin/session-snapshots") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+
+    let sessionsQuery = "SELECT * FROM academic_sessions";
+    const params: any[] = [];
+    if (qSessionId) {
+      sessionsQuery += " WHERE id = ?";
+      params.push(qSessionId);
+    }
+    sessionsQuery += " ORDER BY id DESC";
+
+    const sessions = db.prepare(sessionsQuery).all(...params) as any[];
+    const snapshots: any[] = [];
+
+    for (const session of sessions) {
+      const sid = session.id;
+
+      // 1. Total Enrolled Students
+      const studentCountRow = db.prepare(`
+        SELECT COUNT(DISTINCT student_id) as count 
+        FROM (
+          SELECT student_id FROM term_results WHERE session_id = ?
+          UNION
+          SELECT student_id FROM exams WHERE session_id = ?
+          UNION
+          SELECT student_id FROM class_enrollments WHERE term_id IN (SELECT id FROM academic_terms WHERE session_id = ?)
+        )
+      `).get(sid, sid, sid) as any;
+      const totalStudents = Number(studentCountRow?.count || 0);
+
+      // 2. Active Teachers
+      const teacherCountRow = db.prepare(`
+        SELECT COUNT(DISTINCT teacher_id) as count
+        FROM (
+          SELECT teacher_id FROM grading_subjects WHERE session_id = ? AND teacher_id IS NOT NULL
+          UNION
+          SELECT teacher_id FROM subjects WHERE session_id = ? AND teacher_id IS NOT NULL
+          UNION
+          SELECT class_teacher_id as teacher_id FROM classes WHERE class_teacher_id IS NOT NULL
+        )
+      `).get(sid, sid) as any;
+      const totalTeachers = Number(teacherCountRow?.count || 0);
+
+      // 3. Subjects Count
+      const gradingSubCount = (db.prepare("SELECT COUNT(*) as count FROM grading_subjects WHERE session_id = ?").get(sid) as any)?.count || 0;
+      const cbtSubCount = (db.prepare("SELECT COUNT(*) as count FROM subjects WHERE session_id = ?").get(sid) as any)?.count || 0;
+
+      // 4. Completed CBT Exams
+      const examsCompletedRow = db.prepare(`
+        SELECT COUNT(*) as count, AVG(CASE WHEN total_score > 0 THEN (score * 100.0 / total_score) ELSE 0 END) as avg_pct
+        FROM exams WHERE session_id = ? AND status = 'completed'
+      `).get(sid) as any;
+      const totalExamsCompleted = Number(examsCompletedRow?.count || 0);
+      const avgExamPct = examsCompletedRow?.avg_pct ? Number(examsCompletedRow.avg_pct.toFixed(1)) : 0;
+
+      // 5. Term Results & Report Cards
+      const termResultsRow = db.prepare(`
+        SELECT 
+          COUNT(*) as total_entries,
+          COUNT(DISTINCT student_id || '-' || term_id) as report_cards_count,
+          AVG(total_score) as avg_score,
+          SUM(CASE WHEN is_approved = 1 THEN 1 ELSE 0 END) as approved_entries
+        FROM term_results 
+        WHERE session_id = ?
+      `).get(sid) as any;
+
+      // 6. Annual Promotions
+      const promotionRows = db.prepare(`
+        SELECT promotion_status, COUNT(*) as count
+        FROM annual_results
+        WHERE session_id = ?
+        GROUP BY promotion_status
+      `).all(sid) as any[];
+
+      const promotions: Record<string, number> = { Promoted: 0, Repeated: 0, Graduated: 0 };
+      for (const p of promotionRows) {
+        if (p.promotion_status && promotions[p.promotion_status] !== undefined) {
+          promotions[p.promotion_status] = Number(p.count);
+        }
+      }
+
+      // 7. Terms Breakdown
+      const terms = queries.getAcademicTermsBySession.all(sid) as any[];
+      const termsBreakdown: any[] = [];
+      for (const t of terms) {
+        const tExams = db.prepare("SELECT COUNT(*) as count, AVG(CASE WHEN total_score > 0 THEN (score * 100.0 / total_score) ELSE 0 END) as avg_pct FROM exams WHERE session_id = ? AND term_id = ? AND status = 'completed'").get(sid, t.id) as any;
+        const tReportCards = db.prepare("SELECT COUNT(DISTINCT student_id) as count, AVG(total_score) as avg_score FROM term_results WHERE session_id = ? AND term_id = ?").get(sid, t.id) as any;
+        const tSubjects = (db.prepare("SELECT COUNT(*) as count FROM grading_subjects WHERE session_id = ? AND term_id = ?").get(sid, t.id) as any)?.count || 0;
+
+        termsBreakdown.push({
+          term_id: t.id,
+          term_name: t.name,
+          is_active: t.is_active,
+          status: t.status,
+          start_date: t.start_date,
+          end_date: t.end_date,
+          exams_completed: Number(tExams?.count || 0),
+          exam_avg_pct: tExams?.avg_pct ? Number(tExams.avg_pct.toFixed(1)) : 0,
+          report_cards_count: Number(tReportCards?.count || 0),
+          report_card_avg_score: tReportCards?.avg_score ? Number(tReportCards.avg_score.toFixed(1)) : 0,
+          subjects_count: Number(tSubjects || 0),
+        });
+      }
+
+      const statsObj = {
+        total_students: totalStudents,
+        total_teachers: totalTeachers,
+        total_subjects: Number(gradingSubCount || 0) + Number(cbtSubCount || 0),
+        grading_subjects: Number(gradingSubCount || 0),
+        cbt_subjects: Number(cbtSubCount || 0),
+        completed_exams: totalExamsCompleted,
+        avg_exam_score: avgExamPct,
+        report_cards_count: Number(termResultsRow?.report_cards_count || 0),
+        avg_report_card_score: termResultsRow?.avg_score ? Number(termResultsRow.avg_score.toFixed(1)) : 0,
+        promoted_count: promotions.Promoted || 0,
+        repeated_count: promotions.Repeated || 0,
+        graduated_count: promotions.Graduated || 0,
+      };
+
+      snapshots.push({
+        session_id: session.id,
+        session_name: session.name,
+        is_active: session.is_active,
+        status: session.status,
+        created_at: session.created_at,
+        total_students_enrolled: totalStudents,
+        total_teachers_active: totalTeachers,
+        grading_subjects_count: gradingSubCount,
+        cbt_subjects_count: cbtSubCount,
+        total_exams_completed: totalExamsCompleted,
+        avg_exam_pct: avgExamPct,
+        total_report_cards: Number(termResultsRow?.report_cards_count || 0),
+        avg_report_card_score: termResultsRow?.avg_score ? Number(termResultsRow.avg_score.toFixed(1)) : 0,
+        promotions,
+        stats: statsObj,
+        terms: termsBreakdown,
+      });
+    }
+
+    return apiSuccess({ snapshots });
+  }
+
   if (method === "GET" && pathname === "/api/subjects") {
     const auth = requireAuth(req);
     const qSessionId = Number(url.searchParams.get("sessionId") || 0);
@@ -1079,6 +2377,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const activeTerm = queries.getActiveAcademicTerm.get() as any;
     const targetSessionId = qSessionId || activeSession?.id;
     const targetTermId = qTermId || activeTerm?.id;
+
+    if (!targetSessionId || !targetTermId) return apiSuccess([]);
 
     if (auth.role === "student") {
       let query = `
@@ -1123,38 +2423,33 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const name = trimStr(body?.name);
     const code = trimStr(body?.code);
     const term = trimStr(body?.term);
-    const duration = Number(body?.duration);
-    const exam_datetime = trimStr(body?.exam_datetime);
     const teacher_id = body?.teacher_id;
     if (!name || !code || !term) return apiError(400, "Invalid subject payload");
-    if (!isValidSubjectDuration(duration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
-    if (exam_datetime !== "" && !isValidExamDateTime(exam_datetime)) return apiError(400, "exam_datetime must be a valid date/time");
-    if (exam_datetime !== "" && !isExamDatetimeInFuture(exam_datetime)) return apiError(400, "exam_datetime must be in the future");
+    
     const teacherId = auth.role === "teacher" ? auth.userId : Number(teacher_id);
     if (auth.role === "operator") {
-      if (!isPositiveIntId(teacherId)) return apiError(400, "teacher_id is required for operator-created subjects");
+      if (!isPositiveIntId(teacherId)) return apiError(400, "Invalid teacher_id. Operators must assign a valid teacher.");
       const teacher = queries.getUserById.get(teacherId) as any;
       if (!teacher || teacher.role !== "teacher" || sqlInt(teacher.is_active) !== 1) return apiError(400, "Invalid or inactive teacher");
     }
     const description = trimStr(body?.description) || null;
     const cls = trimStr(body?.class) || null;
+    const gradeLevelId = body?.grade_level_id !== undefined ? Number(body.grade_level_id) || null : null;
     const session = trimStr(body?.session) || null;
     const mode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : "exam";
     const instructions = trimStr(body?.instructions) || null;
-    const window_duration = Number(body?.window_duration) || 120;
     const can_retake = body?.can_retake !== undefined ? Number(body.can_retake) : 1;
-    const is_assignment = body?.is_assignment !== undefined ? Number(body.is_assignment) : 0;
     const activeSession = queries.getActiveAcademicSession.get() as any;
     const activeTerm = queries.getActiveAcademicTerm.get() as any;
     const sessionId = Number(body?.session_id || activeSession?.id || 1);
     const termId = Number(body?.term_id || activeTerm?.id || 1);
 
-    const result = queries.createSubject.run(name, code, term, duration, 0, exam_datetime, 0, teacherId, auth.userId, description, cls, session, mode, instructions, 0, window_duration, can_retake, is_assignment, sessionId, termId) as {
+    const result = queries.createSubject.run(name, code, term, 0, teacherId, auth.userId, description, cls, gradeLevelId, session, mode, instructions, can_retake, sessionId, termId) as {
       lastInsertRowid: number | bigint;
     };
     auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
     
-    if (auth.role === "operator" && teacherId) {
+    if (auth.role === "operator" && teacherId && teacherId !== auth.userId) {
       notifyUser(teacherId, {
         type: "info",
         message: `Admin assigned you a new subject: ${name} (${code})`,
@@ -1175,16 +2470,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (auth.role !== "operator" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
     if (auth.role === "teacher" && subject.is_published) return apiError(403, "Cannot edit a published subject");
     const body = await readJson(req);
-    const nextDuration = Number(body.duration ?? subject.duration);
-    const nextExamAt = body.exam_datetime !== undefined ? trimStr(body.exam_datetime) : subject.exam_datetime;
-    if (body.duration !== undefined && !isValidSubjectDuration(nextDuration)) {
-      return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
-    }
-    // On EDIT, use the permissive edit validator (allows past dates for existing subjects).
-    // isExamDatetimeInFuture is only for creation.
-    if (nextExamAt !== "" && !isExamDatetimeEditValid(nextExamAt)) {
-      return apiError(400, "exam_datetime must be a valid date/time");
-    }
+    
     let nextTeacherId = Number(body.teacher_id ?? subject.teacher_id);
     if (body.teacher_id !== undefined && auth.role === "operator") {
       if (!isPositiveIntId(nextTeacherId)) return apiError(400, "Invalid teacher_id");
@@ -1193,8 +2479,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     } else if (auth.role === "teacher") {
       nextTeacherId = sqlInt(subject.teacher_id);
     }
-    const nextMode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : (subject.mode || "exam");
     const nextInstructions = body.instructions !== undefined ? (trimStr(body.instructions) || null) : (subject.instructions || null);
+    const nextMode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : subject.mode;
     // Compute total_score from the DB — never trust a client-supplied value
     const computedTotalScore = (db.prepare(
       "SELECT COALESCE(SUM(marks),0) as t FROM questions WHERE subject_id = ?"
@@ -1203,35 +2489,21 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       trimStr(body.name) || subject.name,
       trimStr(body.code) || subject.code,
       trimStr(body.term) || subject.term,
-      nextDuration,
       Number(computedTotalScore),
-      nextExamAt,
-      Number(body.is_published ?? subject.is_published),
       nextTeacherId,
       body.description !== undefined ? (trimStr(body.description) || null) : (subject.description || null),
       body.class !== undefined ? (trimStr(body.class) || null) : (subject.class || null),
-      body.session !== undefined ? (trimStr(body.session) || null) : (subject.session || null),
+      body.grade_level_id !== undefined ? Number(body.grade_level_id) || null : (subject.grade_level_id || null),
+      trimStr(body.session) || subject.session,
       nextMode,
       nextInstructions,
-      body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0),
-      body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120),
       body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
-      body.is_assignment !== undefined ? Number(body.is_assignment) : Number(subject.is_assignment ?? 0),
       body.session_id !== undefined ? Number(body.session_id) : subject.session_id,
       body.term_id !== undefined ? Number(body.term_id) : subject.term_id,
       subjectId,
     );
-    
-    const nextPublished = Number(body.is_published ?? subject.is_published);
-    if (nextPublished === 1 && subject.is_published === 0) {
-      notifyOperators({
-        type: "subject_published",
-        message: `A teacher has published ${trimStr(body.code) || subject.code} (Questions are ready)`,
-        link: `/operator/subjects`
-      });
-    }
 
-    if (auth.role === "operator" && nextTeacherId !== sqlInt(subject.teacher_id)) {
+    if (auth.role === "operator" && nextTeacherId !== sqlInt(subject.teacher_id) && nextTeacherId !== auth.userId) {
       notifyUser(nextTeacherId, {
         type: "info",
         message: `Admin re-assigned ${subject.name} (${subject.code}) to you`,
@@ -1252,6 +2524,124 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     queries.deleteSubject.run(subjectId);
     auditLog(auth.userId, "SUBJECT_DELETE", "subject", subjectId, "{}");
     return apiMessage("Subject deleted");
+  }
+
+  // ── Timetables API ──────────────────────────────────────────────────────────
+  if (method === "GET" && pathname === "/api/timetables") {
+    const auth = requireAuth(req);
+    let rows = queries.getTimetables.all() as any[];
+    if (auth.role === "teacher") {
+      rows = rows.filter(t => t.teacher_id === auth.userId);
+    }
+    return apiSuccess(rows);
+  }
+
+  if (method === "POST" && pathname === "/api/timetables") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const subject_id = Number(body?.subject_id);
+    const cls = trimStr(body?.class);
+    const gradeLevelId = body?.grade_level_id !== undefined ? Number(body.grade_level_id) || null : null;
+    const section = trimStr(body?.section);
+    const exam_date = trimStr(body?.exam_date);
+    const start_time = trimStr(body?.start_time);
+    const end_time = trimStr(body?.end_time);
+    const duration = Number(body?.duration);
+    const exam_mode = ["CBT", "Assignment", "Offline"].includes(body?.exam_mode) ? body.exam_mode : "CBT";
+    const allow_students = body?.allow_students ? 1 : 0;
+    const teacher_id = Number(body?.teacher_id) || auth.userId;
+    const can_retake = body?.can_retake ? 1 : 0;
+    const schedule_status = body?.schedule_status === "unscheduled" ? "unscheduled" : "scheduled";
+    const subject_mode = ["test", "exam", "quiz"].includes(body?.subject_mode) ? body.subject_mode : "exam";
+
+    if (!isPositiveIntId(subject_id)) return apiError(400, "Invalid subject_id");
+
+    if (schedule_status === "unscheduled") {
+      queries.updateSubjectSchedulingInfo.run(teacher_id, can_retake, subject_mode, "2099-01-01T00:00", 60, 120, 0, subject_id);
+      return apiSuccess({ id: null, status: "unscheduled" }, 200);
+    }
+
+    if (!exam_date || !start_time || !end_time) return apiError(400, "exam_date, start_time, and end_time are required");
+    if (!isValidSubjectDuration(duration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
+    if (!isExamDatetimeInFuture(exam_date + "T" + start_time)) return apiError(400, "exam_date must be in the future");
+    
+    // validate end_time > start_time
+    const [sH, sM] = start_time.split(":").map(Number) as [number, number];
+    const [eH, eM] = end_time.split(":").map(Number) as [number, number];
+    if ((eH * 60 + eM) <= (sH * 60 + sM)) {
+      return apiError(400, "end_time must be after start_time");
+    }
+
+    const result = queries.createTimetable.run(subject_id, cls, gradeLevelId, section, exam_date, start_time, end_time, duration, exam_mode, allow_students) as {
+      lastInsertRowid: number | bigint;
+    };
+    
+    // Update the subject record with the newly assigned teacher, retake policy, and schedule data
+    const window_duration = Math.max(0, Math.floor((eH * 60 + eM) - (sH * 60 + sM)));
+    queries.updateSubjectSchedulingInfo.run(teacher_id, can_retake, subject_mode, exam_date + "T" + start_time, duration, window_duration, allow_students, subject_id);
+    
+    auditLog(auth.userId, "TIMETABLE_CREATE", "timetable", Number(result.lastInsertRowid), JSON.stringify({ subject_id }));
+    return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
+  }
+
+  const timetableMatch = pathname.match(/^\/api\/timetables\/(\d+)$/);
+  if (timetableMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const timetableId = Number(timetableMatch[1]);
+    if (!isPositiveIntId(timetableId)) return apiError(400, "Invalid timetable id");
+    
+    const body = await readJson(req);
+    const subject_id = Number(body?.subject_id);
+    const cls = trimStr(body?.class);
+    const gradeLevelId = body?.grade_level_id !== undefined ? Number(body.grade_level_id) || null : null;
+    const section = trimStr(body?.section);
+    const exam_date = trimStr(body?.exam_date);
+    const start_time = trimStr(body?.start_time);
+    const end_time = trimStr(body?.end_time);
+    const duration = Number(body?.duration);
+    const exam_mode = ["CBT", "Assignment", "Offline"].includes(body?.exam_mode) ? body.exam_mode : "CBT";
+    const allow_students = body?.allow_students ? 1 : 0;
+    const teacher_id = Number(body?.teacher_id) || auth.userId;
+    const can_retake = body?.can_retake ? 1 : 0;
+    const schedule_status = body?.schedule_status === "unscheduled" ? "unscheduled" : "scheduled";
+    const subject_mode = ["test", "exam", "quiz"].includes(body?.subject_mode) ? body.subject_mode : "exam";
+
+    if (!isPositiveIntId(subject_id)) return apiError(400, "Invalid subject_id");
+
+    if (schedule_status === "unscheduled") {
+      queries.deleteTimetable.run(timetableId);
+      queries.updateSubjectSchedulingInfo.run(teacher_id, can_retake, subject_mode, "2099-01-01T00:00", 60, 120, 0, subject_id);
+      return apiMessage("Timetable unscheduled");
+    }
+
+    if (!exam_date || !start_time || !end_time) return apiError(400, "exam_date, start_time, and end_time are required");
+    if (!isValidSubjectDuration(duration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
+    
+    const [sH, sM] = start_time.split(":").map(Number) as [number, number];
+    const [eH, eM] = end_time.split(":").map(Number) as [number, number];
+    if ((eH * 60 + eM) <= (sH * 60 + sM)) {
+      return apiError(400, "end_time must be after start_time");
+    }
+
+    queries.updateTimetable.run(subject_id, cls, gradeLevelId, section, exam_date, start_time, end_time, duration, exam_mode, allow_students, timetableId);
+    
+    const window_duration = Math.max(0, Math.floor((eH * 60 + eM) - (sH * 60 + sM)));
+    queries.updateSubjectSchedulingInfo.run(teacher_id, can_retake, subject_mode, exam_date + "T" + start_time, duration, window_duration, allow_students, subject_id);
+    
+    return apiMessage("Timetable updated");
+  }
+
+  if (timetableMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const timetableId = Number(timetableMatch[1]);
+    if (!isPositiveIntId(timetableId)) return apiError(400, "Invalid timetable id");
+    
+    queries.deleteTimetable.run(timetableId);
+    auditLog(auth.userId, "TIMETABLE_DELETE", "timetable", timetableId, "{}");
+    return apiMessage("Timetable deleted");
   }
 
   const subjectQuestionsMatch = pathname.match(/^\/api\/subjects\/(\d+)\/questions$/);
@@ -1630,8 +3020,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (exam.status !== "in-progress") return apiError(409, "Exam already submitted");
     const subject = queries.getSubjectById.get(exam.subject_id) as any;
     const deadline = Date.parse(exam.start_time) + Number(subject.duration) * 60_000;
-    // Allow saves up to 60s after deadline (network latency grace)
-    if (Date.now() > deadline + 60_000) return apiError(409, "Exam window has closed — answers cannot be saved");
+    // [SECURITY FIX] Allow saves up to 15s after deadline (MUST be less than the 30s submit grace period)
+    if (Date.now() > deadline + 15_000) return apiError(409, "Exam window has closed — answers cannot be saved");
     const remaining = Math.max(0, Math.floor((deadline - Date.now()) / 1000));
     queries.saveExam.run(JSON.stringify(answers), examId, auth.userId);
     return apiSuccess({ saved: true, server_time: new Date().toISOString(), time_remaining_seconds: remaining });
@@ -1770,11 +3160,62 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subjectRow = queries.getSubjectById.get(result.subject_id) as any;
     if (subjectRow?.teacher_id) {
       const student = queries.getUserById.get(auth.userId) as any;
+      const teacherRole = (queries.getUserById.get(sqlInt(subjectRow.teacher_id)) as any)?.role;
+      const link = teacherRole === "operator" ? `/operator/dashboard` : `/teacher/results?subject_id=${subjectRow.id}`;
       notifyUser(sqlInt(subjectRow.teacher_id), {
         type: "exam_submitted",
         message: `${student?.name || 'A student'} submitted ${subjectRow.code} — Score: ${result.score}/${result.total_score}`,
-        link: `/teacher/results?subject_id=${subjectRow.id}`
+        link: link
       });
+
+      // ── Auto-Create Grading Subject ─────────────────────────────────────────
+      try {
+        const activeTerm = queries.getActiveAcademicTerm.get() as any;
+        const activeSession = queries.getActiveAcademicSession.get() as any;
+        const targetTermId = subjectRow.term_id || activeTerm?.id;
+        const targetSessionId = subjectRow.session_id || activeSession?.id;
+        if (targetTermId && targetSessionId) {
+          // Check if a general (class_id IS NULL) grading subject exists for this code and term
+          const existing = db.prepare("SELECT id FROM grading_subjects WHERE code = ? AND term_id = ? AND class_id IS NULL LIMIT 1").get(subjectRow.code, targetTermId) as any;
+          if (!existing) {
+             const gsResult = queries.createGradingSubject.run(
+               subjectRow.name, 
+               subjectRow.code, 
+               null, 
+               targetTermId, 
+               targetSessionId, 
+               subjectRow.teacher_id
+             ) as any;
+             const newGsId = Number(gsResult.lastInsertRowid);
+             
+             // Auto-map CBT policy based on CBT subject mode
+             const mode = subjectRow.mode || "exam";
+             const policyType = mode === "exam" ? "cbt_exam" : "cbt_test";
+             const policyName = mode === "exam" ? "CBT Examination" : "CBT Test";
+             const maxMarks = mode === "exam" ? 60 : 40;
+             const isExam = mode === "exam" ? 1 : 0;
+             
+             queries.createGradingPolicy.run(
+               newGsId, policyName, policyType, subjectRow.id, maxMarks, isExam
+             );
+          } else {
+             // Ensure the policy is mapped if it isn't already
+             const hasPolicy = db.prepare("SELECT id FROM grading_policies WHERE grading_subject_id = ? AND mapped_cbt_subject_id = ? LIMIT 1").get(existing.id, subjectRow.id) as any;
+             if (!hasPolicy) {
+                const mode = subjectRow.mode || "exam";
+                const policyType = mode === "exam" ? "cbt_exam" : "cbt_test";
+                const policyName = mode === "exam" ? "CBT Examination" : "CBT Test";
+                const maxMarks = mode === "exam" ? 60 : 40;
+                const isExam = mode === "exam" ? 1 : 0;
+                queries.createGradingPolicy.run(
+                  existing.id, policyName, policyType, subjectRow.id, maxMarks, isExam
+                );
+             }
+          }
+        }
+      } catch (e) {
+        console.error("[Auto-Create Grading Subject Error]", e);
+      }
     }
 
     // Return result WITHOUT subject_id (internal field, not needed by client)
@@ -1790,6 +3231,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const activeTerm = queries.getActiveAcademicTerm.get() as any;
     const targetSessionId = qSessionId || activeSession?.id;
     const targetTermId = qTermId || activeTerm?.id;
+
+    if (!targetSessionId || !targetTermId) return apiSuccess([]);
 
     let baseFilter = "e.status = 'completed'";
     const params: any[] = [];
@@ -1809,13 +3252,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       params.unshift(auth.userId);
       return apiSuccess(
         db.prepare(
-          `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE s.teacher_id = ? AND ${baseFilter} ORDER BY e.end_time DESC`
+          `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE s.teacher_id = ? AND ${baseFilter} ORDER BY e.end_time DESC`
         ).all(...params)
       );
     }
     return apiSuccess(
       db.prepare(
-        `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE ${baseFilter} ORDER BY e.end_time DESC`
+        `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE ${baseFilter} ORDER BY e.end_time DESC`
       ).all(...params)
     );
   }
@@ -1838,7 +3281,21 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       const subject = queries.getSubjectById.get(exam.subject_id) as any;
       if (!subject || !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "Forbidden");
     }
-    const answers = queries.getStudentAnswersByExam.all(examId);
+    let answers = queries.getStudentAnswersByExam.all(examId) as any[];
+    
+    // [SECURITY FIX] Early Answer Leak Prevention
+    // Strip correct answers if the student requests the review while the global exam window is still open.
+    if (auth.role === "student") {
+      const subject = queries.getSubjectById.get(exam.subject_id) as any;
+      if (subject && subject.exam_datetime) {
+        const start = Date.parse(subject.exam_datetime);
+        const end = start + Number(subject.window_duration || 120) * 60_000;
+        if (Date.now() < end) {
+          answers = answers.map(({ correct_answer: _ca, teacher_answer: _ta, ...ans }) => ans);
+        }
+      }
+    }
+
     const student = queries.getUserById.get(exam.student_id) as any;
     return apiSuccess({ exam, answers, student: student ? stripPassword(student) : null });
   }
@@ -1869,8 +3326,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["teacher", "operator"]);
     const rows: any[] = auth.role === "teacher"
-      ? db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY s.name, u.grade, u.name").all(auth.userId)
-      : db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, u.grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY s.name, u.grade, u.name").all();
+      ? db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY s.name, grade, u.name").all(auth.userId)
+      : db.prepare("SELECT e.*, s.name as subject_name, s.code as subject_code, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE e.status = 'completed' ORDER BY s.name, grade, u.name").all();
     // Build CSV
     const headers = ["Reg ID", "Student Name", "Grade", "Subject", "Subject Code", "Score", "Total", "Percentage", "Letter Grade", "Submitted At"];
     const csvRows = rows.map((r) => {
@@ -1981,19 +3438,34 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(targetId)) return apiError(400, "Invalid user id");
     const target = queries.getUserById.get(targetId) as any;
     if (!target || target.role !== "student") return apiError(404, "Student not found");
-    // Teachers may only promote students who have sat exams in their subjects
+    // Teachers may promote students in their assigned class or enrolled in their subjects
     if (auth.role === "teacher") {
-      const linked = db.prepare(
-        "SELECT e.id FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND s.teacher_id = ? LIMIT 1"
-      ).get(targetId, auth.userId);
-      if (!linked) return apiError(403, "Student has not sat any of your exams");
+      const teacherClass = db.prepare("SELECT id, name FROM classes WHERE class_teacher_id = ? LIMIT 1").get(auth.userId) as any;
+      let isAllowed = false;
+      if (teacherClass) {
+        const studentInClass = db.prepare(`
+          SELECT 1 FROM class_enrollments ce WHERE ce.class_id = ? AND ce.student_id = ?
+          UNION
+          SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.id = ? AND (COALESCE(gl.name, u.grade) = ? OR u.class_id = ?)
+        `).get(teacherClass.id, targetId, targetId, teacherClass.name, teacherClass.id);
+        if (studentInClass) isAllowed = true;
+      }
+      if (!isAllowed) {
+        const linked = db.prepare(`
+          SELECT 1 FROM subject_enrollments se JOIN subjects s ON s.id = se.subject_id WHERE se.student_id = ? AND s.teacher_id = ?
+          UNION
+          SELECT 1 FROM grading_subjects gs JOIN class_enrollments ce ON ce.class_id = gs.class_id WHERE gs.teacher_id = ? AND ce.student_id = ?
+        `).get(targetId, auth.userId, auth.userId, targetId);
+        if (linked) isAllowed = true;
+      }
+      if (!isAllowed) return apiError(403, "Student is not assigned to your class or enrolled in any of your subjects");
     }
     const body = await readJson(req);
-    const newGrade = trimStr(body?.grade);
-    if (!newGrade) return apiError(400, "grade is required");
-    queries.updateUserGrade.run(newGrade, targetId);
-    auditLog(auth.userId, "STUDENT_GRADE_UPDATE", "user", targetId, JSON.stringify({ grade: newGrade }));
-    return apiSuccess({ id: targetId, grade: newGrade });
+    const newGradeId = Number(body?.grade_level_id);
+    if (!newGradeId) return apiError(400, "grade_level_id is required");
+    queries.updateUserGrade.run(newGradeId, targetId);
+    auditLog(auth.userId, "STUDENT_GRADE_UPDATE", "user", targetId, JSON.stringify({ grade_level_id: newGradeId }));
+    return apiSuccess({ id: targetId, grade_level_id: newGradeId });
   }
 
   if (method === "GET" && pathname === "/api/users") {
@@ -2004,28 +3476,47 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     // Operators get full access; teachers may only fetch student list (role=student)
     if (auth.role === "teacher") {
       if (role !== "student") return apiError(403, "Forbidden");
-      let q = "SELECT DISTINCT u.id, u.name, u.email, u.role, u.grade, u.reg_id, u.is_active, u.created_at FROM users u JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND s.teacher_id = ?";
-      const params: any[] = [auth.userId];
-      if (grade) {
-        q += " AND u.grade = ?";
-        params.push(grade);
+      const teacherClass = queries.getClassForTeacher.get(auth.userId) as any;
+      if (teacherClass) {
+        let q = `SELECT DISTINCT u.id, u.name, u.email, u.role, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.is_active, u.created_at
+                 FROM users u
+                 LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id
+                 WHERE u.role = 'student' AND u.is_active = 1 AND (
+                   COALESCE(gl.name, u.grade) = ?
+                   OR u.id IN (
+                     SELECT se.student_id FROM subject_enrollments se JOIN subjects s ON s.id = se.subject_id WHERE s.teacher_id = ?
+                   )
+                 )`;
+        const params: any[] = [teacherClass.name, auth.userId];
+        if (grade) {
+          q += " AND COALESCE(gl.name, u.grade) = ?";
+          params.push(grade);
+        }
+        return apiSuccess(db.prepare(q).all(...params));
+      } else {
+        let q = "SELECT DISTINCT u.id, u.name, u.email, u.role, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.is_active, u.created_at FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN subject_enrollments se ON se.student_id = u.id JOIN subjects s ON s.id = se.subject_id WHERE u.role = 'student' AND u.is_active = 1 AND s.teacher_id = ?";
+        const params: any[] = [auth.userId];
+        if (grade) {
+          q += " AND COALESCE(gl.name, u.grade) = ?";
+          params.push(grade);
+        }
+        return apiSuccess(db.prepare(q).all(...params));
       }
-      return apiSuccess(db.prepare(q).all(...params));
     }
     requireRole(auth.role, ["operator"]);
     if (role && !isValidRoleParam(role)) return apiError(400, "Invalid role filter");
     
-    let q = "SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users WHERE 1=1";
+    let q = "SELECT u.id, u.name, u.email, u.role, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.first_name, u.last_name, u.phone, u.is_active, u.created_at FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE 1=1";
     const params: any[] = [];
     if (role) {
-      q += " AND role = ?";
+      q += " AND u.role = ?";
       params.push(role);
     }
     if (grade) {
-      q += " AND grade = ?";
+      q += " AND COALESCE(gl.name, u.grade) = ?";
       params.push(grade);
     }
-    q += " ORDER BY id DESC LIMIT 1000";
+    q += " ORDER BY u.id DESC LIMIT 1000";
     return apiSuccess(db.prepare(q).all(...params));
   }
 
@@ -2046,7 +3537,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     let result: { lastInsertRowid: number | bigint };
     try {
       const opRegId = `OP-${Date.now().toString(36).toUpperCase()}`;
-      result = queries.createUser.run(name, email, "operator", hash, null, opRegId, null, null, null, null, null) as { lastInsertRowid: number | bigint };
+      result = queries.createUser.run(name, email, "operator", hash, null, opRegId, null, null, null, null, null, null) as { lastInsertRowid: number | bigint };
     } catch (e) {
       if (isSqliteUniqueError(e)) return apiError(409, "Email already registered");
       throw e;
@@ -2063,10 +3554,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   // ── Public settings (school name + current term — accessible to all roles) ──
   if (method === "GET" && pathname === "/api/settings/public") {
-    const auth = requireAuth(req);
-    void auth; // any authenticated user can read these
     const schoolName = (queries.getSetting.get("SCHOOL_NAME") as any)?.value || "School";
-    const currentTerm = (queries.getSetting.get("CURRENT_TERM") as any)?.value || "2026-T1";
+    const activeTermRow = (queries.getActiveAcademicTerm.get() as any);
+    const currentTerm = activeTermRow?.name || (queries.getSetting.get("CURRENT_TERM") as any)?.value || "2026-T1";
     const cfg = (queries.getConfig.get() as any) ?? {};
     return apiSuccess({
       school_name: cfg.org_name || schoolName,
@@ -2082,6 +3572,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator"]);
     const configData = (queries.getConfig.get() as any) ?? {};
     configData.registration_open = getRegistrationOpen();
+    const instSetting = db.prepare("SELECT value FROM settings WHERE key = 'INSTITUTION_TYPE'").get() as {value: string} | undefined;
+    configData.institution_type = instSetting?.value || "";
     return apiSuccess(configData);
   }
 
@@ -2133,6 +3625,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       auditLog(auth.userId, body.is_active ? "USER_ACTIVATE" : "USER_DEACTIVATE", "user", uid, "{}");
       return apiSuccess(queries.getUserById.get(uid));
     }
+    const newGradeLevelId = body?.grade_level_id !== undefined ? (Number(body.grade_level_id) || null) : target.grade_level_id || null;
+    let resolvedGradeString = trimStr(body?.grade) || target.grade || null;
+    if (newGradeLevelId && newGradeLevelId !== target.grade_level_id) {
+      const gl = db.prepare("SELECT name FROM grade_levels WHERE id = ?").get(newGradeLevelId) as any;
+      if (gl) resolvedGradeString = gl.name;
+    }
+    
     // Profile update
     queries.updateUser.run(
       trimStr(body?.first_name) || target.first_name || null,
@@ -2140,7 +3639,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       trimStr(body?.address) || target.address || null,
       trimStr(body?.phone) || target.phone || null,
       trimStr(body?.dob) || target.dob || null,
-      trimStr(body?.grade) || target.grade || null,
+      resolvedGradeString,
+      newGradeLevelId,
       trimStr(body?.image_url) || target.image_url || null,
       uid,
     );
@@ -2237,7 +3737,41 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiMessage("Database reset complete. Refresh to run setup.");
   }
 
-  // ── v4.1 Practice API ──────────────────────────────────────────────────────
+  // ── Grade Levels & Institution Settings ────────────────────────────────────
+  if (method === "GET" && pathname === "/api/grade-levels") {
+    // Only return the 22 standardized grades (not legacy custom ones)
+    const grades = db.prepare("SELECT * FROM grade_levels WHERE is_active = 1 AND category != 'custom' ORDER BY sort_order ASC").all();
+    return apiSuccess({ grades });
+  }
+
+  if (method === "POST" && pathname === "/api/settings/institution-type") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const type = body?.type;
+    if (!["Primary", "Secondary", "University", "Polytechnic"].includes(type)) {
+      return apiError(400, "Invalid institution type");
+    }
+    
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('INSTITUTION_TYPE', ?)").run(type);
+    
+    // Seed new grades
+    let seeds: {name: string, cat: string}[] = [];
+    if (type === 'Primary') {
+      seeds = ['Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6'].map(n => ({name: n, cat: 'primary'}));
+    } else if (type === 'University') {
+      seeds = ['100 Level', '200 Level', '300 Level', '400 Level', '500 Level', '600 Level'].map(n => ({name: n, cat: 'university'}));
+    } else if (type === 'Polytechnic') {
+      seeds = ['ND 1', 'ND 2', 'HND 1', 'HND 2'].map(n => ({name: n, cat: 'polytechnic'}));
+    } else {
+      seeds = ['JSS 1', 'JSS 2', 'JSS 3', 'SS 1', 'SS 2', 'SS 3'].map(n => ({name: n, cat: 'secondary'}));
+    }
+    
+    const stmt = db.prepare("INSERT OR IGNORE INTO grade_levels (name, category, sort_order) VALUES (?, ?, ?)");
+    seeds.forEach((s, i) => stmt.run(s.name, s.cat, i + 1));
+    
+    return apiSuccess({ seeded: true, type });
+  }
   if (pathname === "/api/practice/subjects" && method === "GET") {
     requireAuth(req);
     const results = db.prepare(`
@@ -2333,6 +3867,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const fingerprint = trimStr(body?.hardware_fingerprint) || "unknown";
     
     // Auto-complete any existing active session for this PC
+    const existingSession = db.prepare(`SELECT hardware_fingerprint FROM kiosk_sessions WHERE pc_id = ? AND status = 'active'`).get(pcId) as any;
+    if (existingSession && auth.role !== "operator" && existingSession.hardware_fingerprint !== fingerprint) {
+      return apiError(409, "This PC is currently in use by another session. Please ask an operator for assistance.");
+    }
+
     db.prepare(`UPDATE kiosk_sessions SET logout_time = ?, status = 'completed' WHERE pc_id = ? AND status = 'active'`)
       .run(Date.now(), pcId);
       
@@ -2353,14 +3892,33 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(newStudentId)) return apiError(400, "new_student_id must be a positive integer");
     const newExamId = body?.new_exam_id ? Number(body.new_exam_id) : null;
     if (newExamId !== null && !isPositiveIntId(newExamId)) return apiError(400, "new_exam_id must be a positive integer");
-    
+    const fingerprint = trimStr(body?.hardware_fingerprint) || "unknown";
+
+    const existingSession = db.prepare(`SELECT hardware_fingerprint FROM kiosk_sessions WHERE pc_id = ? AND status = 'active'`).get(pcId) as any;
+    if (existingSession && auth.role !== "operator" && existingSession.hardware_fingerprint !== fingerprint) {
+      return apiError(409, "This PC is currently in use by another session. Please ask an operator for assistance.");
+    }
+
     db.prepare(`UPDATE kiosk_sessions SET logout_time = ?, status = 'completed' WHERE pc_id = ? AND status = 'active'`)
       .run(Date.now(), pcId);
     
     db.prepare(`INSERT INTO kiosk_sessions (pc_id, seat_number, student_id, exam_id, hardware_fingerprint, login_time, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`)
-      .run(pcId, null, newStudentId, newExamId, "unknown", Date.now());
+      .run(pcId, null, newStudentId, newExamId, fingerprint, Date.now());
       
     return apiSuccess({ switched: true }, 200, { "X-Exampool-Action": "WIPE_LOCAL_STORAGE" });
+  }
+
+  if (pathname === "/api/kiosk/session/end" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const pcId = trimStr(body?.pc_id);
+    if (!pcId) return apiError(400, "pc_id is required");
+
+    db.prepare(`UPDATE kiosk_sessions SET logout_time = ?, status = 'completed' WHERE pc_id = ? AND status = 'active'`)
+      .run(Date.now(), pcId);
+      
+    return apiSuccess({ ended: true }, 200, { "X-Exampool-Action": "WIPE_LOCAL_STORAGE" });
   }
 
   if (pathname === "/api/kiosk/seat-map" && method === "GET") {
@@ -2407,6 +3965,61 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       server_ip: primaryLocalIp || "127.0.0.1",
       server_port: server.port,
       dns_active: isDnsListening
+    });
+  }
+
+  // ── GET /api/system/logs ─────────────────────────────────────────────────
+  if (pathname === "/api/system/logs" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    // Optional ?tail=N (default 100) and ?level=info|warn|error filter
+    const tail  = Math.min(200, Math.max(1, Number(url.searchParams.get("tail")  || 100)));
+    const level = url.searchParams.get("level") || "";
+    const filtered = level
+      ? logBuffer.filter((e) => e.level === level)
+      : [...logBuffer];
+    return apiSuccess(filtered.slice(-tail));
+  }
+
+  // ── GET /api/system/network-info ──────────────────────────────────────────
+  if (pathname === "/api/system/network-info" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const ifaces = os.networkInterfaces();
+    const virtualPrefixes2 = ["vEthernet", "VMware", "VirtualBox", "Loopback", "Teredo", "Bluetooth", "WSL"];
+    type IfaceInfo = { name: string; address: string; netmask: string; type: "wifi" | "ethernet" | "virtual" | "other" };
+    const wifi: IfaceInfo[]     = [];
+    const ethernet: IfaceInfo[] = [];
+    const other: IfaceInfo[]    = [];
+    for (const [name, addrs] of Object.entries(ifaces)) {
+      for (const a of addrs ?? []) {
+        if (a.family !== "IPv4" || a.internal) continue;
+        const lower = name.toLowerCase();
+        const isVirtual = virtualPrefixes2.some((p) => name.startsWith(p));
+        const entry: IfaceInfo = { name, address: a.address, netmask: a.netmask, type: "other" };
+        if (lower.includes("wi-fi") || lower.includes("wlan") || lower.includes("wireless")) {
+          entry.type = "wifi";
+          wifi.push(entry);
+        } else if (lower.includes("ethernet") && !isVirtual) {
+          entry.type = "ethernet";
+          ethernet.push(entry);
+        } else if (isVirtual) {
+          entry.type = "virtual";
+          other.push(entry);
+        } else {
+          entry.type = "other";
+          other.push(entry);
+        }
+      }
+    }
+    return apiSuccess({
+      wifi,
+      ethernet,
+      other,
+      primary_ip: primaryLocalIp || "127.0.0.1",
+      server_port: server.port,
+      dns_active: isDnsListening,
+      custom_url: activeCustomUrl,
     });
   }
 
@@ -2976,13 +4589,34 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         const { subject_id, start_time, end_time, answers } = examData;
         if (!subject_id) continue;
         
+        const subject = queries.getSubjectById.get(subject_id) as any;
+        if (!subject) continue;
+        
+        // [SECURITY FIX] Verify enrollment
+        const enrollment = db.prepare(
+          "SELECT id FROM subject_enrollments WHERE subject_id = ? AND student_id = ?"
+        ).get(subject_id, auth.userId);
+        if (!enrollment) continue;
+        
         let exam = queries.getExamByStudentSubject.get(auth.userId, subject_id) as any;
         if (!exam) {
+           // [SECURITY FIX] Only untimed assignments can be instantiated out-of-band via offline sync
+           if (subject.is_assignment !== 1) continue;
+           
            queries.createExam.run(auth.userId, subject_id, start_time || new Date().toISOString(), JSON.stringify(answers || []), "offline", currentTerm, "assignment");
            exam = queries.getExamByStudentSubject.get(auth.userId, subject_id) as any;
         } else if (exam.status === "completed") {
            // Skip if already completed to prevent double submission
            continue;
+        }
+
+        // [SECURITY FIX] Enforce strict CBT time limits on offline sync
+        // If a student tries to submit a CBT exam via offline sync hours later, block it.
+        if (subject.is_assignment !== 1) {
+           const deadline = Date.parse(exam.start_time) + Number(subject.duration) * 60_000 + 30_000; // 30s grace
+           if (Date.now() > deadline) {
+             continue; // Reject late offline CBT submissions (prevents time bypass cheating)
+           }
         }
         
         // Securely calculate score on the server
@@ -3001,7 +4635,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
           let marksAwarded = 0;
           
           if (qRow.question_type === "objective" || qRow.question_type === "true_false") {
-            if (qRow.correct_answer === ans.selected_option) {
+            if (Number(qRow.correct_answer) === Number(ans.selected_option)) {
               isCorrect = 1;
               marksAwarded = qRow.marks || 1;
               calculatedScore += marksAwarded;
@@ -3043,6 +4677,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
             ans.is_correct, ans.marks_awarded, ans.file_url
           );
         }
+        
+        // Free the redundant JSON blob — student_answers is now the authoritative store
+        queries.updateExamAnswersJson.run(exam.id);
         
         synced++;
       }
@@ -3136,6 +4773,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   // ── v2: Classes ───────────────────────────────────────────────────────────
+  if ((pathname === "/api/v2/classes/teacher-assignments/history" || pathname === "/api/v2/classes/assignment-history") && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    return apiSuccess(queries.getClassTeacherAssignmentHistory.all());
+  }
+
   if (pathname === "/api/v2/classes" && method === "GET") {
     requireAuth(req);
     return apiSuccess(queries.getAllClasses.all());
@@ -3148,15 +4791,68 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const name = trimStr(body?.name).slice(0, 50);
     const section = trimStr(body?.section).slice(0, 20) || null;
     const level = body?.level === "senior" ? "senior" : "junior";
+    const classTeacherId = body?.class_teacher_id ? Number(body.class_teacher_id) || null : null;
+    const notes = trimStr(body?.notes || "");
     if (!name) return apiError(400, "Class name required");
     try {
       const result = queries.createClass.run(name, section, level) as { lastInsertRowid: number | bigint };
-      auditLog(auth.userId, "CLASS_CREATE", "classes", Number(result.lastInsertRowid), JSON.stringify({ name, section }));
-      return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
+      const newClassId = Number(result.lastInsertRowid);
+      // Assign class teacher if provided (clear any previous assignment for that teacher)
+      if (classTeacherId) {
+        queries.unassignTeacherFromAllClasses.run(classTeacherId);
+        queries.assignClassTeacher.run(classTeacherId, newClassId);
+        queries.logClassTeacherAssignment.run(newClassId, classTeacherId, auth.userId, "assigned", notes || "Initial class creation");
+      }
+      auditLog(auth.userId, "CLASS_CREATE", "classes", newClassId, JSON.stringify({ name, section, class_teacher_id: classTeacherId }));
+      return apiSuccess({ id: newClassId }, 201);
     } catch (e) {
       if (isSqliteUniqueError(e)) return apiError(409, "A class with this name and section already exists");
       throw e;
     }
+  }
+
+  const assignTeacherMatch = pathname.match(/^\/api\/v2\/classes\/(\d+)\/assign-teacher$/);
+  if (assignTeacherMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
+    const classId = Number(assignTeacherMatch[1]);
+    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
+    const cls = queries.getClassById.get(classId) as any;
+    if (!cls) return apiError(404, "Class not found");
+    const body = await readJson(req);
+    const rawTeacherId = body?.teacher_id;
+    const teacherId = rawTeacherId ? Number(rawTeacherId) : null;
+    const notes = trimStr(body?.notes || "");
+
+    let action: "assigned" | "reassigned" | "unassigned" = "unassigned";
+
+    if (teacherId) {
+      const teacher = queries.getUserById.get(teacherId) as any;
+      if (!teacher || teacher.role !== "teacher" || sqlInt(teacher.is_active) !== 1) {
+        return apiError(400, "Invalid or inactive teacher");
+      }
+      action = cls.class_teacher_id ? "reassigned" : "assigned";
+      // Clear any other class assigned to this teacher
+      queries.unassignTeacherFromAllClasses.run(teacherId);
+      queries.assignClassTeacher.run(teacherId, classId);
+      queries.logClassTeacherAssignment.run(classId, teacherId, auth.userId, action, notes || null);
+
+      try {
+        queries.createNotification.run(
+          teacherId,
+          "class_teacher_assigned",
+          `You have been assigned as Class Teacher for ${cls.name}${cls.section ? ` (${cls.section})` : ""}.`,
+          "/teacher/report-card"
+        );
+      } catch {}
+    } else {
+      action = "unassigned";
+      queries.unassignClassTeacher.run(classId);
+      queries.logClassTeacherAssignment.run(classId, null, auth.userId, action, notes || null);
+    }
+
+    auditLog(auth.userId, "CLASS_TEACHER_" + action.toUpperCase(), "classes", classId, JSON.stringify({ teacher_id: teacherId, notes }));
+    return apiSuccess(queries.getClassById.get(classId));
   }
 
   const classIdMatch = pathname.match(/^\/api\/v2\/classes\/(\d+)$/);
@@ -3168,12 +4864,32 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const cls = queries.getClassById.get(classId) as any;
     if (!cls) return apiError(404, "Class not found");
     const body = await readJson(req);
+    // class_teacher_id: null clears assignment, undefined keeps existing
+    const classTeacherId =
+      body?.class_teacher_id === null ? null
+      : body?.class_teacher_id ? Number(body.class_teacher_id)
+      : cls.class_teacher_id ?? null;
+    const notes = trimStr(body?.notes || "");
+    
+    // Log change to class_teacher_assignments if teacher changed
+    if (classTeacherId !== cls.class_teacher_id) {
+      if (classTeacherId) {
+        const action = cls.class_teacher_id ? "reassigned" : "assigned";
+        queries.unassignTeacherFromAllClasses.run(classTeacherId);
+        queries.logClassTeacherAssignment.run(classId, classTeacherId, auth.userId, action, notes || "Updated via class settings");
+      } else {
+        queries.logClassTeacherAssignment.run(classId, null, auth.userId, "unassigned", notes || "Removed via class settings");
+      }
+    }
+
     queries.updateClass.run(
       trimStr(body?.name) || cls.name,
       body?.section !== undefined ? (trimStr(body.section) || null) : cls.section,
       body?.level === "senior" ? "senior" : (body?.level === "junior" ? "junior" : cls.level),
+      classTeacherId,
       classId
     );
+    auditLog(auth.userId, "CLASS_UPDATE", "classes", classId, JSON.stringify({ class_teacher_id: classTeacherId }));
     return apiSuccess(queries.getClassById.get(classId));
   }
 
@@ -3182,7 +4898,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator"]);
     const classId = Number(classIdMatch[1]);
     if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
-    const count = (queries.getEnrollmentCountForClass.get(classId, 0) as any)?.count ?? 0;
+    const count = (queries.getEnrollmentCountForClass.get(classId) as any)?.count ?? 0;
     if (count > 0) return apiError(409, "Cannot delete class with enrolled students");
     queries.deleteClass.run(classId);
     return apiMessage("Class deleted");
@@ -3195,11 +4911,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator", "teacher"]);
     const classId = Number(classRosterMatch[1]);
     if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
-    const termId = Number(url.searchParams.get("term_id") || 0);
-    const activeTerm = queries.getActiveTerm.get() as any;
-    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
-    if (!resolvedTermId) return apiError(400, "No active term. Provide term_id or activate a term first.");
-    return apiSuccess(queries.getClassRoster.all(classId, resolvedTermId));
+    
+    // [SECURITY FIX] Ensure teacher is the class teacher for this class
+    if (auth.role === "teacher") {
+      const cls = queries.getClassById.get(classId) as any;
+      if (!cls || Number(cls.class_teacher_id) !== auth.userId) {
+         return apiError(403, "You are not the class teacher for this class");
+      }
+    }
+    return apiSuccess(queries.getClassRoster.all(classId));
   }
 
   // ── v2: Class Enrollments (bulk) ─────────────────────────────────────────
@@ -3336,67 +5056,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiMessage("Event deleted");
   }
 
-  // ── v2: Timetables ────────────────────────────────────────────────────────
-  const timetableClassMatch = pathname.match(/^\/api\/v2\/timetables\/class\/(\d+)$/);
-  if (timetableClassMatch && method === "GET") {
-    requireAuth(req);
-    const classId = Number(timetableClassMatch[1]);
-    if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
-    const termId = Number(url.searchParams.get("term_id") || 0);
-    const activeTerm = queries.getActiveTerm.get() as any;
-    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
-    if (!resolvedTermId) return apiSuccess([]);
-    return apiSuccess(queries.getTimetableByClass.all(classId, resolvedTermId));
-  }
-
-  if (pathname === "/api/v2/timetables" && method === "POST") {
-    const auth = requireAuth(req);
-    requireRole(auth.role, ["operator"]);
-    const body = await readJson(req);
-    const class_id = Number(body?.class_id);
-    const subject_id = Number(body?.subject_id);
-    const term_id = Number(body?.term_id);
-    const teacher_id = body?.teacher_id ? Number(body.teacher_id) : null;
-    const day_of_week = Number(body?.day_of_week);
-    const start_time = trimStr(body?.start_time);
-    const end_time = trimStr(body?.end_time);
-    const classroom = trimStr(body?.classroom).slice(0, 100) || null;
-    if (!isPositiveIntId(class_id) || !isPositiveIntId(subject_id) || !isPositiveIntId(term_id)) {
-      return apiError(400, "class_id, subject_id, term_id required");
-    }
-    if (!Number.isInteger(day_of_week) || day_of_week < 0 || day_of_week > 6) return apiError(400, "day_of_week must be 0-6");
-    if (!start_time || !end_time) return apiError(400, "start_time and end_time required");
-    // [CONFLICT DETECTION] Teacher double-booking check
-    if (teacher_id && isPositiveIntId(teacher_id)) {
-      const teacherConflict = queries.checkTeacherConflict.get(teacher_id, term_id, day_of_week, start_time) as any;
-      if (teacherConflict) return apiError(409, "Teacher is already assigned to another class at this time slot");
-    }
-    // [CONFLICT DETECTION] Classroom double-booking check
-    if (classroom) {
-      const roomConflict = queries.checkClassroomConflict.get(classroom, term_id, day_of_week, start_time) as any;
-      if (roomConflict) return apiError(409, `Classroom "${classroom}" is already booked at this time slot`);
-    }
-    try {
-      const result = queries.createTimetableSlot.run(class_id, subject_id, term_id, teacher_id, day_of_week, start_time, end_time, classroom) as { lastInsertRowid: number | bigint };
-      auditLog(auth.userId, "TIMETABLE_CREATE", "timetables", Number(result.lastInsertRowid), JSON.stringify({ class_id, subject_id, day_of_week, start_time }));
-      return apiSuccess(queries.getTimetableSlot.get(Number(result.lastInsertRowid)), 201);
-    } catch (e) {
-      if (isSqliteUniqueError(e)) return apiError(409, "A timetable slot already exists for this class at this day and time");
-      throw e;
-    }
-  }
-
-  const timetableSlotMatch = pathname.match(/^\/api\/v2\/timetables\/(\d+)$/);
-  if (timetableSlotMatch && method === "DELETE") {
-    const auth = requireAuth(req);
-    requireRole(auth.role, ["operator"]);
-    const slotId = Number(timetableSlotMatch[1]);
-    if (!isPositiveIntId(slotId)) return apiError(400, "Invalid slot id");
-    const slot = queries.getTimetableSlot.get(slotId) as any;
-    if (!slot) return apiError(404, "Timetable slot not found");
-    queries.deleteTimetableSlot.run(slotId);
-    return apiMessage("Timetable slot deleted");
-  }
+  // Legacy v2 timetable API endpoints removed (repurposed timetables table)
 
   return apiError(404, "Not found");
 }
@@ -3435,14 +5095,20 @@ let primaryLocalIp = "";
 // Prefer physical Wi-Fi/Ethernet over virtual adapters (WSL, Hyper-V, VirtualBox etc.)
 const virtualPrefixes = ["vEthernet", "VMware", "VirtualBox", "Loopback", "Teredo", "Bluetooth"];
 const allNonLoopback: { name: string; address: string }[] = [];
+let foundWifi = false;
+let foundEthernet = false;
 for (const [name, addresses] of Object.entries(interfaces)) {
   for (const addr of addresses ?? []) {
     if (addr.family === "IPv4" && !addr.internal) {
       console.log(`[${name}] Local Network: http://${addr.address}:${server.port}`);
       allNonLoopback.push({ name, address: addr.address });
+      if (name.toLowerCase().includes("wi-fi") || name.toLowerCase().includes("wlan")) foundWifi = true;
+      if (name.toLowerCase().includes("ethernet") && !virtualPrefixes.some(p => name.startsWith(p))) foundEthernet = true;
     }
   }
 }
+if (!foundWifi) console.log(`[Wi-Fi] Local Network: Not connected`);
+if (!foundEthernet) console.log(`[Ethernet] Local Network: Not connected`);
 // Pick a physical adapter first; fall back to any non-loopback if none found
 const physicalAdapter = allNonLoopback.find(a => !virtualPrefixes.some(prefix => a.name.startsWith(prefix)));
 primaryLocalIp = (physicalAdapter ?? allNonLoopback[0])?.address ?? "";

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import styles from '../../../components/SeatMap.module.css';
+import { fetchWithAuth } from '../../../lib/api';
 
 interface SeatMapCell {
   pc_id: string;
@@ -18,11 +19,8 @@ export default function SeatMapDashboard() {
   // Fallback Polling / Initial Load
   const fetchSeats = async () => {
     try {
-      const res = await fetch('/api/kiosk/seat-map');
-      if (res.ok) {
-        const data = await res.json();
-        setSeats(data.data.pcs || []);
-      }
+      const data = await fetchWithAuth('/api/kiosk/seat-map');
+      setSeats(data.pcs || []);
     } catch (err) {
       setError('Failed to fetch seat map');
     }
@@ -56,10 +54,9 @@ export default function SeatMapDashboard() {
   const handleForceSubmit = async (pcId: string) => {
     if (confirm(`Force submit exam on ${pcId}?`)) {
       // Hit switch API to force end
-      await fetch('/api/kiosk/session/switch', {
+      await fetchWithAuth('/api/kiosk/session/end', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pc_id: pcId, new_student_id: 0, new_exam_id: 0 })
+        body: JSON.stringify({ pc_id: pcId })
       });
       fetchSeats();
     }

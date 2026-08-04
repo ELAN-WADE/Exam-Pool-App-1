@@ -15,6 +15,9 @@ export type SessionUser = {
   email: string;
   role: "student" | "teacher" | "operator";
   grade?: string | null;
+  is_class_teacher?: boolean;
+  assigned_class_id?: number | null;
+  assigned_class_name?: string | null;
 };
 
 export type SessionInfo = {
@@ -114,10 +117,29 @@ export const api = {
   activateAcademicTerm: (termId: number) => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/activate-term", { method: "POST", body: JSON.stringify({ termId }) }),
   endTerm: () => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/end-term", { method: "POST" }),
   getAcademicStats: (sessionId?: number, termId?: number) => fetchWithAuth<any>(`/api/academic/stats${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  
+  // v8: Grading System APIs
+  getGradingConfig: () => fetchWithAuth<any>("/api/grading/config"),
+  updateGradingConfig: (data: any) => fetchWithAuth<any>("/api/grading/config", { method: "PUT", body: JSON.stringify(data) }),
+  getGradingSubjects: (sessionId?: number, termId?: number) => fetchWithAuth<any[]>(`/api/grading/subjects${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  createGradingSubject: (data: any) => fetchWithAuth<any>("/api/grading/subjects", { method: "POST", body: JSON.stringify(data) }),
+  getGradingPolicies: (subjectId: number) => fetchWithAuth<any[]>(`/api/grading/policies/${subjectId}`),
+  updateGradingPolicies: (subjectId: number, data: any) => fetchWithAuth<any>(`/api/grading/policies/${subjectId}`, { method: "PUT", body: JSON.stringify(data) }),
+  getGradingScores: (subjectId: number) => fetchWithAuth<any>(`/api/grading/scores/${subjectId}`),
+  saveGradingScores: (subjectId: number, data: any[]) => fetchWithAuth<any>(`/api/grading/scores/${subjectId}`, { method: "POST", body: JSON.stringify(data) }),
+  approveGradingScores: (subjectId: number, data: any[]) => fetchWithAuth<any>(`/api/grading/approve/${subjectId}`, { method: "POST", body: JSON.stringify(data) }),
+  unapproveGradingScores: (subjectId: number) => fetchWithAuth<any>(`/api/grading/approve/${subjectId}/unapprove`, { method: "POST" }),
+  getAnnualResults: (sessionId?: number) => fetchWithAuth<any>(`/api/grading/annual${sessionId ? `?sessionId=${sessionId}` : ""}`),
+  promoteStudent: (data: any) => fetchWithAuth<any>("/api/grading/annual/promote", { method: "POST", body: JSON.stringify(data) }),
+
   createSubject: (data: any) => fetchWithAuth<Subject>("/api/subjects", { method: "POST", body: JSON.stringify(data) }),
   updateSubject: (id: number, data: any) =>
     fetchWithAuth<Subject>(`/api/subjects/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteSubject: (id: number) => fetchWithAuth<any>(`/api/subjects/${id}`, { method: "DELETE" }),
+  getTimetables: () => fetchWithAuth<any[]>("/api/timetables"),
+  createTimetable: (data: any) => fetchWithAuth<any>("/api/timetables", { method: "POST", body: JSON.stringify(data) }),
+  updateTimetable: (id: number, data: any) => fetchWithAuth<any>(`/api/timetables/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteTimetable: (id: number) => fetchWithAuth<any>(`/api/timetables/${id}`, { method: "DELETE" }),
   getQuestions: (subjectId: number) => fetchWithAuth<Question[]>(`/api/subjects/${subjectId}/questions`),
   createQuestion: (data: any) => fetchWithAuth<Question>("/api/questions", { method: "POST", body: JSON.stringify(data) }),
   updateQuestion: (id: number, data: any) =>
@@ -173,12 +195,30 @@ export const api = {
   getConfig: () => fetchWithAuth<Config>("/api/config"),
   /** Update school config */
   updateConfig: (data: any) => fetchWithAuth<Config>("/api/config", { method: "PUT", body: JSON.stringify(data) }),
+  /** Get all grade levels */
+  getGradeLevels: () => fetchWithAuth<{ grades: import("./types").GradeLevel[] }>("/api/grade-levels"),
+  /** Get all classes */
+  getClasses: () => fetchWithAuth<any[]>("/api/v2/classes"),
+  /** Get student roster for a class (class teachers use this) */
+  getClassRoster: (classId: number, termId?: number) =>
+    fetchWithAuth<any[]>(`/api/v2/classes/${classId}/roster${termId ? `?term_id=${termId}` : ""}`),
+  /** Assign or unassign class teacher for a class */
+  assignClassTeacher: (classId: number, teacherId: number | null, notes?: string) =>
+    fetchWithAuth<any>(`/api/v2/classes/${classId}/assign-teacher`, { method: "POST", body: JSON.stringify({ teacher_id: teacherId, notes }) }),
+  /** Get class teacher assignment audit history */
+  getClassTeacherAssignmentHistory: () =>
+    fetchWithAuth<any[]>("/api/v2/classes/teacher-assignments/history"),
+  /** Update a class (name, section, level, class_teacher_id) */
+  updateClass: (classId: number, data: { name?: string; section?: string; level?: string; class_teacher_id?: number | null; notes?: string }) =>
+    fetchWithAuth<any>(`/api/v2/classes/${classId}`, { method: "PUT", body: JSON.stringify(data) }),
+  /** Update institution type */
+  updateInstitutionType: (type: string) => fetchWithAuth<any>("/api/settings/institution-type", { method: "POST", body: JSON.stringify({ type }) }),
   /** Change authenticated user's password */
   changePassword: (current_password: string, new_password: string) =>
     fetchWithAuth<any>("/api/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
   /** Promote or demote a student's grade */
-  updateStudentGrade: (studentId: number, grade: string) =>
-    fetchWithAuth<any>(`/api/users/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ grade }) }),
+  updateStudentGrade: (studentId: number, gradeLevelId: number) =>
+    fetchWithAuth<any>(`/api/users/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ grade_level_id: gradeLevelId }) }),
   /** Get per-question exam review detail */
   getExamReview: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/review`),
   /** Trigger results CSV download */
@@ -206,6 +246,13 @@ export const api = {
     fetchWithAuth<any>(`/api/exams/by-student-subject?student_id=${studentId}&subject_id=${subjectId}`),
   /** Get all completed exams for a student (for report card generation) */
   getStudentExams: (studentId: number) => fetchWithAuth<ExamResult[]>(`/api/users/${studentId}/exams?t=${Date.now()}`),
+  /** Get term results for report card generation (new grading system) */
+  getStudentReportCardResults: (studentId: number, sessionId?: number, termId?: number) => {
+    let url = `/api/users/${studentId}/report-card-results?t=${Date.now()}`;
+    if (sessionId) url += `&sessionId=${sessionId}`;
+    if (termId) url += `&termId=${termId}`;
+    return fetchWithAuth<ExamResult[]>(url);
+  },
   /** Save teacher's remark for a specific completed exam */
   saveTeacherRemark: (examId: number, remark: string) =>
     fetchWithAuth<any>(`/api/exams/${examId}/remarks`, { method: "PUT", body: JSON.stringify({ remark }) }),
@@ -216,11 +263,25 @@ export const api = {
   gradeEssay: (examId: number, questionId: number, marksAwarded: number, feedback?: string) =>
     fetchWithAuth<any>(`/api/exams/${examId}/grade`, { method: "POST", body: JSON.stringify({ question_id: questionId, marks_awarded: marksAwarded, feedback }) }),
   /** Get term remark for a student */
-  getTermRemark: (studentId: number, term: string) =>
-    fetchWithAuth<any>(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`),
+  getTermRemark: (studentId: number, term: string, sessionId?: number, termId?: number) => {
+    let url = `/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`;
+    const params = new URLSearchParams();
+    if (sessionId) params.set("sessionId", String(sessionId));
+    if (termId) params.set("termId", String(termId));
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+    return fetchWithAuth<any>(url);
+  },
   /** Save term remark for a student (role determines if it's teacher or principal) */
-  saveTermRemark: (studentId: number, term: string, remark: string) =>
-    fetchWithAuth<any>(`/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`, { method: "PUT", body: JSON.stringify({ remark }) }),
+  saveTermRemark: (studentId: number, term: string, remark: string, sessionId?: number, termId?: number) => {
+    let url = `/api/users/${studentId}/term-remarks/${encodeURIComponent(term)}`;
+    const params = new URLSearchParams();
+    if (sessionId) params.set("sessionId", String(sessionId));
+    if (termId) params.set("termId", String(termId));
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+    return fetchWithAuth<any>(url, { method: "PUT", body: JSON.stringify({ remark }) });
+  },
   /** Get public school settings: name, current term, admin name, logo — accessible to all roles */
   getPublicSettings: () => fetchWithAuth<Config>("/api/settings/public"),
   /** Upload a file (PDF) */
@@ -247,4 +308,41 @@ export const api = {
   getSystemSettings: () => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings"),
   /** Update custom domain URL (Operator only) */
   updateSystemSettings: (data: { custom_url: string }) => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings", { method: "PUT", body: JSON.stringify(data) }),
+  /** Set institution type and seed grade levels */
+  setInstitutionType: (type: string) => fetchWithAuth<{ seeded: boolean; type: string }>("/api/settings/institution-type", { method: "POST", body: JSON.stringify({ type }) }),
+  /** Get recent server console log entries for the terminal panel (Operator only) */
+  getServerLogs: (tail = 100, level = "") =>
+    fetchWithAuth<{ ts: string; level: "info" | "warn" | "error"; msg: string }[]>(
+      `/api/system/logs?tail=${tail}${level ? `&level=${level}` : ""}`
+    ),
+  /** Get detailed WiFi/Ethernet network interface info (Operator only) */
+  getNetworkInfo: () =>
+    fetchWithAuth<{
+      wifi:       { name: string; address: string; netmask: string; type: string }[];
+      ethernet:   { name: string; address: string; netmask: string; type: string }[];
+      other:      { name: string; address: string; netmask: string; type: string }[];
+      primary_ip: string;
+      server_port: number;
+      dns_active:  boolean;
+      custom_url:  string;
+    }>("/api/system/network-info"),
+  /** Global Admin Search across historical report cards, exams, subjects, teacher assignments, and sessions */
+  globalAdminSearch: (params: { q?: string; type?: string; sessionId?: number; termId?: number; limit?: number }) => {
+    const sp = new URLSearchParams();
+    if (params.q) sp.set("q", params.q);
+    if (params.type && params.type !== "all") sp.set("type", params.type);
+    if (params.sessionId) sp.set("sessionId", String(params.sessionId));
+    if (params.termId) sp.set("termId", String(params.termId));
+    if (params.limit) sp.set("limit", String(params.limit));
+    const qs = sp.toString();
+    return fetchWithAuth<{ results: any[]; total: number; query: string; type: string; sessionId: number | null; termId: number | null }>(
+      `/api/admin/global-search${qs ? `?${qs}` : ""}`
+    );
+  },
+  /** Get statistical snapshots across academic sessions for historical dashboard analytics */
+  getSessionSnapshots: (sessionId?: number) => {
+    let url = "/api/admin/session-snapshots";
+    if (sessionId) url += `?sessionId=${sessionId}`;
+    return fetchWithAuth<{ snapshots: any[] }>(url);
+  },
 };

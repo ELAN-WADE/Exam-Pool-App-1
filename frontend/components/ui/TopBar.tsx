@@ -71,52 +71,39 @@ export function TopBar({ onMenuClick, title }: Props) {
 
       {/* Right */}
       <div className={styles.right}>
-        {/* Academic Switcher (View Filter) */}
+        {/* Academic Switcher (View Filter - does not alter global active session) */}
         {(user?.role === "operator" || user?.role === "teacher") && sessions.length > 0 && (
           <div className="hidden sm:flex items-center gap-2">
             <select
               value={selectedSession?.id || ""}
-              onChange={async (e) => {
+              onChange={(e) => {
                 const s = sessions.find(x => x.id === Number(e.target.value));
                 if (s) {
                   setSelectedSession(s);
-                  // Reset term if switching session
-                  setSelectedTerm(null);
-                  if (user?.role === "operator") {
-                    try {
-                      await api.activateAcademicSession(s.id);
-                      await refreshAcademic();
-                    } catch (err) {
-                      console.error("Failed to activate session", err);
-                    }
-                  }
+                  // Default to first term of that session if available
+                  const firstTerm = terms.find(t => t.session_id === s.id);
+                  setSelectedTerm(firstTerm || null);
                 }
               }}
               className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
-              title="Select Academic Session"
+              title="Filter by Academic Session"
             >
-              {sessions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {sessions.map(s => <option key={s.id} value={s.id}>{s.name} {s.is_active ? "(Active)" : ""}</option>)}
             </select>
             
             <select
               value={selectedTerm?.id || ""}
-              onChange={async (e) => {
+              onChange={(e) => {
                 const t = terms.find(x => x.id === Number(e.target.value));
                 setSelectedTerm(t || null);
-                if (user?.role === "operator" && t) {
-                  try {
-                    await api.activateAcademicTerm(t.id);
-                    await refreshAcademic();
-                  } catch (err) {
-                    console.error("Failed to activate term", err);
-                  }
-                }
               }}
               className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
-              title="Select Academic Term"
+              title="Filter by Academic Term"
             >
               <option value="">All Terms</option>
-              {terms.filter(t => t.session_id === selectedSession?.id).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {terms.filter(t => t.session_id === selectedSession?.id).map(t => (
+                <option key={t.id} value={t.id}>{t.name} {t.is_active ? "(Active)" : ""}</option>
+              ))}
             </select>
           </div>
         )}

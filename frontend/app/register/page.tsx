@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "../../lib/api";
 import { WarningIcon } from "../../components/icons/Icons";
+import { GradeLevel } from "../../lib/types";
 import styles from "./page.module.css";
 
 export default function RegisterPage() {
@@ -13,12 +14,22 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"student" | "teacher">("student");
-  const [grade, setGrade] = useState("");
+  const [gradeLevelId, setGradeLevelId] = useState("");
+  const [gradeLevels, setGradeLevels] = useState<GradeLevel[]>([]);
   const [dob, setDob] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [successRegId, setSuccessRegId] = useState("");
+
+  useEffect(() => {
+    api.getGradeLevels().then((res) => {
+      setGradeLevels(res.grades || []);
+      if (res.grades?.length > 0) {
+        setGradeLevelId(String(res.grades[0].id));
+      }
+    }).catch(console.error);
+  }, []);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -30,7 +41,7 @@ export default function RegisterPage() {
         email,
         password,
         role,
-        ...(role === "student" ? { grade, dob } : { phone }),
+        ...(role === "student" ? { grade_level_id: gradeLevelId ? Number(gradeLevelId) : null, dob } : { phone }),
       });
       setSuccessRegId(res.user.reg_id);
     } catch (err) {
@@ -152,7 +163,12 @@ export default function RegisterPage() {
                       <>
                         <div className="field" style={{ flex: 1 }}>
                           <label>Grade / Class</label>
-                          <input className="input" value={grade} onChange={(e) => setGrade(e.target.value)} placeholder="e.g. Grade 10" required />
+                          <select className="select" value={gradeLevelId} onChange={(e) => setGradeLevelId(e.target.value)} required>
+                            <option value="">Select a class...</option>
+                            {gradeLevels.map((g) => (
+                              <option key={g.id} value={g.id}>{g.name}</option>
+                            ))}
+                          </select>
                         </div>
                         <div className="field" style={{ flex: 1, marginTop: "0.5rem" }}>
                           <label>Date of Birth</label>

@@ -44,7 +44,8 @@ function UsersContent() {
   const [toast,   setToast]   = useState<Toast>(null);
 
   const [modal, setModal] = useState<"operator" | "user" | null>(null);
-  const [form,  setForm]  = useState<any>({ name: "", email: "", password: "", role: "student", grade: "" });
+  const [form,  setForm]  = useState<any>({ name: "", email: "", password: "", role: "student", grade_level_id: "" });
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<any>(null);
   const [resetModal, setResetModal] = useState<any>(null);
@@ -60,6 +61,8 @@ function UsersContent() {
     try {
       const data = (await api.getUsers()) as any[];
       setUsers(data ?? []);
+      const gradesData = await api.getGradeLevels();
+      setGradeLevels(gradesData?.grades ?? []);
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Failed to load users");
     } finally {
@@ -86,7 +89,7 @@ function UsersContent() {
   }), [users]);
 
   const openOperator = () => { setForm({ name: "", email: "", password: "" }); setModal("operator"); };
-  const openUser     = () => { setForm({ name: "", email: "", password: "", role: "student", grade: "" }); setModal("user"); };
+  const openUser     = () => { setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "" }); setModal("user"); };
 
   const createOperator = async (e: FormEvent) => {
     e.preventDefault();
@@ -110,7 +113,7 @@ function UsersContent() {
         email:    form.email,
         password: form.password,
         role:     form.role,
-        ...(form.role === "student" ? { grade: form.grade } : {}),
+        ...(form.role === "student" ? { grade_level_id: form.grade_level_id ? Number(form.grade_level_id) : null } : {}),
       });
       showToast("success", `${form.role === "teacher" ? "Teacher" : "Student"} "${form.name}" created.`);
       setModal(null);
@@ -325,7 +328,12 @@ function UsersContent() {
           {form.role === "student" && (
             <div className="field">
               <label>Grade / Class *</label>
-              <input className="input" value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })} placeholder="e.g. Grade 10A" required />
+              <select className="select" value={form.grade_level_id} onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })} required>
+                <option value="">Select a class...</option>
+                {gradeLevels.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
             </div>
           )}
           <div className="modal-actions">

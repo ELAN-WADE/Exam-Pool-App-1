@@ -46,8 +46,9 @@ function UsersContent() {
   const [tab,     setTab]     = useState<Tab>("all");
   const [toast,   setToast]   = useState<Toast>(null);
 
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const [modal, setModal] = useState<"operator" | "user" | null>(null);
-  const [form,  setForm]  = useState<any>({ name: "", email: "", password: "", role: "student", grade: "" });
+  const [form,  setForm]  = useState<any>({ name: "", email: "", password: "", role: "student", grade_level_id: "" });
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<any>(null);
   const [resetModal, setResetModal] = useState<any>(null);
@@ -61,9 +62,13 @@ function UsersContent() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-      const data = (await api.getUsers()) as User[];
+      const [userData, glData] = await Promise.all([
+        api.getUsers(),
+        api.getGradeLevels(),
+      ]);
       if (signal?.aborted) return;
-      setUsers(data ?? []);
+      setUsers((userData as User[]) ?? []);
+      setGradeLevels(glData?.grades ?? []);
     } catch (err) {
       if (!signal?.aborted) showToast("error", err instanceof Error ? err.message : "Failed to load users");
     } finally {
@@ -94,7 +99,7 @@ function UsersContent() {
   }), [users]);
 
   const openOperator = () => { setForm({ name: "", email: "", password: "" }); setModal("operator"); };
-  const openUser     = () => { setForm({ name: "", email: "", password: "", role: "student", grade: "" }); setModal("user"); };
+  const openUser     = () => { setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "" }); setModal("user"); };
 
   const createOperator = async (e: FormEvent) => {
     e.preventDefault();
@@ -113,12 +118,16 @@ function UsersContent() {
     e.preventDefault();
     setSaving(true);
     try {
+      const selectedGrade = gradeLevels.find((g) => String(g.id) === String(form.grade_level_id));
       await api.register({
         name:     form.name,
         email:    form.email,
         password: form.password,
         role:     form.role,
-        ...(form.role === "student" ? { grade: form.grade } : {}),
+        ...(form.role === "student" ? { 
+          grade_level_id: form.grade_level_id ? Number(form.grade_level_id) : null,
+          grade: selectedGrade?.name || ""
+        } : {}),
       });
       showToast("success", `${form.role === "teacher" ? "Teacher" : "Student"} "${form.name}" created.`);
       setModal(null);
@@ -333,7 +342,19 @@ function UsersContent() {
           {form.role === "student" && (
             <div className="field">
               <label>Grade / Class *</label>
-              <input className="input" value={form.grade} onChange={(e) => setForm({ ...form, grade: e.target.value })} placeholder="e.g. Grade 10A" required />
+              <select
+                className="select"
+                value={form.grade_level_id}
+                onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })}
+                required
+              >
+                <option value="">— Select Grade / Class —</option>
+                {gradeLevels.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           <div className="modal-actions">

@@ -92,7 +92,7 @@ function QuestionsContent() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedSession?.id, selectedTerm?.id]);
 
   const loadQuestions = useCallback(async () => {
     if (!subjectId) return;

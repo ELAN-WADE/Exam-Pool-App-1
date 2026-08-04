@@ -6,18 +6,21 @@ import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
 const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
-import { CalendarIcon, ClockIcon, EditIcon, CheckCircleIcon, WarningIcon, PlusIcon } from "../../../components/icons/Icons";
+import { CalendarIcon, ClockIcon, EditIcon, CheckCircleIcon, WarningIcon, PlusIcon, TrashIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
 type Toast = { type: "success" | "error"; text: string } | null;
 type Subject = {
   id: number; name: string; code: string; term: string;
-  duration: number; total_score: number; exam_datetime: string;
-  is_published: number; teacher_id: number; created_at: string;
-  description?: string; class?: string; session?: string; mode?: string;
-  is_timetable_published?: number; window_duration?: number;
+  teacher_id: number; can_retake?: number; mode?: string;
 };
-type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
+type Timetable = {
+  id: number; subject_id: number; subject_name: string; subject_code: string;
+  class: string | null; section: string | null;
+  exam_date: string; start_time: string; end_time: string;
+  duration: number; exam_mode: string; allow_students: number;
+};
+type User = { id: number; name: string; email: string; role: string; is_active: number };
 
 export default function OperatorTimetablePage() {
   return (
@@ -27,28 +30,38 @@ export default function OperatorTimetablePage() {
   );
 }
 
+const emptyForm = {
+  subject_id: "",
+  class: "",
+  section: "",
+  exam_date: "",
+  start_time: "",
+  end_time: "",
+  duration: "60",
+  exam_mode: "CBT",
+  allow_students: false,
+  teacher_id: "",
+  can_retake: true,
+  schedule_status: "scheduled",
+  subject_mode: "exam"
+};
+
 function TimetableContent() {
   const [subjects,  setSubjects]  = useState<Subject[]>([]);
+  const [timetables, setTimetables] = useState<Timetable[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const { selectedSession, selectedTerm } = useAcademic();
   const [loading,   setLoading]   = useState(true);
   const [toast,     setToast]     = useState<Toast>(null);
   
   const [modalOpen, setModalOpen] = useState(false);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editing,   setEditing]   = useState<Subject | null>(null);
+  const [editing,   setEditing]   = useState<Timetable | null>(null);
+  const [deleting,  setDeleting]  = useState<Timetable | null>(null);
   const [search,    setSearch]    = useState("");
   const [saving,    setSaving]    = useState(false);
-  const [teachers,  setTeachers]  = useState<User[]>([]);
 
-  // Create Form State
-  const [form, setForm] = useState({
-    name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam"
-  });
-
-  const [examDate, setExamDate] = useState("");
-  const [duration, setDuration] = useState("");
-  const [windowDuration, setWindowDuration] = useState("120");
-  const [isPublished, setIsPublished] = useState(false);
+  const [form, setForm] = useState(emptyForm);
 
   const showToast = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -58,61 +71,106 @@ function TimetableContent() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const [s, u] = await Promise.all([api.getSubjects(selectedSession?.id, selectedTerm?.id), api.getUsers()]);
+      const [s, t, u, g] = await Promise.all([
+        api.getSubjects(selectedSession?.id, selectedTerm?.id),
+        api.getTimetables(),
+        api.getUsers(),
+        api.getGradeLevels()
+      ]);
       setSubjects((s as Subject[]) ?? []);
-      setTeachers(((u as User[]) ?? []).filter(user => user.role === "teacher" && user.is_active));
+      setTimetables((t as Timetable[]) ?? []);
+      setUsers((u as User[]) ?? []);
+      setGradeLevels((g as any)?.grades ?? []);
     } catch {
-      showToast("error", "Failed to load subjects.");
+      showToast("error", "Failed to load timetable data.");
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, selectedSession?.id, selectedTerm?.id]);
 
-  useEffect(() => { load(); }, [load, selectedSession?.id, selectedTerm?.id]);
+  useEffect(() => { load(); }, [load]);
 
-  const filtered = useMemo(() => {
+  const teachers = useMemo(() => users.filter((u) => u.role === "teacher" && u.is_active), [users]);
+
+  const filteredSubjects = useMemo(() => {
     const q = search.toLowerCase();
-    let res = subjects;
-    if (q) {
-      res = res.filter(
-        (s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q) || s.term.toLowerCase().includes(q),
-      );
-    }
-    // Sort by exam_datetime, nulls last
-    res.sort((a, b) => {
-      if (!a.exam_datetime && !b.exam_datetime) return 0;
-      if (!a.exam_datetime) return 1;
-      if (!b.exam_datetime) return -1;
-      return new Date(a.exam_datetime).getTime() - new Date(b.exam_datetime).getTime();
-    });
-    return res;
+    if (!q) return subjects;
+    return subjects.filter(
+      (s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)
+    );
   }, [subjects, search]);
 
-  const openEdit = (s: Subject) => {
-    setEditing(s);
-    setExamDate(s.exam_datetime ?? "");
-    setDuration(String(s.duration));
-    setWindowDuration(String(s.window_duration ?? 120));
-    setIsPublished(!!s.is_timetable_published);
+  const openSchedule = (subject: Subject, existingTimetable?: Timetable) => {
+    setEditing(existingTimetable || null);
+    if (existingTimetable) {
+      setForm({
+        subject_id: String(subject.id),
+        class: existingTimetable.class || "",
+        section: existingTimetable.section || "",
+        exam_date: existingTimetable.exam_date,
+        start_time: existingTimetable.start_time,
+        end_time: existingTimetable.end_time,
+        duration: String(existingTimetable.duration),
+        exam_mode: existingTimetable.exam_mode,
+        allow_students: existingTimetable.allow_students === 1,
+        teacher_id: String(subject.teacher_id || ""),
+        can_retake: subject.can_retake !== 0,
+        schedule_status: "scheduled",
+        subject_mode: subject.mode || "exam",
+      });
+    } else {
+      setForm({
+        ...emptyForm,
+        subject_id: String(subject.id),
+        teacher_id: String(subject.teacher_id || ""),
+        can_retake: subject.can_retake !== 0,
+        schedule_status: "unscheduled",
+        subject_mode: subject.mode || "exam",
+      });
+    }
     setModalOpen(true);
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!editing) return;
-    if (!examDate || !duration) {
-      showToast("error", "Please complete all required fields.");
-      return;
+    if (form.schedule_status === "scheduled") {
+      if (!form.subject_id || !form.exam_date || !form.start_time || !form.end_time || !form.duration || !form.teacher_id) {
+        showToast("error", "Please complete all required fields for a scheduled exam.");
+        return;
+      }
+    } else {
+      if (!form.subject_id || !form.teacher_id) {
+        showToast("error", "Subject and Teacher are required.");
+        return;
+      }
     }
     setSaving(true);
     try {
-      await api.updateSubject(editing.id, {
-        exam_datetime: examDate,
-        duration: Number(duration),
-        window_duration: Number(windowDuration),
-        is_timetable_published: isPublished ? 1 : 0,
-      });
-      showToast("success", `Timetable updated for "${editing.name}".`);
+      const selectedGl = gradeLevels.find((gl) => gl.name === form.class || String(gl.id) === String(form.class));
+      const payload = {
+        subject_id: Number(form.subject_id),
+        class: selectedGl ? selectedGl.name : form.class || null,
+        grade_level_id: selectedGl ? selectedGl.id : null,
+        section: form.section || null,
+        exam_date: form.exam_date,
+        start_time: form.start_time,
+        end_time: form.end_time,
+        duration: Number(form.duration),
+        exam_mode: form.exam_mode,
+        allow_students: form.allow_students ? 1 : 0,
+        teacher_id: Number(form.teacher_id),
+        can_retake: form.can_retake ? 1 : 0,
+        schedule_status: form.schedule_status,
+        subject_mode: form.subject_mode
+      };
+      
+      if (editing) {
+        await api.updateTimetable(editing.id, payload);
+        showToast("success", "Timetable updated.");
+      } else {
+        await api.createTimetable(payload);
+        showToast("success", "Timetable created.");
+      }
       setModalOpen(false);
       await load();
     } catch (err) {
@@ -121,38 +179,15 @@ function TimetableContent() {
       setSaving(false);
     }
   };
-  const submitCreate = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!form.name || !form.code || !form.term || !form.duration || !form.exam_datetime || !form.teacher_id) {
-      showToast("error", "Please complete all required fields.");
-      return;
-    }
-    setSaving(true);
+
+  const remove = async (t: Timetable) => {
     try {
-      await api.createSubject({
-        name: form.name, code: form.code, term: form.term,
-        duration: Number(form.duration), window_duration: Number(form.window_duration), exam_datetime: form.exam_datetime,
-        teacher_id: Number(form.teacher_id), class: form.class || null,
-        session: form.session || null, mode: form.mode || "exam",
-        session_id: selectedSession?.id, term_id: selectedTerm?.id
-      });
-      showToast("success", `Subject "${form.name}" created and scheduled.`);
-      setCreateModalOpen(false);
-      setForm({ name: "", code: "", term: "", duration: "60", window_duration: "120", exam_datetime: "", teacher_id: "", class: "", session: "", mode: "exam" });
+      await api.deleteTimetable(t.id);
+      showToast("success", "Timetable deleted.");
+      setDeleting(null);
       await load();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Create failed.");
-    } finally {
-      setSaving(false);
-    }
-  };
-  const togglePublish = async (s: Subject) => {
-    try {
-      await api.updateSubject(s.id, { is_timetable_published: s.is_timetable_published ? 0 : 1 });
-      showToast("success", s.is_timetable_published ? `"${s.name}" unpublished.` : `"${s.name}" published.`);
-      await load();
-    } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Toggle failed.");
+      showToast("error", err instanceof Error ? err.message : "Delete failed.");
     }
   };
 
@@ -164,28 +199,25 @@ function TimetableContent() {
 
       <div className="pageHeader" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 className="pageTitle">Exam Timetable</h1>
-        <button className="btn btn-primary btn-sm inline" onClick={() => setCreateModalOpen(true)}>
-          <PlusIcon width="15" height="15" /> Create Timetable
-        </button>
       </div>
 
       <div className={`searchBar ${styles.search}`}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
         </svg>
-        <input placeholder="Search subjects…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input placeholder="Search subjects to schedule…" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
 
       <div className={styles.tableCard}>
         <div className={styles.tblHeader}>
           <span className={styles.tblTitle}>Timetable Schedule</span>
-          <span className={styles.tblCount}>{filtered.length} scheduled</span>
+          <span className={styles.tblCount}>{filteredSubjects.length} subjects</span>
         </div>
 
-        {filtered.length === 0 ? (
+        {filteredSubjects.length === 0 ? (
           <div className={styles.empty}>
             <CalendarIcon width="48" height="48" />
-            <p>{search ? "No subjects match your search." : "No subjects available for scheduling."}</p>
+            <p>{search ? "No subjects match your search." : "No subjects available."}</p>
           </div>
         ) : (
           <div className={styles.tableWrap}>
@@ -193,60 +225,64 @@ function TimetableContent() {
               <thead>
                 <tr>
                   <th>Subject</th>
-                  <th>Code</th>
-                  <th>Exam Date & Time</th>
-                  <th>Duration</th>
+                  <th>Schedule</th>
+                  <th>Time Window</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((s) => {
-                  const hasDate = !!s.exam_datetime;
-                  const dateObj = hasDate ? new Date(s.exam_datetime) : null;
-                  const isPast = dateObj && dateObj.getTime() + s.duration * 60000 < Date.now();
-                  
+                {filteredSubjects.map((s) => {
+                  const t = timetables.find(tt => tt.subject_id === s.id);
                   return (
                     <tr key={s.id}>
                       <td>
                         <div className={styles.subjectName}>{s.name}</div>
-                        <div className={styles.subjectDesc}>{s.term} {s.class ? `· ${s.class}` : ""}</div>
+                        <div className={styles.subjectDesc}><code>{s.code}</code></div>
                       </td>
-                      <td><code className={styles.code}>{s.code}</code></td>
                       <td className={styles.dateCell}>
-                        {dateObj ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: isPast ? "var(--color-muted)" : "var(--color-text)" }}>
+                        {t ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                             <CalendarIcon width="14" height="14" />
-                            {dateObj.toLocaleString("en-GB", { weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                            {t.exam_date}
                           </div>
                         ) : (
-                          <span style={{ color: "var(--color-warning)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
-                            <WarningIcon width="14" height="14" /> Unscheduled
-                          </span>
+                          <span style={{ color: "var(--color-text-muted)" }}>Unscheduled</span>
                         )}
                       </td>
                       <td>
-                        <span className={styles.durationCell}>
-                          <ClockIcon width="14" height="14" />
-                          {s.duration} min
-                        </span>
+                        {t ? (
+                          <>
+                            {t.start_time} - {t.end_time}
+                            <span className={styles.durationCell} style={{ display: "block", marginTop: "4px" }}>
+                              <ClockIcon width="12" height="12" /> {t.duration} min | {t.exam_mode}
+                            </span>
+                          </>
+                        ) : "—"}
                       </td>
                       <td>
-                        <div className={styles.statusCell}>
-                          <span className={s.is_timetable_published ? styles.statusDotPublished : styles.statusDotDraft} style={{ width: 7, height: 7, borderRadius: "50%", display: "inline-block" }} />
-                          <span className={`badge ${s.is_timetable_published ? "badge-success" : "badge-muted"}`}>
-                            {s.is_timetable_published ? "Published" : "Draft"}
+                        {t ? (
+                          <span className={`badge ${t.allow_students ? "badge-success" : "badge-muted"}`}>
+                            {t.allow_students ? "Allowed" : "Locked"}
                           </span>
-                        </div>
+                        ) : "—"}
                       </td>
                       <td>
                         <div className={styles.actions}>
-                          <button className="btn btn-ghost btn-sm" onClick={() => openEdit(s)} title="Schedule">
-                            <EditIcon width="13" height="13" /> Schedule
-                          </button>
-                          <button className={`btn btn-sm ${s.is_timetable_published ? styles.unpublishBtn : styles.publishBtn}`} onClick={() => togglePublish(s)}>
-                            {s.is_timetable_published ? "Unpublish" : "Publish"}
-                          </button>
+                          {t ? (
+                            <>
+                              <button className="btn btn-ghost btn-sm" onClick={() => openSchedule(s, t)} title="Edit Schedule">
+                                <EditIcon width="13" height="13" /> Edit
+                              </button>
+                              <button className="btn btn-sm" style={{ background: "var(--color-danger-bg)", color: "var(--color-danger)", border: "1px solid var(--color-danger-border)" }} onClick={() => setDeleting(t)}>
+                                <TrashIcon width="13" height="13" />
+                              </button>
+                            </>
+                          ) : (
+                            <button className="btn btn-primary btn-sm" onClick={() => openSchedule(s)}>
+                              <PlusIcon width="13" height="13" /> Schedule
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -258,87 +294,123 @@ function TimetableContent() {
         )}
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="sm">
-        <h2>Schedule Exam</h2>
-        {editing && <p className="modal-desc" style={{ marginBottom: "1rem" }}>{editing.name} ({editing.code})</p>}
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="md">
+        <h2>{editing ? "Edit Timetable" : "Create Timetable"}</h2>
         <form onSubmit={submit} className={styles.form}>
           <div className="field">
-            <label>Exam Date & Time *</label>
-            <input className="input" type="datetime-local" value={examDate} onChange={(e) => setExamDate(e.target.value)} required />
+            <label>Subject *</label>
+            <select className="select" value={form.subject_id} onChange={(e) => setForm({ ...form, subject_id: e.target.value })} required disabled>
+              <option value="">-- Select a subject --</option>
+              {subjects.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
+            </select>
           </div>
+
           <div className="field">
-            <label>Session Duration (minutes) *</label>
-            <input className="input" type="number" min={1} max={360} value={duration} onChange={(e) => setDuration(e.target.value)} required />
+            <label>Assign Teacher *</label>
+            {teachers.length === 0 ? (
+              <div className={styles.noTeacher}><WarningIcon width="16" height="16" /> No active teachers found.</div>
+            ) : (
+              <select className="select" value={form.teacher_id} onChange={(e) => setForm({ ...form, teacher_id: e.target.value })} required>
+                <option value="">— Select a teacher —</option>
+                {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
           </div>
-          <div className="field">
-            <label>Overall Time Window (minutes) *</label>
-            <input className="input" type="number" min={1} max={1440} value={windowDuration} onChange={(e) => setWindowDuration(e.target.value)} required />
+          
+          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div className="field">
+              <label>Class</label>
+              <select className="select" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })}>
+                <option value="">Select a class...</option>
+                {gradeLevels.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+              </select>
+            </div>
+            <div className="field">
+              <label>Section</label>
+              <input className="input" value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value })} />
+            </div>
           </div>
-          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
-            <input type="checkbox" id="publish-toggle" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
-            <label htmlFor="publish-toggle" style={{ margin: 0, cursor: "pointer" }}>Publish instantly</label>
+          
+          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div className="field">
+              <label>Schedule Status</label>
+              <div style={{ display: "flex", gap: "1rem", marginTop: "0.5rem" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", textTransform: "none", fontWeight: 500 }}>
+                  <input type="radio" name="schedule_status" value="scheduled" checked={form.schedule_status === "scheduled"} onChange={() => setForm({ ...form, schedule_status: "scheduled" })} /> Scheduled
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", textTransform: "none", fontWeight: 500 }}>
+                  <input type="radio" name="schedule_status" value="unscheduled" checked={form.schedule_status === "unscheduled"} onChange={() => setForm({ ...form, schedule_status: "unscheduled" })} /> Unscheduled
+                </label>
+              </div>
+            </div>
+            <div className="field">
+              <label>Assessment Mode *</label>
+              <select className="select" value={form.subject_mode} onChange={(e) => setForm({ ...form, subject_mode: e.target.value })}>
+                <option value="exam">Exam</option>
+                <option value="test">Test</option>
+                <option value="quiz">Quiz</option>
+              </select>
+            </div>
+          </div>
+          
+          {form.schedule_status === "scheduled" && (
+            <>
+              <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                <div className="field">
+                  <label>Exam Date *</label>
+                  <input className="input" type="date" value={form.exam_date} onChange={(e) => setForm({ ...form, exam_date: e.target.value })} required />
+                </div>
+                <div className="field">
+                  <label>Exam Mode *</label>
+                  <select className="select" value={form.exam_mode} onChange={(e) => setForm({ ...form, exam_mode: e.target.value })} required>
+                    <option value="CBT">CBT</option>
+                    <option value="Assignment">Assignment</option>
+                    <option value="Offline">Offline</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
+                <div className="field">
+                  <label>Start Time *</label>
+                  <input className="input" type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} required />
+                </div>
+                <div className="field">
+                  <label>End Time *</label>
+                  <input className="input" type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} required />
+                </div>
+                <div className="field">
+                  <label>Duration (min) *</label>
+                  <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
+                </div>
+              </div>
+              
+              <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
+                <input type="checkbox" id="allow_students" checked={form.allow_students} onChange={(e) => setForm({ ...form, allow_students: e.target.checked })} style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+                <label htmlFor="allow_students" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Take Exam</label>
+              </div>
+            </>
+          )}
+          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+            <input type="checkbox" id="can_retake" checked={form.can_retake} onChange={(e) => setForm({ ...form, can_retake: e.target.checked })} style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
+            <label htmlFor="can_retake" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
+          </div>
+          
+          <div className="modal-actions" style={{ marginTop: "1.5rem" }}>
+            <button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Saving…" : "Save Timetable"}</button>
           </div>
         </form>
       </Modal>
 
-      <Modal open={createModalOpen} onClose={() => setCreateModalOpen(false)} size="md">
-        <h2>Create Timetable Subject</h2>
-        <p className="modal-desc">Create a new subject and schedule its exam instantly.</p>
-        <form onSubmit={submitCreate} className={styles.form}>
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Subject Name *</label>
-              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-            </div>
-            <div className="field">
-              <label>Subject Code *</label>
-              <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required />
-            </div>
-          </div>
-          
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Term *</label>
-              <input className="input" value={form.term} onChange={(e) => setForm({ ...form, term: e.target.value })} required />
-            </div>
-            <div className="field">
-              <label>Class</label>
-              <input className="input" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })} />
-            </div>
-            <div className="field">
-              <label>Session</label>
-              <input className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })} />
-            </div>
-          </div>
-          
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Exam Date & Time *</label>
-              <input className="input" type="datetime-local" value={form.exam_datetime} onChange={(e) => setForm({ ...form, exam_datetime: e.target.value })} required />
-            </div>
-            <div className="field">
-              <label>Session (min) *</label>
-              <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
-            </div>
-            <div className="field">
-              <label>Window (min) *</label>
-              <input className="input" type="number" min={1} value={form.window_duration} onChange={(e) => setForm({ ...form, window_duration: e.target.value })} required />
-            </div>
-          </div>
-          
-          <div className="field">
-            <label>Assign Teacher *</label>
-            <select className="select" value={form.teacher_id} onChange={(e) => setForm({ ...form, teacher_id: e.target.value })} required>
-              <option value="">-- Select a teacher --</option>
-              {teachers.map(t => <option key={t.id} value={t.id}>{t.name} ({t.email})</option>)}
-            </select>
-          </div>
-          
-          <div className="modal-actions" style={{ marginTop: "1.5rem" }}>
-            <button type="button" className="btn btn-ghost" onClick={() => setCreateModalOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Saving…" : "Create & Schedule"}</button>
-          </div>
-        </form>
+      {/* Delete Modal */}
+      <Modal open={!!deleting} onClose={() => setDeleting(null)} size="sm">
+        <h2>Delete Timetable?</h2>
+        <p className="modal-desc">This will permanently delete the timetable for <strong>{deleting?.subject_name}</strong>.</p>
+        <div className="modal-actions">
+          <button className="btn btn-ghost" onClick={() => setDeleting(null)}>Cancel</button>
+          <button className="btn btn-danger" onClick={() => deleting && remove(deleting)}>Delete</button>
+        </div>
       </Modal>
     </>
   );

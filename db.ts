@@ -76,6 +76,10 @@ const ALTERABLE_TABLES = new Set([
   // v5 tables
   "terms", "classes", "class_enrollments", "guardian_student_links",
   "academic_calendar_events", "timetables",
+  // v8 tables
+  "grading_subjects", "grading_policies", "grading_manual_scores", "term_results",
+  // v9 tables
+  "class_teacher_assignments"
 ]);
 
 /** Run ALTER TABLE only if the column doesn't exist yet (idempotent migration). */
@@ -130,6 +134,7 @@ export function initializeDatabase(): void {
   addColumnIfMissing("users", "image_url",  "TEXT");
   addColumnIfMissing("users", "session_id", "INTEGER");
   addColumnIfMissing("users", "term_id",    "INTEGER");
+  addColumnIfMissing("users", "grade_level_id", "INTEGER");
 
   // ── subjects ─────────────────────────────────────────────────────────────
   db.run(`
@@ -164,6 +169,7 @@ export function initializeDatabase(): void {
   addColumnIfMissing("subjects", "is_assignment", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing("subjects", "session_id",    "INTEGER");
   addColumnIfMissing("subjects", "term_id",       "INTEGER");
+  addColumnIfMissing("subjects", "grade_level_id", "INTEGER");
 
   // ── questions ────────────────────────────────────────────────────────────
   db.run(`
@@ -337,6 +343,14 @@ export function initializeDatabase(): void {
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_actor        ON audit_logs(actor_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON audit_logs(timestamp)");
   db.run("CREATE INDEX IF NOT EXISTS idx_audit_resource     ON audit_logs(resource, resource_id)");
+  
+  // ── token_blacklist ──────────────────────────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS token_blacklist (
+      token TEXT PRIMARY KEY,
+      invalidated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
   // student_answers indexes
   db.run("CREATE INDEX IF NOT EXISTS idx_sa_exam       ON student_answers(exam_id)");
   db.run("CREATE INDEX IF NOT EXISTS idx_sa_student    ON student_answers(student_id)");
@@ -383,6 +397,7 @@ export function initializeDatabase(): void {
   
   addColumnIfMissing("student_term_remarks", "session_id", "INTEGER");
   addColumnIfMissing("student_term_remarks", "term_id",    "INTEGER");
+  db.run("CREATE INDEX IF NOT EXISTS idx_str_student_session_term ON student_term_remarks(student_id, session_id, term_id)");
 
   // ── notifications ──────────────────────────────────────────────────────────
   db.run(`
@@ -592,6 +607,20 @@ export function initializeDatabase(): void {
     )
   `);
 
+  // ── GRADE LEVELS — System-wide standardized class/grade options ──────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS grade_levels (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL UNIQUE,
+      category    TEXT NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      is_active   INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
+      created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_grade_levels_active ON grade_levels(is_active)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_grade_levels_category ON grade_levels(category)");
+
   // ── CLASS ENROLLMENTS — student → class → term ────────────────────────────
   db.run(`
     CREATE TABLE IF NOT EXISTS class_enrollments (
@@ -646,28 +675,58 @@ export function initializeDatabase(): void {
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_cal_term ON academic_calendar_events(term_id, start_date)");
 
-  // ── TIMETABLES — with conflict-detection indexes ──────────────────────────
-  // classroom is TEXT (not FK) — allows gradual classroom management later.
-  // Teacher + classroom double-booking is validated at the API layer.
+  // ── TIMETABLES — Dedicated examination scheduling ──────────────────────────
+  try {
+    const ttCols = db.prepare("PRAGMA table_info(timetables)").all() as any[];
+    if (ttCols.some(c => c.name === 'class_id')) {
+      db.run("DROP TABLE timetables"); // Drop old school-timetable schema
+    }
+  } catch (e) {}
+
   db.run(`
     CREATE TABLE IF NOT EXISTS timetables (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
       subject_id  INTEGER NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-      session_id  INTEGER NOT NULL REFERENCES academic_sessions(id) ON DELETE CASCADE,
-      term_id     INTEGER NOT NULL REFERENCES academic_terms(id) ON DELETE CASCADE,
-      teacher_id  INTEGER REFERENCES users(id),
-      day_of_week INTEGER NOT NULL CHECK(day_of_week BETWEEN 0 AND 6),
+      class       TEXT,
+      section     TEXT,
+      exam_date   TEXT NOT NULL,
       start_time  TEXT NOT NULL,
       end_time    TEXT NOT NULL,
-      classroom   TEXT,
+      duration    INTEGER NOT NULL,
+      exam_mode   TEXT NOT NULL DEFAULT 'CBT' CHECK(exam_mode IN ('CBT','Assignment','Offline')),
+      allow_students INTEGER NOT NULL DEFAULT 0 CHECK(allow_students IN (0,1)),
       created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-      UNIQUE(class_id, session_id, term_id, day_of_week, start_time)
+      updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
     )
   `);
-  db.run("CREATE INDEX IF NOT EXISTS idx_tt_class_term   ON timetables(class_id, session_id, term_id)");
-  db.run("CREATE INDEX IF NOT EXISTS idx_tt_teacher_slot ON timetables(teacher_id, day_of_week, start_time)");
-  db.run("CREATE INDEX IF NOT EXISTS idx_tt_room_slot    ON timetables(classroom, day_of_week, start_time)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_subject ON timetables(subject_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_tt_class ON timetables(class)");
+  
+  addColumnIfMissing("timetables", "grade_level_id", "INTEGER");
+
+  // Migrate existing subjects scheduling data to timetables
+  try {
+    const ttCountRow = db.prepare("SELECT COUNT(*) as count FROM timetables").get() as any;
+    if (ttCountRow && Number(ttCountRow.count) === 0) {
+      db.run(`
+        INSERT INTO timetables (subject_id, class, section, exam_date, start_time, end_time, duration, exam_mode, allow_students)
+        SELECT 
+          id, 
+          class, 
+          '', 
+          CASE WHEN exam_datetime LIKE '%T%' THEN substr(exam_datetime, 1, 10) ELSE '2027-01-01' END, 
+          CASE WHEN exam_datetime LIKE '%T%' THEN substr(exam_datetime, 12, 5) ELSE '09:00' END, 
+          CASE WHEN exam_datetime LIKE '%T%' THEN substr(datetime(exam_datetime, '+' || IFNULL(duration, 60) || ' minutes'), 12, 5) ELSE '10:00' END, 
+          IFNULL(duration, 60), 
+          CASE WHEN mode = 'assignment' OR is_assignment = 1 THEN 'Assignment' ELSE 'CBT' END, 
+          IFNULL(is_published, 0)
+        FROM subjects 
+        WHERE exam_datetime IS NOT NULL AND exam_datetime != ''
+      `);
+    }
+  } catch (e) {
+    console.warn("Could not migrate subjects to timetables:", e);
+  }
 
   // ── Seeding Default Academic Session and Term if empty ──
   const sessionRow = db.prepare("SELECT COUNT(*) as count FROM academic_sessions").get() as any;
@@ -698,6 +757,224 @@ export function initializeDatabase(): void {
   
   db.run(`UPDATE student_term_remarks SET session_id = (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1) WHERE session_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
   db.run(`UPDATE student_term_remarks SET term_id = (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1) WHERE term_id IS NULL AND EXISTS (SELECT 1 FROM academic_sessions WHERE is_active = 1)`);
+
+  // ── v8: Grading System ──────────────────────────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS grading_subjects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      code TEXT NOT NULL,
+      class_id INTEGER REFERENCES classes(id),
+      term_id INTEGER NOT NULL REFERENCES academic_terms(id),
+      session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+      teacher_id INTEGER NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(code, term_id, class_id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS grading_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      grading_subject_id INTEGER NOT NULL REFERENCES grading_subjects(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('cbt_test', 'cbt_exam', 'manual')),
+      mapped_cbt_subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+      max_marks INTEGER NOT NULL,
+      is_exam INTEGER NOT NULL DEFAULT 0 CHECK(is_exam IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS grading_manual_scores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      grading_policy_id INTEGER NOT NULL REFERENCES grading_policies(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      score REAL NOT NULL,
+      entered_by INTEGER NOT NULL REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(grading_policy_id, student_id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS term_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      grading_subject_id INTEGER NOT NULL REFERENCES grading_subjects(id) ON DELETE CASCADE,
+      ca_score REAL NOT NULL DEFAULT 0,
+      exam_score REAL NOT NULL DEFAULT 0,
+      total_score REAL NOT NULL DEFAULT 0,
+      grade TEXT,
+      remark TEXT,
+      is_approved INTEGER NOT NULL DEFAULT 0 CHECK(is_approved IN (0,1)),
+      term_id INTEGER NOT NULL REFERENCES academic_terms(id),
+      session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(student_id, grading_subject_id, term_id)
+    )
+  `);
+  // Ensure unique index with term_id exists — CREATE IF NOT EXISTS is idempotent.
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_term_results_unique ON term_results(student_id, grading_subject_id, term_id)`);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS annual_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      class_id INTEGER REFERENCES classes(id),
+      session_id INTEGER NOT NULL REFERENCES academic_sessions(id),
+      total_average REAL NOT NULL DEFAULT 0,
+      promotion_status TEXT CHECK(promotion_status IN ('Promoted', 'Repeated', 'Graduated')),
+      approved_by INTEGER REFERENCES users(id),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      UNIQUE(student_id, session_id)
+    )
+  `);
+
+  // v8+: grading flexibility migrations
+  addColumnIfMissing("config", "grading_config_json", "TEXT");
+  addColumnIfMissing("grading_subjects", "mode", "TEXT");
+  addColumnIfMissing("grading_subjects", "source_cbt_subject_id", "INTEGER");
+  addColumnIfMissing("grading_subjects", "pass_mark", "REAL");
+  // v9: Class Teacher assignment
+  addColumnIfMissing("classes", "class_teacher_id", "INTEGER REFERENCES users(id)");
+
+  // ── v9: Class Teacher Assignments Records ─────────────────────────────────
+  db.run(`
+    CREATE TABLE IF NOT EXISTS class_teacher_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      assigned_by INTEGER NOT NULL REFERENCES users(id),
+      action TEXT NOT NULL CHECK(action IN ('assigned', 'reassigned', 'unassigned')),
+      assigned_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      notes TEXT
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_cta_class ON class_teacher_assignments(class_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_cta_teacher ON class_teacher_assignments(teacher_id)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_cta_time ON class_teacher_assignments(assigned_at DESC)");
+
+  seedGradeLevels();
+  migrateLegacyGrades();
+  seedStandardizedClasses();
+}
+
+function seedGradeLevels() {
+  // Seed ALL grade types every time so the dropdown is always universal.
+  // INSERT OR IGNORE ensures idempotency — existing rows are never duplicated.
+  const allSeeds: { name: string; cat: string; sort_order: number }[] = [
+    { name: 'Primary 1',  cat: 'primary',      sort_order: 1  },
+    { name: 'Primary 2',  cat: 'primary',      sort_order: 2  },
+    { name: 'Primary 3',  cat: 'primary',      sort_order: 3  },
+    { name: 'Primary 4',  cat: 'primary',      sort_order: 4  },
+    { name: 'Primary 5',  cat: 'primary',      sort_order: 5  },
+    { name: 'Primary 6',  cat: 'primary',      sort_order: 6  },
+    { name: 'JSS 1',      cat: 'secondary',    sort_order: 7  },
+    { name: 'JSS 2',      cat: 'secondary',    sort_order: 8  },
+    { name: 'JSS 3',      cat: 'secondary',    sort_order: 9  },
+    { name: 'SS 1',       cat: 'secondary',    sort_order: 10 },
+    { name: 'SS 2',       cat: 'secondary',    sort_order: 11 },
+    { name: 'SS 3',       cat: 'secondary',    sort_order: 12 },
+    { name: '100 Level',  cat: 'university',   sort_order: 13 },
+    { name: '200 Level',  cat: 'university',   sort_order: 14 },
+    { name: '300 Level',  cat: 'university',   sort_order: 15 },
+    { name: '400 Level',  cat: 'university',   sort_order: 16 },
+    { name: '500 Level',  cat: 'university',   sort_order: 17 },
+    { name: '600 Level',  cat: 'university',   sort_order: 18 },
+    { name: 'ND 1',       cat: 'polytechnic',  sort_order: 19 },
+    { name: 'ND 2',       cat: 'polytechnic',  sort_order: 20 },
+    { name: 'HND 1',      cat: 'polytechnic',  sort_order: 21 },
+    { name: 'HND 2',      cat: 'polytechnic',  sort_order: 22 },
+  ];
+  const stmt = db.prepare('INSERT OR IGNORE INTO grade_levels (name, category, sort_order) VALUES (?, ?, ?)');
+  for (const s of allSeeds) stmt.run(s.name, s.cat, s.sort_order);
+}
+
+function migrateLegacyGrades() {
+  // Migrate users.grade -> grade_level_id
+  const users = db.prepare("SELECT id, grade FROM users WHERE grade IS NOT NULL AND grade != '' AND grade_level_id IS NULL").all() as any[];
+  const insertGrade = db.prepare("INSERT OR IGNORE INTO grade_levels (name, category, sort_order) VALUES (?, 'custom', 99)");
+  const getGradeId = db.prepare("SELECT id FROM grade_levels WHERE name COLLATE NOCASE = ?");
+  const updateUserId = db.prepare("UPDATE users SET grade_level_id = ? WHERE id = ?");
+  
+  for (const u of users) {
+    const rawGrade = String(u.grade).trim();
+    if (!rawGrade) continue;
+    let gidRow = getGradeId.get(rawGrade) as any;
+    if (!gidRow) {
+      insertGrade.run(rawGrade);
+      gidRow = getGradeId.get(rawGrade) as any;
+    }
+    if (gidRow) {
+      updateUserId.run(gidRow.id, u.id);
+    }
+  }
+
+  // Migrate subjects.class -> grade_level_id
+  const subjects = db.prepare("SELECT id, class FROM subjects WHERE class IS NOT NULL AND class != '' AND grade_level_id IS NULL").all() as any[];
+  const updateSubjectId = db.prepare("UPDATE subjects SET grade_level_id = ? WHERE id = ?");
+  for (const s of subjects) {
+    const rawClass = String(s.class).trim();
+    if (!rawClass) continue;
+    let gidRow = getGradeId.get(rawClass) as any;
+    if (!gidRow) {
+      insertGrade.run(rawClass);
+      gidRow = getGradeId.get(rawClass) as any;
+    }
+    if (gidRow) {
+      updateSubjectId.run(gidRow.id, s.id);
+    }
+  }
+
+  // Migrate timetables.class -> grade_level_id
+  const timetables = db.prepare("SELECT id, class FROM timetables WHERE class IS NOT NULL AND class != '' AND grade_level_id IS NULL").all() as any[];
+  const updateTimetableId = db.prepare("UPDATE timetables SET grade_level_id = ? WHERE id = ?");
+  for (const t of timetables) {
+    const rawClass = String(t.class).trim();
+    if (!rawClass) continue;
+    let gidRow = getGradeId.get(rawClass) as any;
+    if (!gidRow) {
+      insertGrade.run(rawClass);
+      gidRow = getGradeId.get(rawClass) as any;
+    }
+    if (gidRow) {
+      updateTimetableId.run(gidRow.id, t.id);
+    }
+  }
+}
+
+function seedStandardizedClasses() {
+  // Auto-seed all standardized grade classes so the "Assign Class Teacher" dropdown
+  // is always fully populated without requiring any manual class creation.
+  // INSERT OR IGNORE is idempotent — existing rows are never duplicated.
+  const standardizedGrades = [
+    { name: 'Primary 1',  level: 'junior' },
+    { name: 'Primary 2',  level: 'junior' },
+    { name: 'Primary 3',  level: 'junior' },
+    { name: 'Primary 4',  level: 'junior' },
+    { name: 'Primary 5',  level: 'junior' },
+    { name: 'Primary 6',  level: 'junior' },
+    { name: 'JSS 1',      level: 'junior' },
+    { name: 'JSS 2',      level: 'junior' },
+    { name: 'JSS 3',      level: 'junior' },
+    { name: 'SS 1',       level: 'senior' },
+    { name: 'SS 2',       level: 'senior' },
+    { name: 'SS 3',       level: 'senior' },
+    { name: '100 Level',  level: 'senior' },
+    { name: '200 Level',  level: 'senior' },
+    { name: '300 Level',  level: 'senior' },
+    { name: '400 Level',  level: 'senior' },
+    { name: '500 Level',  level: 'senior' },
+    { name: '600 Level',  level: 'senior' },
+    { name: 'ND 1',       level: 'senior' },
+    { name: 'ND 2',       level: 'senior' },
+    { name: 'HND 1',      level: 'senior' },
+    { name: 'HND 2',      level: 'senior' },
+  ];
+  const stmt = db.prepare("INSERT OR IGNORE INTO classes (name, section, level) VALUES (?, NULL, ?)");
+  for (const g of standardizedGrades) stmt.run(g.name, g.level);
 }
 
 // Initialize schema before preparing statements so new tables exist.
@@ -705,17 +982,17 @@ initializeDatabase();
 
 export const queries = {
   // ── Users ──────────────────────────────────────────────────────────────
-  getUserByEmail: db.prepare("SELECT * FROM users WHERE email = ?"),
-  getUserByEmailOrReg: db.prepare("SELECT * FROM users WHERE email = ? OR reg_id = ?"),
+  getUserByEmail: db.prepare("SELECT u.*, COALESCE(gl.name, u.grade) as grade, gl.name as grade_level_name FROM users u LEFT JOIN grade_levels gl ON u.grade_level_id = gl.id WHERE u.email = ?"),
+  getUserByEmailOrReg: db.prepare("SELECT u.*, COALESCE(gl.name, u.grade) as grade, gl.name as grade_level_name FROM users u LEFT JOIN grade_levels gl ON u.grade_level_id = gl.id WHERE u.email = ? OR u.reg_id = ?"),
   createUser:     db.prepare(`
-    INSERT INTO users (name, email, role, password_hash, grade, reg_id, first_name, last_name, address, phone, dob, session_id, term_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+    INSERT INTO users (name, email, role, password_hash, grade, reg_id, first_name, last_name, address, phone, dob, grade_level_id, session_id, term_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
       (SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1), 
       (SELECT id FROM academic_terms WHERE is_active = 1 LIMIT 1))
   `),
-  getUserById:    db.prepare("SELECT * FROM users WHERE id = ?"),
-  getAllUsers:     db.prepare("SELECT id, name, email, role, grade, reg_id, first_name, last_name, phone, is_active, created_at FROM users ORDER BY id DESC LIMIT 1000"),
-  updateUser:     db.prepare("UPDATE users SET first_name=?, last_name=?, address=?, phone=?, dob=?, grade=?, image_url=? WHERE id=?"),
+  getUserById:    db.prepare("SELECT u.*, COALESCE(gl.name, u.grade) as grade, gl.name as grade_level_name FROM users u LEFT JOIN grade_levels gl ON u.grade_level_id = gl.id WHERE u.id = ?"),
+  getAllUsers:    db.prepare("SELECT u.id, u.name, u.email, u.role, COALESCE(gl.name, u.grade) as grade, u.grade_level_id, u.reg_id, u.first_name, u.last_name, u.phone, u.is_active, u.created_at FROM users u LEFT JOIN grade_levels gl ON u.grade_level_id = gl.id ORDER BY u.id DESC LIMIT 1000"),
+  updateUser:     db.prepare("UPDATE users SET first_name=?, last_name=?, address=?, phone=?, dob=?, grade=?, grade_level_id=?, image_url=? WHERE id=?"),
   deactivateUser: db.prepare("UPDATE users SET is_active = 0 WHERE id = ?"),
   activateUser:   db.prepare("UPDATE users SET is_active = 1 WHERE id = ?"),
   countOperators: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'operator' AND is_active = 1"),
@@ -732,11 +1009,12 @@ export const queries = {
   unenrollStudent: db.prepare("DELETE FROM subject_enrollments WHERE subject_id = ? AND student_id = ?"),
   getEnrollmentsBySubject: db.prepare(`
     SELECT
-      u.id, u.name, u.email, u.grade, u.reg_id, u.is_active,
+      u.id, u.name, u.email, COALESCE(gl.name, u.grade) as grade, u.grade_level_id, u.reg_id, u.is_active,
       se.enrolled_at,
       e.id as exam_id, e.status as exam_status, e.score, e.total_score, e.end_time
     FROM subject_enrollments se
     JOIN users u ON u.id = se.student_id
+    LEFT JOIN grade_levels gl ON u.grade_level_id = gl.id
     LEFT JOIN exams e ON e.student_id = se.student_id AND e.subject_id = se.subject_id
     WHERE se.subject_id = ?
   `),
@@ -746,14 +1024,33 @@ export const queries = {
   `),
   countEnrollments: db.prepare("SELECT COUNT(*) as count FROM subject_enrollments WHERE subject_id = ?"),
   createSubject:             db.prepare(`
-    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, session, mode, instructions, is_timetable_published, window_duration, can_retake, is_assignment, session_id, term_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO subjects (name, code, term, duration, total_score, exam_datetime, is_published, teacher_id, created_by, description, class, grade_level_id, session, mode, instructions, is_timetable_published, window_duration, can_retake, is_assignment, session_id, term_id)
+    VALUES (?, ?, ?, 60, ?, '2099-01-01T00:00', 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, 120, ?, 0, ?, ?)
   `),
   updateSubject: db.prepare(`
-    UPDATE subjects SET name=?, code=?, term=?, duration=?, total_score=?, exam_datetime=?, is_published=?, teacher_id=?, description=?, class=?, session=?, mode=?, instructions=?, is_timetable_published=?, window_duration=?, can_retake=?, is_assignment=?, session_id=?, term_id=?
+    UPDATE subjects SET name=?, code=?, term=?, total_score=?, teacher_id=?, description=?, class=?, grade_level_id=?, session=?, mode=?, instructions=?, can_retake=?, session_id=?, term_id=?
     WHERE id=?
   `),
+  updateSubjectSchedulingInfo: db.prepare("UPDATE subjects SET teacher_id=?, can_retake=?, mode=?, exam_datetime=?, duration=?, window_duration=?, is_timetable_published=? WHERE id=?"),
   deleteSubject: db.prepare("DELETE FROM subjects WHERE id = ?"),
+  
+  // ── Timetables ────────────────────────────────────────────────────────
+  getTimetables: db.prepare(`
+    SELECT t.*, s.name as subject_name, s.code as subject_code, s.teacher_id, COALESCE(gl.name, t.class) as class_name 
+    FROM timetables t
+    JOIN subjects s ON t.subject_id = s.id
+    LEFT JOIN grade_levels gl ON t.grade_level_id = gl.id
+    ORDER BY t.exam_date, t.start_time
+  `),
+  createTimetable: db.prepare(`
+    INSERT INTO timetables (subject_id, class, grade_level_id, section, exam_date, start_time, end_time, duration, exam_mode, allow_students)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  updateTimetable: db.prepare(`
+    UPDATE timetables SET subject_id=?, class=?, grade_level_id=?, section=?, exam_date=?, start_time=?, end_time=?, duration=?, exam_mode=?, allow_students=?, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    WHERE id=?
+  `),
+  deleteTimetable: db.prepare("DELETE FROM timetables WHERE id = ?"),
 
   // ── Questions ─────────────────────────────────────────────────────────
   getQuestionById:       db.prepare("SELECT * FROM questions WHERE id = ?"),
@@ -810,11 +1107,14 @@ export const queries = {
       theme_json=excluded.theme_json, version=excluded.version, admin_email=excluded.admin_email,
       updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
   `),
-  updateUserGrade: db.prepare("UPDATE users SET grade = ? WHERE id = ? AND role = 'student'"),
+  updateUserGrade: db.prepare("UPDATE users SET grade_level_id = ? WHERE id = ? AND role = 'student'"),
 
   // ── Audit / Settings ──────────────────────────────────────────────────
   createAuditLog: db.prepare("INSERT INTO audit_logs (actor_id, action, resource, resource_id, details) VALUES (?, ?, ?, ?, ?)"),
   getAuditLogs:   db.prepare("SELECT al.*, u.name as actor_name FROM audit_logs al LEFT JOIN users u ON u.id = al.actor_id ORDER BY al.timestamp DESC LIMIT 500"),
+  
+  insertTokenBlacklist: db.prepare("INSERT OR IGNORE INTO token_blacklist (token) VALUES (?)"),
+  isTokenBlacklisted: db.prepare("SELECT 1 FROM token_blacklist WHERE token = ?"),
 
   countUsers:    db.prepare("SELECT COUNT(*) as count FROM users"),
   countActiveOperators: db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'operator' AND is_active = 1"),
@@ -822,24 +1122,18 @@ export const queries = {
   upsertSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))"),
 
   // ── Term Remarks ──────────────────────────────────────────────────────
-  getTermRemark: db.prepare("SELECT * FROM student_term_remarks WHERE student_id = ? AND term = ?"),
-  upsertTeacherRemark: db.prepare(`
-    INSERT INTO student_term_remarks (student_id, term, teacher_remark)
-    VALUES (?, ?, ?)
-    ON CONFLICT(student_id, term) DO UPDATE SET teacher_remark=excluded.teacher_remark, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-  `),
-  upsertPrincipalRemark: db.prepare(`
-    INSERT INTO student_term_remarks (student_id, term, principal_remark)
-    VALUES (?, ?, ?)
-    ON CONFLICT(student_id, term) DO UPDATE SET principal_remark=excluded.principal_remark, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-  `),
+  getTermRemark: db.prepare("SELECT * FROM student_term_remarks WHERE student_id = ? AND session_id = ? AND term_id = ?"),
+  insertTeacherRemark: db.prepare("INSERT INTO student_term_remarks (student_id, session_id, term_id, teacher_remark, term) VALUES (?, ?, ?, ?, ?)"),
+  updateTeacherRemark: db.prepare("UPDATE student_term_remarks SET teacher_remark = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE student_id = ? AND session_id = ? AND term_id = ?"),
+  insertPrincipalRemark: db.prepare("INSERT INTO student_term_remarks (student_id, session_id, term_id, principal_remark, term) VALUES (?, ?, ?, ?, ?)"),
+  updatePrincipalRemark: db.prepare("UPDATE student_term_remarks SET principal_remark = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE student_id = ? AND session_id = ? AND term_id = ?"),
 
   // ── Hot-path pre-compiled statements (prevents repeated query plan compilation) ─
   getExamByIdAndStudent:   db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?"),
   getQuestionByIdAndSubject: db.prepare("SELECT * FROM questions WHERE id = ? AND subject_id = ?"),
   getCompletedExamsByStudent: db.prepare("SELECT e.*, s.name as subject_name FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND e.status = 'completed'"),
-  getCompletedExamsByTeacher: db.prepare("SELECT e.*, s.name as subject_name, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC"),
-  getAllCompletedExams:        db.prepare("SELECT e.*, s.name as subject_name, u.name as student_name, u.grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id WHERE e.status = 'completed' ORDER BY e.end_time DESC"),
+  getCompletedExamsByTeacher: db.prepare("SELECT e.*, s.name as subject_name, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.grade_level_id, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE e.status = 'completed' AND s.teacher_id = ? ORDER BY e.end_time DESC"),
+  getAllCompletedExams:        db.prepare("SELECT e.*, s.name as subject_name, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.grade_level_id, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE e.status = 'completed' ORDER BY e.end_time DESC"),
   updateExamAnswersJson:   db.prepare("UPDATE exams SET answers_json = '[]' WHERE id = ?"),
   updateUserPassword:      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?"),
   updateExamScore:         db.prepare("UPDATE exams SET score = ? WHERE id = ?"),
@@ -849,7 +1143,7 @@ export const queries = {
   getStudentHasExam:       db.prepare("SELECT id FROM exams WHERE student_id = ? LIMIT 1"),
   getSubjectTotalScore:    db.prepare("SELECT COALESCE(SUM(marks),0) as total FROM questions WHERE subject_id = ?"),
   updateSubjectTotalScore: db.prepare("UPDATE subjects SET total_score = (SELECT COALESCE(SUM(marks),0) FROM questions WHERE subject_id = ?) WHERE id = ?"),
-  getStudentsByGrade:      db.prepare("SELECT id FROM users WHERE role = 'student' AND grade = ? AND is_active = 1"),
+  getStudentsByGrade:      db.prepare("SELECT u.id FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.role = 'student' AND (gl.name = ? OR u.grade = ?) AND u.is_active = 1"),
   getStudentEnrolledSubjects: db.prepare(`
     SELECT s.id, s.name, s.code, s.term, s.duration, s.total_score,
            s.exam_datetime, s.is_published, s.mode, s.can_retake,
@@ -870,12 +1164,40 @@ export const queries = {
   getStudentExamsForRoster: db.prepare(`
     SELECT e.id as exam_id, e.score, e.total_score, e.end_time,
            e.teacher_remark, e.principal_remark,
-           s.name as subject_name, s.code, s.term
+           s.name as subject_name, s.code, s.term, s.teacher_id
     FROM exams e
     JOIN subjects s ON e.subject_id = s.id
     WHERE e.student_id = ? AND e.status = 'completed'
     ORDER BY e.end_time DESC
   `),
+  getStudentTermResultsForReportCard: db.prepare(`
+    SELECT tr.id as exam_id, 
+           tr.ca_score as ca_score,
+           tr.exam_score as exam_score,
+           tr.total_score as score, 
+           (SELECT COALESCE(SUM(max_marks), 100) FROM grading_policies WHERE grading_subject_id = tr.grading_subject_id) as total_score,
+           tr.grade as grade,
+           tr.updated_at as end_time,
+           tr.remark as teacher_remark,
+           (SELECT principal_remark FROM student_term_remarks WHERE student_id = tr.student_id AND (session_id = tr.session_id OR session_id IS NULL) AND term_id = tr.term_id ORDER BY id DESC LIMIT 1) as principal_remark,
+           (SELECT teacher_remark FROM student_term_remarks WHERE student_id = tr.student_id AND (session_id = tr.session_id OR session_id IS NULL) AND term_id = tr.term_id ORDER BY id DESC LIMIT 1) as term_teacher_remark,
+           gs.name as subject_name, gs.code as code, 
+           at.name as term,
+           at.id as term_id,
+           tr.session_id as session_id,
+           acs.name as session_name,
+           gs.teacher_id,
+           tr.is_approved as is_approved,
+           (SELECT COUNT(*) FROM academic_terms WHERE session_id = tr.session_id AND id <= tr.term_id) as term_order_in_session
+    FROM term_results tr
+    JOIN grading_subjects gs ON tr.grading_subject_id = gs.id
+    JOIN academic_terms at ON tr.term_id = at.id
+    JOIN academic_sessions acs ON tr.session_id = acs.id
+    WHERE tr.student_id = ? AND tr.is_approved >= 0
+    ORDER BY tr.session_id ASC, tr.term_id ASC
+  `),
+
+
   
   // ── Notifications ─────────────────────────────────────────────────────────
   getNotifications: db.prepare("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50"),
@@ -932,18 +1254,81 @@ export const queries = {
   archiveAcademicTerm:       db.prepare("UPDATE academic_terms SET status = 'archived', is_active = 0 WHERE id = ?"),
 
   // ── v5: Classes ─────────────────────────────────────────────────────────────
-  getAllClasses:  db.prepare("SELECT * FROM classes ORDER BY level, name, section"),
-  getClassById:  db.prepare("SELECT * FROM classes WHERE id = ?"),
+  getAllClasses:  db.prepare(`
+    SELECT 
+      c.*, 
+      u.name as class_teacher_name, 
+      u.email as class_teacher_email,
+      u.phone as class_teacher_phone,
+      u.id as class_teacher_id,
+      (
+        SELECT COUNT(*) 
+        FROM users stu 
+        LEFT JOIN grade_levels gl ON gl.id = stu.grade_level_id 
+        WHERE stu.role = 'student' 
+          AND stu.is_active = 1 
+          AND COALESCE(gl.name, stu.grade) = c.name
+      ) as enrolled_students_count
+    FROM classes c
+    LEFT JOIN users u ON u.id = c.class_teacher_id
+    ORDER BY c.level, c.name, c.section
+  `),
+  getClassById:  db.prepare(`
+    SELECT 
+      c.*, 
+      u.name as class_teacher_name,
+      u.email as class_teacher_email,
+      u.phone as class_teacher_phone,
+      u.id as class_teacher_id,
+      (
+        SELECT COUNT(*) 
+        FROM users stu 
+        LEFT JOIN grade_levels gl ON gl.id = stu.grade_level_id 
+        WHERE stu.role = 'student' 
+          AND stu.is_active = 1 
+          AND COALESCE(gl.name, stu.grade) = c.name
+      ) as enrolled_students_count
+    FROM classes c
+    LEFT JOIN users u ON u.id = c.class_teacher_id
+    WHERE c.id = ?
+  `),
   createClass:   db.prepare("INSERT INTO classes (name, section, level) VALUES (?, ?, ?)"),
-  updateClass:   db.prepare("UPDATE classes SET name=?, section=?, level=? WHERE id=?"),
+  updateClass:   db.prepare("UPDATE classes SET name=?, section=?, level=?, class_teacher_id=? WHERE id=?"),
   deleteClass:   db.prepare("DELETE FROM classes WHERE id=?"),
+  /** Find which class (if any) a teacher is the class teacher for */
+  getClassForTeacher: db.prepare("SELECT * FROM classes WHERE class_teacher_id = ? LIMIT 1"),
+  assignClassTeacher: db.prepare("UPDATE classes SET class_teacher_id = ? WHERE id = ?"),
+  unassignClassTeacher: db.prepare("UPDATE classes SET class_teacher_id = NULL WHERE id = ?"),
+  unassignTeacherFromAllClasses: db.prepare("UPDATE classes SET class_teacher_id = NULL WHERE class_teacher_id = ?"),
+  logClassTeacherAssignment: db.prepare(`
+    INSERT INTO class_teacher_assignments (class_id, teacher_id, assigned_by, action, notes)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  getClassTeacherAssignmentHistory: db.prepare(`
+    SELECT 
+      cta.*,
+      c.name as class_name,
+      c.section as class_section,
+      c.level as class_level,
+      tu.name as teacher_name,
+      tu.email as teacher_email,
+      tu.phone as teacher_phone,
+      au.name as assigned_by_name,
+      au.role as assigned_by_role
+    FROM class_teacher_assignments cta
+    JOIN classes c ON c.id = cta.class_id
+    LEFT JOIN users tu ON tu.id = cta.teacher_id
+    LEFT JOIN users au ON au.id = cta.assigned_by
+    ORDER BY cta.id DESC
+    LIMIT 500
+  `),
 
   // ── v5: Class Enrollments ───────────────────────────────────────────────────
-  getClassRoster:             db.prepare("SELECT u.id, u.name, u.email, u.grade, u.reg_id, u.is_active, ce.enrollment_date FROM class_enrollments ce JOIN users u ON u.id = ce.student_id WHERE ce.class_id = ? AND ce.term_id = ? ORDER BY u.name"),
-  getStudentClassForTerm:     db.prepare("SELECT c.*, ce.enrollment_date FROM class_enrollments ce JOIN classes c ON c.id = ce.class_id WHERE ce.student_id = ? AND ce.term_id = ? LIMIT 1"),
+  getClassRoster:             db.prepare("SELECT u.id, u.name, u.email, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.is_active, u.created_at as enrollment_date FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN classes c ON c.name = COALESCE(gl.name, u.grade) WHERE c.id = ? AND u.role = 'student' AND u.is_active = 1 ORDER BY u.name"),
+  getStudentClassForTerm:     db.prepare("SELECT c.*, u.created_at as enrollment_date FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN classes c ON c.name = COALESCE(gl.name, u.grade) WHERE u.id = ? LIMIT 1"),
   enrollStudentInClass:       db.prepare("INSERT OR REPLACE INTO class_enrollments (student_id, class_id, term_id) VALUES (?, ?, ?)"),
   unenrollStudentFromClass:   db.prepare("DELETE FROM class_enrollments WHERE student_id=? AND term_id=?"),
-  getEnrollmentCountForClass: db.prepare("SELECT COUNT(*) as count FROM class_enrollments WHERE class_id=? AND term_id=?"),
+  getEnrollmentCountForClass: db.prepare("SELECT COUNT(*) as count FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN classes c ON c.name = COALESCE(gl.name, u.grade) WHERE c.id=? AND u.role='student' AND u.is_active = 1"),
 
   // ── v5: Guardian-Student Links ──────────────────────────────────────────────
   getPendingGuardianLinks:  db.prepare("SELECT gsl.*, gu.name as guardian_name, gu.email as guardian_email, su.name as student_name, su.grade as student_grade, su.reg_id FROM guardian_student_links gsl JOIN users gu ON gu.id = gsl.guardian_id JOIN users su ON su.id = gsl.student_id WHERE gsl.status = 'pending' ORDER BY gsl.created_at DESC"),
@@ -962,12 +1347,116 @@ export const queries = {
   getCalendarEvent:    db.prepare("SELECT * FROM academic_calendar_events WHERE id=?"),
 
   // ── v5: Timetables ──────────────────────────────────────────────────────────
-  getTimetableByClass:    db.prepare("SELECT tt.*, s.name as subject_name, s.code as subject_code, u.name as teacher_name FROM timetables tt JOIN subjects s ON s.id = tt.subject_id LEFT JOIN users u ON u.id = tt.teacher_id WHERE tt.class_id=? AND tt.term_id=? ORDER BY tt.day_of_week, tt.start_time"),
-  checkTeacherConflict:   db.prepare("SELECT id FROM timetables WHERE teacher_id=? AND term_id=? AND day_of_week=? AND start_time=? LIMIT 1"),
-  checkClassroomConflict: db.prepare("SELECT id FROM timetables WHERE classroom IS NOT NULL AND classroom=? AND term_id=? AND day_of_week=? AND start_time=? LIMIT 1"),
-  createTimetableSlot:    db.prepare("INSERT INTO timetables (class_id, subject_id, term_id, teacher_id, day_of_week, start_time, end_time, classroom) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-  deleteTimetableSlot:    db.prepare("DELETE FROM timetables WHERE id=?"),
-  getTimetableSlot:       db.prepare("SELECT * FROM timetables WHERE id=?"),
+  // Removed legacy v5 timetable queries (repurposed table for exam scheduling)
+  
+  // ── v8: Grading System Queries ──────────────────────────────────────────────
+  getGradingSubjectsByTeacher: db.prepare(`
+    SELECT gs.*, c.name as class_name
+    FROM grading_subjects gs
+    LEFT JOIN classes c ON c.id = gs.class_id
+    WHERE gs.teacher_id = ? AND gs.term_id = ?
+  `),
+  getAllGradingSubjects: db.prepare(`
+    SELECT gs.*, c.name as class_name
+    FROM grading_subjects gs
+    LEFT JOIN classes c ON c.id = gs.class_id
+    WHERE gs.term_id = ?
+  `),
+  getGradingSubjectById: db.prepare("SELECT gs.*, c.name as class_name FROM grading_subjects gs LEFT JOIN classes c ON c.id = gs.class_id WHERE gs.id = ?"),
+  createGradingSubject: db.prepare("INSERT INTO grading_subjects (name, code, class_id, term_id, session_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?)"),
+  updateGradingSubject: db.prepare("UPDATE grading_subjects SET name=?, code=?, class_id=?, teacher_id=? WHERE id=?"),
+  deleteGradingSubject: db.prepare("DELETE FROM grading_subjects WHERE id=?"),
+  
+  getGradingPoliciesBySubject: db.prepare("SELECT * FROM grading_policies WHERE grading_subject_id = ? ORDER BY is_exam ASC, id ASC"),
+  createGradingPolicy: db.prepare("INSERT INTO grading_policies (grading_subject_id, name, type, mapped_cbt_subject_id, max_marks, is_exam) VALUES (?, ?, ?, ?, ?, ?)"),
+  updateGradingPolicy: db.prepare("UPDATE grading_policies SET name=?, type=?, mapped_cbt_subject_id=?, max_marks=?, is_exam=? WHERE id=?"),
+  deleteGradingPolicy: db.prepare("DELETE FROM grading_policies WHERE id=?"),
+  
+  getManualScoresBySubject: db.prepare(`
+    SELECT ms.* FROM grading_manual_scores ms
+    JOIN grading_policies p ON p.id = ms.grading_policy_id
+    WHERE p.grading_subject_id = ?
+  `),
+  upsertManualScore: db.prepare(`
+    INSERT INTO grading_manual_scores (grading_policy_id, student_id, score, entered_by, updated_at)
+    VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    ON CONFLICT(grading_policy_id, student_id) DO UPDATE SET
+    score = excluded.score, entered_by = excluded.entered_by, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+  `),
+  
+  getTermResultsBySubject: db.prepare("SELECT * FROM term_results WHERE grading_subject_id = ?"),
+  getTermResultsByStudent: db.prepare("SELECT * FROM term_results WHERE student_id = ? AND term_id = ?"),
+  upsertTermResult: db.prepare(`
+    INSERT INTO term_results (student_id, grading_subject_id, ca_score, exam_score, total_score, grade, remark, is_approved, term_id, session_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    ON CONFLICT(student_id, grading_subject_id, term_id) DO UPDATE SET
+    ca_score=excluded.ca_score, exam_score=excluded.exam_score, total_score=excluded.total_score,
+    grade=excluded.grade, remark=excluded.remark, is_approved=excluded.is_approved,
+    term_id=excluded.term_id, session_id=excluded.session_id,
+    updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+  `),
+  approveTermResults: db.prepare("UPDATE term_results SET is_approved = 1 WHERE grading_subject_id = ?"),
+  
+  getAnnualResultsBySession: db.prepare("SELECT * FROM annual_results WHERE session_id = ?"),
+  getAnnualResultByStudent: db.prepare("SELECT * FROM annual_results WHERE student_id = ? AND session_id = ?"),
+  upsertAnnualResult: db.prepare(`
+    INSERT INTO annual_results (student_id, class_id, session_id, total_average, promotion_status, approved_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    ON CONFLICT(student_id, session_id) DO UPDATE SET
+    total_average=excluded.total_average, promotion_status=excluded.promotion_status, approved_by=excluded.approved_by, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+  `),
+
+  // ── v8+: grading auto-create lookups ────────────────────────────────────────
+  /** Find a grading_subject by teacher + CBT source subject + term (for auto-create dedup) */
+  getGradingSubjectBySource: db.prepare(
+    "SELECT * FROM grading_subjects WHERE source_cbt_subject_id = ? AND term_id = ? LIMIT 1"
+  ),
+  /** Find a grading_subject by teacher + code + term (fallback dedup) */
+  getGradingSubjectByTeacherCodeTerm: db.prepare(
+    "SELECT * FROM grading_subjects WHERE teacher_id = ? AND code = ? AND term_id = ? LIMIT 1"
+  ),
+  /** Get students for a grading subject (class roster + exam takers + manual score entries) */
+  getGradingStudentsBySubject: db.prepare(`
+    SELECT DISTINCT u.id, u.name, u.email, u.reg_id, COALESCE(gl.name, u.grade) as grade
+    FROM users u
+    LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id
+    WHERE u.role = 'student' AND u.is_active = 1
+      AND (
+        -- 1. Matched by grading subject's class_id
+        (EXISTS (
+          SELECT 1 FROM grading_subjects gs 
+          JOIN classes c ON c.id = gs.class_id 
+          WHERE gs.id = ? AND c.name = COALESCE(gl.name, u.grade)
+        ))
+        -- 2. OR matched by source CBT subject's class/grade or direct subject enrollment
+        OR (EXISTS (
+          SELECT 1 FROM grading_subjects gs
+          JOIN subjects s ON s.id = gs.source_cbt_subject_id
+          WHERE gs.id = ? AND (
+            (s.grade_level_id IS NOT NULL AND s.grade_level_id = u.grade_level_id)
+            OR (s.class IS NOT NULL AND s.class != '' AND s.class = COALESCE(gl.name, u.grade))
+            OR EXISTS (SELECT 1 FROM subject_enrollments se WHERE se.subject_id = s.id AND se.student_id = u.id)
+          )
+        ))
+        -- 3. OR student completed an exam mapped to this grading subject
+        OR u.id IN (
+          SELECT DISTINCT e.student_id FROM exams e
+          JOIN grading_policies gp ON gp.mapped_cbt_subject_id = e.subject_id
+          WHERE gp.grading_subject_id = ? AND e.status = 'completed'
+        )
+        -- 4. OR student has a manual score entry in this grading subject
+        OR u.id IN (
+          SELECT DISTINCT ms.student_id FROM grading_manual_scores ms
+          JOIN grading_policies gp ON gp.id = ms.grading_policy_id
+          WHERE gp.grading_subject_id = ?
+        )
+      )
+    ORDER BY u.name
+  `),
+  /** Update mode + source_cbt_subject_id for auto-created grading subjects */
+  updateGradingSubjectMeta: db.prepare(
+    "UPDATE grading_subjects SET mode = ?, source_cbt_subject_id = ? WHERE id = ?"
+  ),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

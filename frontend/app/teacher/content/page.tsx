@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { DocumentIcon, SearchIcon, WarningIcon, CheckCircleIcon } from "../../../components/icons/Icons";
-import { api } from "../../../lib/api";
+import { fetchWithAuth } from "../../../lib/api";
 
 export default function TeacherContentPage() {
   return (
@@ -25,16 +25,11 @@ function ContentLibrary() {
   const loadPackages = async () => {
     try {
       // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie, not localStorage token
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${API_BASE}/api/sync/content/manifest`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPackages(data.packages || []);
-      }
+      const data = await fetchWithAuth('/api/sync/content/manifest');
+      setPackages(data.packages || []);
     } catch (err: any) {
       console.error(err);
+      setError(err.message || "Failed to load packages");
     } finally {
       setLoading(false);
     }

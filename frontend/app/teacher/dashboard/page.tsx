@@ -10,6 +10,7 @@ import type { Subject, ExamResult } from "../../../lib/types";
 import { SubjectIcon, WarningIcon, EmptyBoxIcon, CalendarIcon, ClockIcon, BookIcon, UsersIcon, DocumentIcon, ClipboardIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { useAcademic } from "../../../components/context/AcademicContext";
+import { useAuth } from "../../../hooks/useAuth";
 
 export default function TeacherDashboardPage() {
   return (
@@ -33,6 +34,9 @@ const itemVariants = {
 };
 
 function TeacherDashboard() {
+  const { user } = useAuth();
+  const isClassTeacher = (user as any)?.is_class_teacher === true;
+  const assignedClassName = (user as any)?.assigned_class_name;
   const { selectedSession, selectedTerm, activeSession, activeTerm } = useAcademic();
   const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
   const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
@@ -173,9 +177,20 @@ function TeacherDashboard() {
           <div className="absolute -bottom-12 -left-12 w-64 h-64 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
           <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="max-w-2xl">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-300 text-xs font-bold uppercase tracking-wider mb-3">
-                <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
-                Active Academic Session
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-300 text-xs font-bold uppercase tracking-wider">
+                  <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+                  Active Academic Session
+                </div>
+                {isClassTeacher ? (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400/30 text-amber-300 text-xs font-bold uppercase tracking-wider">
+                    <span>👑</span> Class Teacher: {assignedClassName || "Assigned Class"}
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-500/20 border border-slate-400/30 text-slate-300 text-xs font-bold uppercase tracking-wider">
+                    <span>📖</span> Subject Teacher
+                  </div>
+                )}
               </div>
               <h1 className="text-2xl md:text-3xl font-black text-white m-0 tracking-tight leading-snug">
                 Welcome to {currentTermName} <span className="text-teal-400">({currentSessionName})</span>
@@ -183,6 +198,16 @@ function TeacherDashboard() {
               <p className="text-slate-300 mt-2 text-sm font-medium leading-relaxed">
                 Manage your exam content, question banks, and student results smoothly for this published academic term.
               </p>
+              {isClassTeacher && (
+                <div className="mt-4">
+                  <Link
+                    href="/teacher/report-card"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black transition-all shadow-md hover:shadow-lg"
+                  >
+                    <span>📜</span> Open Class Report Cards ({assignedClassName}) &rarr;
+                  </Link>
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap md:flex-nowrap gap-3 shrink-0">
               <div className="bg-white/10 backdrop-blur-md border border-white/15 px-4 py-2.5 rounded-2xl text-xs font-semibold text-slate-200 flex items-center gap-2">
@@ -313,21 +338,33 @@ function TeacherDashboard() {
             <div>
               <h2 className="text-2xl font-black m-0 text-slate-900 tracking-tight">Report Cards</h2>
               <p className="text-slate-500 text-sm mt-1">
-                Generate and print report cards for students who have completed exams
+                {isClassTeacher
+                  ? `Compiled term report cards for ${assignedClassName || "your class"} and exam submissions`
+                  : "Generate and preview report cards for students who completed exams in your subjects"}
               </p>
             </div>
-            <button
-              className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors self-start sm:self-auto"
-              onClick={() => loadReportStudents(subjectsRef.current)}
-              title="Refresh to see newly completed exams"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12a9 9 0 009-9 9 9 0 015.657 2.343"/>
-                <polyline points="21 3 21 9 15 9"/>
-                <path d="M21 12a9 9 0 01-9 9 9 9 0 01-5.657-2.343"/>
-              </svg>
-              Refresh
-            </button>
+            <div className="flex items-center gap-3">
+              {isClassTeacher && (
+                <Link
+                  href="/teacher/report-card"
+                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-xl transition-colors self-start sm:self-auto shadow-sm"
+                >
+                  <span>📜</span> Class Roster & Compiled Cards ({assignedClassName})
+                </Link>
+              )}
+              <button
+                className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors self-start sm:self-auto"
+                onClick={() => loadReportStudents(subjectsRef.current)}
+                title="Refresh to see newly completed exams"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 009-9 9 9 0 015.657 2.343"/>
+                  <polyline points="21 3 21 9 15 9"/>
+                  <path d="M21 12a9 9 0 01-9 9 9 9 0 01-5.657-2.343"/>
+                </svg>
+                Refresh
+              </button>
+            </div>
           </div>
 
           {reportLoading ? (

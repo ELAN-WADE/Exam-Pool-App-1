@@ -14,7 +14,7 @@ type Subject = {
   id: number; name: string; code: string; term: string;
   duration: number; total_score: number; exam_datetime: string;
   is_published: number; teacher_id: number; created_at: string;
-  description?: string; class?: string; session?: string; mode?: string;
+  description?: string; class?: string; grade_level_id?: number; session?: string; mode?: string;
   can_retake?: number; is_assignment?: number;
 };
 type User = { id: number; name: string; email: string; role: string; grade?: string; is_active: number };
@@ -23,7 +23,7 @@ type EnrolledStudent = {
   enrolled_at: string; score?: number; total_score?: number; exam_status?: string;
 };
 
-const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", class: "", session: "", mode: "exam", can_retake: true, is_assignment: false };
+const emptyForm = { name: "", code: "", term: "", duration: "", exam_datetime: "", teacher_id: "", description: "", grade_level_id: "", session: "", mode: "exam", can_retake: true, is_assignment: false };
 
 export default function OperatorSubjectsPage() {
   return (
@@ -40,6 +40,7 @@ function SubjectsContent() {
   const [students,  setStudents]  = useState<User[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [toast,     setToast]     = useState<Toast>(null);
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   
   const [modalOpen, setModalOpen] = useState(false);
   const [editing,   setEditing]   = useState<Subject | null>(null);
@@ -58,6 +59,41 @@ function SubjectsContent() {
   const [enrollSaving,    setEnrollSaving]    = useState<number | null>(null);
   const [bulkSaving,      setBulkSaving]      = useState(false);
 
+  const [assignTeacherModal, setAssignTeacherModal] = useState(false);
+  const [assignTeacherForm, setAssignTeacherForm] = useState({ teacher_id: "", class_id: "" });
+  const [assignTeacherSaving, setAssignTeacherSaving] = useState(false);
+  const [classes, setClasses] = useState<any[]>([]);
+
+  useEffect(() => {
+    api.getClasses().then(data => setClasses(Array.isArray(data) ? data : [])).catch(console.error);
+  }, []);
+
+  const openAssignClassTeacher = () => {
+    setAssignTeacherForm({ teacher_id: "", class_id: "" });
+    setAssignTeacherModal(true);
+  };
+
+  const submitAssignClassTeacher = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!assignTeacherForm.teacher_id || !assignTeacherForm.class_id) {
+      showToast("error", "Please select both a teacher and a class.");
+      return;
+    }
+    setAssignTeacherSaving(true);
+    try {
+      await api.assignClassTeacher(Number(assignTeacherForm.class_id), Number(assignTeacherForm.teacher_id), "Assigned from Operator Subjects page");
+      showToast("success", "Class Teacher assigned successfully.");
+      setAssignTeacherModal(false);
+      // refresh classes to get updated class_teacher_name
+      const data = await api.getClasses();
+      setClasses(Array.isArray(data) ? data : []);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : "Failed to assign teacher.");
+    } finally {
+      setAssignTeacherSaving(false);
+    }
+  };
+
   const showToast = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
     setTimeout(() => setToast(null), 3200);
@@ -66,15 +102,17 @@ function SubjectsContent() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const [s, u] = await Promise.all([
+      const [s, u, g] = await Promise.all([
         api.getSubjects(selectedSession?.id, selectedTerm?.id), 
-        api.getUsers()
+        api.getUsers(),
+        api.getGradeLevels()
       ]);
       if (signal?.aborted) return;
       const allUsers = (u as User[]) ?? [];
       setSubjects((s as Subject[]) ?? []);
       setUsers(allUsers);
       setStudents(allUsers.filter((user) => user.role === "student" && user.is_active));
+      setGradeLevels((g as any)?.grades ?? []);
     } catch {
       if (!signal?.aborted) showToast("error", "Failed to load data.");
     } finally {
@@ -115,7 +153,7 @@ function SubjectsContent() {
       exam_datetime: s.exam_datetime ?? "",
       teacher_id:    String(s.teacher_id),
       description:   s.description ?? "",
-      class:         s.class ?? "",
+      grade_level_id: s.grade_level_id ? String(s.grade_level_id) : "",
       session:       s.session ?? "",
       mode:          s.mode ?? "exam",
       can_retake:    s.can_retake !== 0,
@@ -145,7 +183,7 @@ function SubjectsContent() {
         exam_datetime: isScheduled ? form.exam_datetime : "",
         teacher_id:    Number(form.teacher_id),
         description:   form.description || null,
-        class:         form.class || null,
+        grade_level_id: form.grade_level_id ? Number(form.grade_level_id) : null,
         session:       form.session || null,
         mode:          form.mode || "exam",
         can_retake:    form.can_retake ? 1 : 0,
@@ -228,10 +266,8 @@ function SubjectsContent() {
   }, [students, enrolledIds, enrollSearch, enrollGradeFilter]);
 
   const allGrades = useMemo(() => {
-    const gs = new Set<string>();
-    for (const s of students) if (s.grade) gs.add(s.grade);
-    return Array.from(gs).sort();
-  }, [students]);
+    return (gradeLevels || []).map(g => g.name);
+  }, [gradeLevels]);
 
   const enroll = async (studentId: number) => {
     if (!enrollSubject) return;
@@ -284,9 +320,14 @@ function SubjectsContent() {
 
       <div className="pageHeader">
         <h1 className="pageTitle">Subjects</h1>
-        <button className="btn btn-primary" onClick={openCreate}>
-          <PlusIcon width="16" height="16" /> Assign Subject
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button className="btn btn-secondary" onClick={openAssignClassTeacher} style={{ background: "var(--color-surface-2)", color: "var(--color-text)", border: "1.5px solid var(--color-border)" }}>
+            <UsersIcon width="16" height="16" /> Assign Class Teacher
+          </button>
+          <button className="btn btn-primary" onClick={openCreate}>
+            <PlusIcon width="16" height="16" /> Assign Subject
+          </button>
+        </div>
       </div>
 
       <div className={styles.statsRow}>
@@ -526,7 +567,13 @@ function SubjectsContent() {
             </div>
           )}
           <div className={styles.formGrid}>
-            <div className="field"><label>Class / Grade</label><input className="input" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })} /></div>
+            <div className="field">
+              <label>Class / Grade</label>
+              <select className="select" value={form.grade_level_id} onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })}>
+                <option value="">Select a class...</option>
+                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
             <div className="field"><label>Session</label><input className="input" value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })} /></div>
             <div className="field">
               <label>Mode</label>
@@ -573,6 +620,64 @@ function SubjectsContent() {
           <button className="btn btn-ghost" onClick={() => setDeleting(null)}>Cancel</button>
           <button className="btn btn-danger" onClick={() => deleting && remove(deleting)}>Delete</button>
         </div>
+      </Modal>
+
+      {/* ── Assign Class Teacher Modal ── */}
+      <Modal open={assignTeacherModal} onClose={() => setAssignTeacherModal(false)} size="sm">
+        <h2>Assign Class Teacher</h2>
+        <form onSubmit={submitAssignClassTeacher} className={styles.form}>
+          <div className="field">
+            <label>Select Teacher *</label>
+            {teachers.length === 0 ? (
+              <div className={styles.noTeacher}><WarningIcon width="16" height="16" /> No active teachers found.</div>
+            ) : (
+              <select className="select" value={assignTeacherForm.teacher_id} onChange={(e) => setAssignTeacherForm({ ...assignTeacherForm, teacher_id: e.target.value })} required>
+                <option value="">— Select a teacher —</option>
+                {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            )}
+          </div>
+          <div className="field">
+            <label>Select Class / Grade *</label>
+            <select
+              className="select"
+              value={assignTeacherForm.class_id}
+              onChange={(e) => setAssignTeacherForm({ ...assignTeacherForm, class_id: e.target.value })}
+              required
+            >
+              <option value="">— Select a class —</option>
+              {(() => {
+                const gradeOrder = new Map(gradeLevels.map((g, idx) => [g.name, idx]));
+                const seen = new Set<string>();
+                return classes
+                  .filter((c: any) => !c.section || c.section.trim() === "")
+                  .filter((c: any) => {
+                    if (seen.has(c.name)) return false;
+                    seen.add(c.name);
+                    return true;
+                  })
+                  .sort((a: any, b: any) => {
+                    const idxA = gradeOrder.has(a.name) ? gradeOrder.get(a.name)! : 999;
+                    const idxB = gradeOrder.has(b.name) ? gradeOrder.get(b.name)! : 999;
+                    return idxA - idxB;
+                  })
+                  .map((c: any) => {
+                    const displayName = c.name + (c.section ? ` ${c.section}` : "");
+                    const currentAssignment = c.class_teacher_name ? ` (currently: ${c.class_teacher_name})` : "";
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {displayName}{currentAssignment}
+                      </option>
+                    );
+                  });
+              })()}
+            </select>
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setAssignTeacherModal(false)}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={assignTeacherSaving || teachers.length === 0}>{assignTeacherSaving ? "Saving…" : "Assign Teacher"}</button>
+          </div>
+        </form>
       </Modal>
     </>
   );

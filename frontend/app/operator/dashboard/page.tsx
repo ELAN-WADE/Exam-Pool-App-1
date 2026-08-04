@@ -8,6 +8,8 @@ import { useAcademic } from "../../../components/context/AcademicContext";
 import { UsersIcon, BookIcon, CheckCircleIcon, DocumentIcon, BarChartIcon, SettingsIcon, ChevronRightIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { AdminGlobalSearch } from "../../../components/admin/AdminGlobalSearch";
+import { SessionSnapshotCard } from "../../../components/admin/SessionSnapshotCard";
 import styles from "./page.module.css";
 
 export default function OperatorDashboardPage() {
@@ -109,6 +111,9 @@ function OperatorDashboard() {
         </span>
       </div>
 
+      {/* Global Search & Historical Archive Crawler */}
+      <AdminGlobalSearch />
+
       {/* Stats */}
       <section className={styles.statsGrid}>
         {statCards.map((s, i) => (
@@ -127,6 +132,9 @@ function OperatorDashboard() {
           </div>
         ))}
       </section>
+
+      {/* Session Snapshots & Historical Performance */}
+      <SessionSnapshotCard />
 
       {/* Quick Actions */}
       <section className={styles.section}>

@@ -12,11 +12,7 @@ import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib
 import { UsersIcon, SearchIcon, ArrowUpIcon, EyeIcon, DocumentIcon } from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
-const GRADE_OPTIONS = [
-  "JSS1","JSS2","JSS3","SS1","SS2","SS3",
-  "Grade 1","Grade 2","Grade 3","Grade 4","Grade 5","Grade 6",
-  "Grade 7","Grade 8","Grade 9","Grade 10","Grade 11","Grade 12",
-];
+
 
 export default function TeacherStudentsPage() {
   return (
@@ -42,6 +38,7 @@ function StudentRoster() {
   const [gradeModal,  setGradeModal]  = useState<any | null>(null);
   const [gradeValue,  setGradeValue]  = useState("");
   const [gradeSaving, setGradeSaving] = useState(false);
+  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const [reviewModal,   setReviewModal]   = useState<any | null>(null);
   const [reviewData,    setReviewData]    = useState<any | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -75,6 +72,10 @@ function StudentRoster() {
         const subs = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as Subject[];
         if (signal.aborted) return;
         setSubjects(subs ?? []);
+        
+        const gradesData = await api.getGradeLevels();
+        if (!signal.aborted) setGradeLevels(gradesData?.grades ?? []);
+
         const sid = subjectId > 0 ? subjectId : Number(subs[0]?.id ?? 0);
         if (sid) await loadStudents(sid, signal);
       } catch (err) {
@@ -84,7 +85,7 @@ function StudentRoster() {
       }
     })();
     return () => controller.abort();
-  }, [subjectId, loadStudents]);
+  }, [subjectId, selectedSession?.id, selectedTerm?.id, loadStudents]);
 
   // ── Live-update: re-fetch roster when a student submits an exam ──
   useEffect(() => {
@@ -119,15 +120,17 @@ function StudentRoster() {
 
   const openGrade = (row: any) => {
     setGradeModal(row);
-    setGradeValue(row.grade || "");
+    const matched = gradeLevels.find(g => g.name === row.grade || g.id === Number(row.grade_level_id || row.grade));
+    setGradeValue(matched ? String(matched.id) : (row.grade_level_id ? String(row.grade_level_id) : ""));
   };
 
   const saveGrade = async () => {
     if (!gradeModal || !gradeValue.trim()) return;
     setGradeSaving(true);
     try {
-      await api.updateStudentGrade(Number(gradeModal.id), gradeValue.trim());
-      showToast("success", `${gradeModal.name} moved to ${gradeValue}`);
+      const selectedGradeName = gradeLevels.find(g => g.id === Number(gradeValue))?.name || gradeValue;
+      await api.updateStudentGrade(Number(gradeModal.id), Number(gradeValue));
+      showToast("success", `${gradeModal.name} moved to ${selectedGradeName}`);
       setGradeModal(null);
       await loadStudents(activeSubjectId);
     } catch (err) {
@@ -320,15 +323,8 @@ function StudentRoster() {
               <label>New Grade / Class *</label>
               <select className="select" value={gradeValue} onChange={(e) => setGradeValue(e.target.value)}>
                 <option value="">Select grade…</option>
-                {GRADE_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
+                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
-              <input
-                className="input"
-                style={{ marginTop: "0.5rem" }}
-                placeholder="Or type a custom grade…"
-                value={gradeValue}
-                onChange={(e) => setGradeValue(e.target.value)}
-              />
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
               <button className="btn btn-ghost" onClick={() => setGradeModal(null)}>Cancel</button>

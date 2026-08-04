@@ -1,27 +1,103 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "../../lib/api";
+import { api, fetchWithAuth } from "../../lib/api";
 import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../lib/gradeUtils";
 import { DocumentIcon, CheckCircleIcon, WarningIcon, EditIcon, SchoolIcon, ClipboardIcon, RefreshIcon, CloseIcon } from "../icons/Icons";
 import { useAuth } from "../../hooks/useAuth";
+import { useAcademic } from "../context/AcademicContext";
 
 type ExamEntry = {
   exam_id: number;
   score: number;
   total_score: number;
+  ca_score?: number | null;
+  exam_score?: number | null;
+  grade?: string | null;
   end_time: string;
   subject_name: string;
   code: string;
   term: string;
   teacher_remark: string | null;
   principal_remark: string | null;
+  term_id?: number;
+  session_id?: number;
+  session_name?: string;
+  term_order_in_session?: number;
+  term_teacher_remark?: string | null;
+  teacher_id?: number;
 };
 
+type CumulativeSubjectRow = {
+  code: string;
+  subject_name: string;
+  term1_total: number | null;
+  term2_total: number | null;
+  term3_ca: number | null;
+  term3_exam: number | null;
+  term3_total: number | null;
+  term3_grade: string | null;
+  cumulative_avg: number | null;
+};
+
+function detectIs3rdTerm(exams: ExamEntry[], activeTermName?: string): boolean {
+  if (activeTermName) {
+    const t = activeTermName.toLowerCase();
+    if (t.includes("third") || t.includes("3rd") || t.endsWith("-t3") || t.endsWith("_t3")) {
+      return true;
+    }
+  }
+  if (!exams.length) return false;
+  const hasOrderInfo = exams.some((e) => e.term_order_in_session !== undefined);
+  if (hasOrderInfo) {
+    const latestSessionId = Math.max(...exams.map((e) => e.session_id || 0));
+    const latestExams = exams.filter((e) => e.session_id === latestSessionId);
+    const maxOrder = Math.max(...latestExams.map((e) => e.term_order_in_session || 0));
+    return maxOrder >= 3;
+  }
+  const termNames = [...new Set(exams.map((e) => (e.term || "").toLowerCase()))];
+  return termNames.some((t) => t.includes("third") || t.includes("3rd") || t.endsWith("-t3") || t.endsWith("_t3"));
+}
+
+function buildCumulativeRows(exams: ExamEntry[]): CumulativeSubjectRow[] {
+  if (!exams.length) return [];
+  const subjectMap = new Map<string, CumulativeSubjectRow>();
+  const enriched = exams.map((e) => {
+    let order = e.term_order_in_session || 0;
+    if (!order && e.term) {
+      const t = e.term.toLowerCase();
+      if (t.includes("first") || t.includes("1st") || t.includes("term 1") || t.endsWith("-t1") || t.endsWith("_t1")) order = 1;
+      else if (t.includes("second") || t.includes("2nd") || t.includes("term 2") || t.endsWith("-t2") || t.endsWith("_t2")) order = 2;
+      else if (t.includes("third") || t.includes("3rd") || t.includes("term 3") || t.endsWith("-t3") || t.endsWith("_t3")) order = 3;
+    }
+    return { ...e, computed_order: order };
+  });
+  const sorted = [...enriched].sort((a, b) => a.computed_order - b.computed_order);
+  for (const e of sorted) {
+    const key = (e.code || e.subject_name || "SUBJ").toUpperCase();
+    if (!subjectMap.has(key)) {
+      subjectMap.set(key, { code: e.code || key, subject_name: e.subject_name || key, term1_total: null, term2_total: null, term3_ca: null, term3_exam: null, term3_total: null, term3_grade: null, cumulative_avg: null });
+    }
+    const row = subjectMap.get(key)!;
+    const order = e.computed_order;
+    const termScore = e.score ?? 0;
+    if (order === 1) { row.term1_total = termScore; }
+    else if (order === 2) { row.term2_total = termScore; }
+    else { row.term3_ca = e.ca_score ?? null; row.term3_exam = e.exam_score ?? null; row.term3_total = termScore; row.term3_grade = e.grade ?? letterGrade(scorePct(e.score, e.total_score)); }
+  }
+  for (const row of subjectMap.values()) {
+    const vals = [row.term1_total, row.term2_total, row.term3_total].filter((v) => v !== null) as number[];
+    if (vals.length > 0) row.cumulative_avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  }
+  return Array.from(subjectMap.values());
+}
 type Toast = { msg: string; type: "success" | "error" };
 
 export function ReportCardModal({ student, onClose }: { student: any; onClose: () => void }) {
   const { user } = useAuth();
+  const { selectedSession, selectedTerm, activeSession, activeTerm } = useAcademic();
+  const currentAcademicSession = selectedSession || activeSession;
+  const currentAcademicTerm = selectedTerm || activeTerm;
   const isOperator = user?.role === "operator";
 
   const [exams, setExams] = useState<ExamEntry[]>([]);
@@ -29,6 +105,7 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
   const [fetchError, setFetchError] = useState("");
   const [config, setConfig] = useState<any>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [isCumulativeMode, setIsCumulativeMode] = useState<boolean>(true);
 
   // Per-exam remarks (teacher edits all; operator edits principal)
   const [teacherRemarks, setTeacherRemarks] = useState<Record<number, string>>({});
@@ -46,23 +123,31 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
     setLoading(true);
     setFetchError("");
     const studentId = Number(student.id);
-    const url = `/api/users/${studentId}/exams?_t=${Date.now()}`;
-    fetch((process.env.NEXT_PUBLIC_API_URL || "") + url, {
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-          throw new Error(err.error || `HTTP ${res.status}`);
-        }
-        return res.json();
-      })
+    const sessionParam = currentAcademicSession?.id ? `&sessionId=${currentAcademicSession.id}` : "";
+    const termParam = currentAcademicTerm?.id ? `&termId=${currentAcademicTerm.id}` : "";
+    const url = `/api/users/${studentId}/report-card-results?_t=${Date.now()}${sessionParam}${termParam}`;
+    fetchWithAuth(url)
       .then((body) => {
         const rawList = Array.isArray(body) ? body : (body?.data ?? []);
-        const list: ExamEntry[] = Array.isArray(rawList) ? rawList : [];
+        let list: ExamEntry[] = Array.isArray(rawList) ? rawList : [];
+
+        // Check if 3rd term or single isolated term
+        const is3rd = currentAcademicTerm?.name ? (
+          currentAcademicTerm.name.toLowerCase().includes("third") ||
+          currentAcademicTerm.name.toLowerCase().includes("3rd") ||
+          currentAcademicTerm.name.endsWith("-T3") ||
+          currentAcademicTerm.name.endsWith("_T3")
+        ) : detectIs3rdTerm(list, config?.current_term);
+
+        if (!is3rd && currentAcademicTerm?.id) {
+          list = list.filter((e) => Number(e.term_id) === Number(currentAcademicTerm.id));
+        } else if (!is3rd && currentAcademicTerm?.name) {
+          list = list.filter((e) => (e.term || "").toLowerCase() === currentAcademicTerm.name.toLowerCase());
+        }
+
         setExams(list);
         setSelectedIds(new Set(list.map((e) => e.exam_id)));
+        setIsCumulativeMode(is3rd);
         setLoading(false);
       })
       .catch((err) => {
@@ -71,28 +156,37 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
       });
 
     // Also load term remarks
-    const term = "2026-T1"; // Using default for now
-    api.getTermRemark(studentId, term)
+    const activeTermResolved = currentAcademicTerm?.name || config?.current_term || "2026-T1";
+    api.getTermRemark(studentId, activeTermResolved, currentAcademicSession?.id, currentAcademicTerm?.id)
       .then((res: any) => {
         if (res) {
           setTeacherRemarks({ 0: res.teacher_remark || "" });
           setPrincipalRemarks({ 0: res.principal_remark || "" });
+        } else {
+          setTeacherRemarks({ 0: "" });
+          setPrincipalRemarks({ 0: "" });
         }
       })
       .catch(() => {});
   };
 
   useEffect(() => {
-    api.getConfig().then((c) => setConfig(c)).catch(() => {});
+    api.getPublicSettings().then((c) => {
+      setConfig(c);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     loadExams();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [student.id]);
+  }, [student.id, config?.current_term, currentAcademicSession?.id, currentAcademicTerm?.id]);
 
   let theme: any = {};
   try { theme = config?.theme_json ? JSON.parse(config.theme_json) : {}; } catch {}
   const logo = theme.school_logo as string | undefined;
   const schoolName = config?.org_name || config?.school_name || "School Name";
   const adminName = config?.admin_name || "Principal";
+  const currentTerm = currentAcademicTerm?.name || config?.current_term || "2026-T1";
 
   const toggleExam = (id: number) => {
     const next = new Set(selectedIds);
@@ -108,12 +202,12 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
 
   const saveRemark = async (type: "teacher" | "principal") => {
     setSavingRemark(0);
-    const term = "2026-T1"; // Using default for now
+    const term = currentAcademicTerm?.name || currentTerm;
     try {
       if (type === "principal") {
-        await api.saveTermRemark(student.id, term, principalRemarks[0] ?? "");
+        await api.saveTermRemark(student.id, term, principalRemarks[0] ?? "", currentAcademicSession?.id, currentAcademicTerm?.id);
       } else {
-        await api.saveTermRemark(student.id, term, teacherRemarks[0] ?? "");
+        await api.saveTermRemark(student.id, term, teacherRemarks[0] ?? "", currentAcademicSession?.id, currentAcademicTerm?.id);
       }
       setSavedRemarks((prev) => new Set([...prev, 0]));
       showToast("Remark saved successfully.", "success");
@@ -212,6 +306,29 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
 
           {!loading && !fetchError && exams.length > 0 && (
             <>
+              {/* Layout Mode Selector Toggle */}
+              <div style={{ marginBottom: "1.25rem", background: "var(--color-surface-2)", padding: "0.5rem 0.75rem", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+                <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--color-muted)", textTransform: "uppercase" }}>Report Card Layout:</span>
+                <div style={{ display: "flex", gap: "0.25rem" }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${!isCumulativeMode ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => setIsCumulativeMode(false)}
+                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                  >
+                    Standard (1st/2nd Term)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${isCumulativeMode ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => setIsCumulativeMode(true)}
+                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                  >
+                    3rd Term Cumulative
+                  </button>
+                </div>
+              </div>
+
               {/* Exam selector */}
               <div style={{ marginBottom: "1.5rem" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
@@ -336,6 +453,113 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                 </div>
               )}
 
+              {/* ── Live On-Screen Report Card Preview in Modal ── */}
+              {selectedList.length > 0 && (
+                <div style={{ marginBottom: "1.5rem", borderRadius: 12, border: "1px solid var(--color-border)", padding: "1.25rem", background: "var(--color-surface)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
+                    <h4 style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--color-primary)", margin: 0 }}>
+                      {isCumulativeMode ? "3rd Term Cumulative Report Card Preview" : "Report Card Preview"}
+                    </h4>
+                    <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--color-muted)" }}>{currentTerm}</span>
+                  </div>
+
+                  {(() => {
+                    const is3rd = isCumulativeMode;
+                    if (is3rd) {
+                      const cumRows = buildCumulativeRows(selectedList);
+                      const overallCumAvg = cumRows.length > 0
+                        ? Math.round(cumRows.reduce((acc, r) => acc + (r.cumulative_avg ?? 0), 0) / (cumRows.filter(r => r.cumulative_avg !== null).length || 1))
+                        : 0;
+                      const overallCumGrade = letterGrade(overallCumAvg);
+
+                      return (
+                        <div>
+                          <div style={{ overflowX: "auto", borderRadius: 8, border: "1px solid var(--color-border)", marginBottom: "0.75rem" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                              <thead>
+                                <tr style={{ background: "var(--color-surface-2)", color: "var(--color-text)" }}>
+                                  <th style={{ padding: "0.5rem", textAlign: "left" }}>Subject</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "left" }}>Code</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>1st Term</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>2nd Term</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>3rd C.A.</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>3rd Exam</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>3rd Total</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>Cum. Avg.</th>
+                                  <th style={{ padding: "0.5rem", textAlign: "center" }}>Grade</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {cumRows.map((r, i) => {
+                                  const cumPct = r.cumulative_avg ?? 0;
+                                  const cumGrade = letterGrade(cumPct);
+                                  return (
+                                    <tr key={r.code} style={{ borderTop: "1px solid var(--color-border)", background: i % 2 === 0 ? "transparent" : "var(--color-surface-2)" }}>
+                                      <td style={{ padding: "0.5rem", fontWeight: 600 }}>{r.subject_name}</td>
+                                      <td style={{ padding: "0.5rem", color: "var(--color-muted)", fontSize: "0.75rem" }}>{r.code}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center" }}>{r.term1_total ?? "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center" }}>{r.term2_total ?? "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center" }}>{r.term3_ca ?? "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center" }}>{r.term3_exam ?? "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center", fontWeight: 700 }}>{r.term3_total ?? "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center", fontWeight: 800 }}>{r.cumulative_avg !== null ? `${r.cumulative_avg}%` : "—"}</td>
+                                      <td style={{ padding: "0.5rem", textAlign: "center" }}>
+                                        <span className={`badge ${gradeBadgeClass(cumPct)}`}>{cumGrade}</span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.6rem 0.8rem", borderRadius: 8, background: "var(--color-surface-2)" }}>
+                            <span style={{ fontWeight: 700, fontSize: "0.8rem" }}>Overall Cumulative Avg</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--color-primary)" }}>{overallCumAvg}%</span>
+                              <span className={`badge ${gradeBadgeClass(overallCumAvg)}`}>{overallCumGrade}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // Standard Layout
+                    return (
+                      <div style={{ overflowX: "auto", borderRadius: 8, border: "1px solid var(--color-border)" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                          <thead>
+                            <tr style={{ background: "var(--color-surface-2)", color: "var(--color-text)" }}>
+                              <th style={{ padding: "0.5rem", textAlign: "left" }}>Subject</th>
+                              <th style={{ padding: "0.5rem", textAlign: "center" }}>C.A. Score</th>
+                              <th style={{ padding: "0.5rem", textAlign: "center" }}>Exam Score</th>
+                              <th style={{ padding: "0.5rem", textAlign: "center" }}>Total</th>
+                              <th style={{ padding: "0.5rem", textAlign: "center" }}>Grade</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedList.map((e, i) => {
+                              const pct = scorePct(e.score, e.total_score);
+                              return (
+                                <tr key={e.exam_id} style={{ borderTop: "1px solid var(--color-border)", background: i % 2 === 0 ? "transparent" : "var(--color-surface-2)" }}>
+                                  <td style={{ padding: "0.5rem", fontWeight: 600 }}>{e.subject_name}</td>
+                                  <td style={{ padding: "0.5rem", textAlign: "center" }}>{e.ca_score ?? "—"}</td>
+                                  <td style={{ padding: "0.5rem", textAlign: "center" }}>{e.exam_score ?? "—"}</td>
+                                  <td style={{ padding: "0.5rem", textAlign: "center", fontWeight: 700 }}>{e.score ?? 0} / {e.total_score ?? 100}</td>
+                                  <td style={{ padding: "0.5rem", textAlign: "center" }}>
+                                    <span className={`badge ${gradeBadgeClass(pct)}`}>{e.grade || letterGrade(pct)}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
               {/* Actions */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "0.25rem", gap: "0.75rem", flexWrap: "wrap" }}>
                 <button className="btn btn-ghost btn-sm" onClick={loadExams} style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
@@ -414,9 +638,10 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                 <div style={{ fontSize: "20pt", fontWeight: 900, color: "#0f766e", letterSpacing: "0.02em", textTransform: "uppercase", lineHeight: 1.15 }}>
                   {schoolName}
                 </div>
-                <div style={{ fontSize: "10pt", color: "#64748b", marginTop: "2mm", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 600 }}>
-                  Official Student Report Card
+                <div style={{ fontSize: "11pt", color: "#64748b", marginTop: "3mm", letterSpacing: "0.15em", textTransform: "uppercase", fontWeight: 700 }}>
+                  {isCumulativeMode ? "3rd Term Cumulative Report Card" : "Official Student Report Card"}
                 </div>
+                <div style={{ fontSize: "8.5pt", color: "#94a3b8", marginTop: "1mm" }}>{currentTerm}</div>
               </div>
 
               {/* Spacer */}
@@ -446,44 +671,105 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
             </div>
 
             {/* ── Subject Results Table ── */}
-            <div style={{ borderRadius: "3mm", border: "1pt solid #e2e8f0", overflow: "hidden", marginBottom: "8mm" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt" }}>
-                <thead>
-                  <tr style={{ background: "#0f766e", color: "#fff" }}>
-                    {["Subject", "Score", "Total", "%", "Grade", "Term"].map((h) => (
-                      <th key={h} style={{ padding: "3mm 4mm", textAlign: h === "Subject" ? "left" : "center", fontWeight: 700, fontSize: "9pt", letterSpacing: "0.05em", textTransform: "uppercase" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedList.map((e, i) => {
-                    const pct = scorePct(e.score, e.total_score);
-                    const grade = letterGrade(pct);
-                    const gradeCol = pct >= 70 ? "#059669" : pct >= 40 ? "#d97706" : "#dc2626";
-                    return (
-                      <tr key={e.exam_id} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", fontWeight: 600 }}>{e.subject_name}</td>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{e.score ?? 0}</td>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", color: "#64748b" }}>{e.total_score ?? 0}</td>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 700 }}>{pct}%</td>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 900, color: gradeCol }}>{grade}</td>
-                        <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", color: "#64748b", fontSize: "9pt" }}>{e.term}</td>
+            {(() => {
+              const is3rd = isCumulativeMode;
+              if (is3rd) {
+                const cumRows = buildCumulativeRows(selectedList);
+                const overallCumAvg = cumRows.length > 0
+                  ? Math.round(cumRows.reduce((acc, r) => acc + (r.cumulative_avg ?? 0), 0) / cumRows.filter(r => r.cumulative_avg !== null).length)
+                  : 0;
+                const overallCumGrade = letterGrade(overallCumAvg);
+                return (
+                  <div style={{ borderRadius: "3mm", border: "1pt solid #e2e8f0", overflow: "hidden", marginBottom: "8mm" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "8.5pt" }}>
+                      <thead>
+                        <tr style={{ background: "#0f766e", color: "#fff" }}>
+                          <th style={{ padding: "2mm 3mm", textAlign: "left", fontWeight: 700, fontSize: "7.5pt", textTransform: "uppercase" }}>Subject</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "left", fontWeight: 700, fontSize: "7.5pt", textTransform: "uppercase" }}>Code</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>1st Term</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>2nd Term</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>3rd C.A.</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>3rd Exam</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>3rd Total</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7pt", textTransform: "uppercase" }}>Cum. Avg.</th>
+                          <th style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 700, fontSize: "7.5pt", textTransform: "uppercase" }}>Grade</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cumRows.map((r, i) => {
+                          const cumPct = r.cumulative_avg ?? 0;
+                          const cumGrade = letterGrade(cumPct);
+                          const gradeCol = cumPct >= 70 ? "#059669" : cumPct >= 40 ? "#d97706" : "#dc2626";
+                          return (
+                            <tr key={r.code} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", fontWeight: 600, fontSize: "8pt" }}>{r.subject_name}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", fontSize: "7pt", color: "#64748b" }}>{r.code}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{r.term1_total ?? "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{r.term2_total ?? "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{r.term3_ca ?? "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{r.term3_exam ?? "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 700 }}>{r.term3_total ?? "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 800, color: gradeCol }}>{r.cumulative_avg !== null ? `${r.cumulative_avg}%` : "—"}</td>
+                              <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 900, color: gradeCol }}>{cumGrade}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {cumRows.length > 1 && (
+                        <tfoot>
+                          <tr style={{ background: "#f1f5f9", color: "#0f172a" }}>
+                            <td colSpan={7} style={{ padding: "2mm 3mm", fontWeight: 800, textTransform: "uppercase", fontSize: "8pt" }}>Cumulative Average</td>
+                            <td style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 900, fontSize: "9pt", color: "#0f766e" }}>{overallCumAvg}%</td>
+                            <td style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 900, fontSize: "9pt", color: overallCumAvg >= 70 ? "#059669" : overallCumAvg >= 40 ? "#d97706" : "#dc2626" }}>{overallCumGrade}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                );
+              }
+              // Standard Layout
+              return (
+                <div style={{ borderRadius: "3mm", border: "1pt solid #e2e8f0", overflow: "hidden", marginBottom: "8mm" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10pt" }}>
+                    <thead>
+                      <tr style={{ background: "#0f766e", color: "#fff" }}>
+                        {["Subject", "Score", "Total", "%", "Grade", "Term"].map((h) => (
+                          <th key={h} style={{ padding: "3mm 4mm", textAlign: h === "Subject" ? "left" : "center", fontWeight: 700, fontSize: "9pt", letterSpacing: "0.05em", textTransform: "uppercase" }}>{h}</th>
+                        ))}
                       </tr>
-                    );
-                  })}
-                </tbody>
-                {selectedList.length > 1 && (
-                  <tfoot>
-                    <tr style={{ background: "#f1f5f9", color: "#0f172a" }}>
-                      <td colSpan={3} style={{ padding: "3mm 4mm", fontWeight: 800, textTransform: "uppercase", fontSize: "9pt" }}>Overall Average</td>
-                      <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: "#0f766e" }}>{avgPct}%</td>
-                      <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: avgPct >= 70 ? "#059669" : avgPct >= 40 ? "#d97706" : "#dc2626" }}>{letterGrade(avgPct)}</td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {selectedList.map((e, i) => {
+                        const pct = scorePct(e.score, e.total_score);
+                        const grade = letterGrade(pct);
+                        const gradeCol = pct >= 70 ? "#059669" : pct >= 40 ? "#d97706" : "#dc2626";
+                        return (
+                          <tr key={e.exam_id} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", fontWeight: 600 }}>{e.subject_name}</td>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center" }}>{e.score ?? 0}</td>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", color: "#64748b" }}>{e.total_score ?? 0}</td>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 700 }}>{pct}%</td>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", fontWeight: 900, color: gradeCol }}>{grade}</td>
+                            <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", textAlign: "center", color: "#64748b", fontSize: "9pt" }}>{e.term}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    {selectedList.length > 1 && (
+                      <tfoot>
+                        <tr style={{ background: "#f1f5f9", color: "#0f172a" }}>
+                          <td colSpan={3} style={{ padding: "3mm 4mm", fontWeight: 800, textTransform: "uppercase", fontSize: "9pt" }}>Overall Average</td>
+                          <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: "#0f766e" }}>{avgPct}%</td>
+                          <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: avgPct >= 70 ? "#059669" : avgPct >= 40 ? "#d97706" : "#dc2626" }}>{letterGrade(avgPct)}</td>
+                          <td />
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              );
+            })()}
 
             {/* ── Remarks Block ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6mm", marginBottom: "12mm" }}>

@@ -6,9 +6,11 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { api } from "../../../lib/api";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import type { Subject, User, ExamResult } from "../../../lib/types";
-import { UsersIcon, BookIcon, CheckCircleIcon, DocumentIcon, BarChartIcon, SettingsIcon, ChevronRightIcon } from "../../../components/icons/Icons";
+import { UsersIcon, BookIcon, CheckCircleIcon, DocumentIcon, BarChartIcon, SettingsIcon, ChevronRightIcon, CalendarIcon } from "../../../components/icons/Icons";
 import { Skeleton } from "../../../components/ui/Skeleton";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { AdminGlobalSearch } from "../../../components/admin/AdminGlobalSearch";
+import { SessionSnapshotCard } from "../../../components/admin/SessionSnapshotCard";
 import styles from "./page.module.css";
 
 export default function OperatorDashboardPage() {
@@ -101,7 +103,8 @@ function OperatorDashboard() {
   ];
 
   const quickLinks = [
-    { href: "/ADMIN/subjects", label: "Manage Subjects", desc: "Create, assign & publish exams", icon: <BookIcon width="20" height="20" /> },
+    { href: "/ADMIN/subjects", label: "Create Subject", desc: "Create and assign subjects", icon: <BookIcon width="20" height="20" /> },
+    { href: "/ADMIN/timetable", label: "Manage Timetable", desc: "Schedule and manage exams", icon: <CalendarIcon width="20" height="20" /> },
     { href: "/ADMIN/users",    label: "Manage Users",    desc: "Add teachers, students & operators", icon: <UsersIcon width="20" height="20" /> },
     { href: "/ADMIN/settings", label: "System Settings", desc: "Backup, restore & audit logs", icon: <SettingsIcon width="20" height="20" /> },
   ];
@@ -122,6 +125,9 @@ function OperatorDashboard() {
         </span>
       </div>
 
+      {/* Global Search & Historical Archive Crawler */}
+      <AdminGlobalSearch />
+
       {/* Stats */}
       <section className={styles.statsGrid}>
         {statCards.map((s, i) => (
@@ -140,6 +146,9 @@ function OperatorDashboard() {
           </div>
         ))}
       </section>
+
+      {/* Session Snapshots & Historical Performance */}
+      <SessionSnapshotCard />
 
       {/* Quick Actions */}
       <section className={styles.section}>
