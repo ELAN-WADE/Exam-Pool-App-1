@@ -7,8 +7,13 @@
 
 import { Database } from "bun:sqlite";
 
-export const BASE_URL = process.env.TEST_BASE_URL ?? "http://localhost:3999";
+export const BASE_URL = process.env.TEST_BASE_URL ?? "http://localhost:8000";
 export const TEST_DB_PATH = ":memory:";   // overridden by EXAMPOOL_DB env
+
+// Shared test operator credentials (must match across test files for shared DB)
+export const TEST_OPERATOR_EMAIL = "test_operator@exampool.test";
+export const TEST_OPERATOR_PASSWORD = "Secure@123";
+export const TEST_OPERATOR_NAME = "Test Operator";
 
 // ── Typed response helpers ──────────────────────────────────────────────────
 

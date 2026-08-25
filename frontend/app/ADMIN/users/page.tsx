@@ -1,23 +1,23 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { User } from "../../../lib/types";
-import dynamic from "next/dynamic";
-const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
-import { UsersIcon, SearchIcon, PlusIcon } from "../../../components/icons/Icons";
+import { PageHeader, Badge, Button, Modal, EmptyState, ConfirmDialog } from "../../../components/ui";
+import {
+  PlusIcon,
+  TrashIcon,
+  UsersIcon,
+  SearchIcon,
+  CheckCircleIcon,
+  WarningIcon,
+  CheckIcon,
+} from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
 type Toast = { type: "success" | "error"; text: string } | null;
-type Tab = "all" | "student" | "teacher" | "operator";
-
-const roleBadge: Record<string, string> = {
-  student:  "badge-info",
-  teacher:  "badge-success",
-  operator: "badge-warning",
-};
 
 function generateSecureCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -39,42 +39,55 @@ export default function OperatorUsersPage() {
 }
 
 function UsersContent() {
-  const [users,   setUsers]   = useState<User[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const { selectedSession, selectedTerm } = useAcademic();
   const [loading, setLoading] = useState(true);
-  const [search,  setSearch]  = useState("");
-  const [tab,     setTab]     = useState<Tab>("all");
-  const [toast,   setToast]   = useState<Toast>(null);
+  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState<string>("all");
+  const [toast, setToast] = useState<Toast>(null);
 
   const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const [modal, setModal] = useState<"operator" | "user" | null>(null);
-  const [form,  setForm]  = useState<any>({ name: "", email: "", password: "", role: "student", grade_level_id: "" });
+  const [form, setForm] = useState<any>({
+    name: "",
+    email: "",
+    password: "",
+    role: "student",
+    grade_level_id: "",
+    dob: "",
+    phone: "",
+  });
   const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<any>(null);
-  const [resetModal, setResetModal] = useState<any>(null);
+  const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
+  const [resetModal, setResetModal] = useState<User | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [resetting, setResetting] = useState(false);
 
   const showToast = useCallback((type: "success" | "error", text: string) => {
     setToast({ type, text });
-    setTimeout(() => setToast(null), 3200);
+    setTimeout(() => setToast(null), 3500);
   }, []);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const [userData, glData] = await Promise.all([
-        api.getUsers(),
-        api.getGradeLevels(),
-      ]);
-      if (signal?.aborted) return;
-      setUsers((userData as User[]) ?? []);
-      setGradeLevels(glData?.grades ?? []);
-    } catch (err) {
-      if (!signal?.aborted) showToast("error", err instanceof Error ? err.message : "Failed to load users");
-    } finally {
-      if (!signal?.aborted) setLoading(false);
-    }
-  }, [showToast]);
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        setLoading(true);
+        const [userData, glData] = await Promise.all([
+          api.getUsers(),
+          api.getGradeLevels(),
+        ]);
+        if (signal?.aborted) return;
+        setUsers((userData as User[]) ?? []);
+        setGradeLevels(glData?.grades ?? []);
+      } catch (err) {
+        if (!signal?.aborted)
+          showToast("error", err instanceof Error ? err.message : "Failed to load users");
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [showToast]
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -86,333 +99,538 @@ function UsersContent() {
     const q = search.toLowerCase();
     return users.filter((u) => {
       const matchTab = tab === "all" || u.role === tab;
-      const matchQ   = !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+      const matchQ =
+        !q ||
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.grade && u.grade.toLowerCase().includes(q));
       return matchTab && matchQ;
     });
   }, [users, search, tab]);
 
-  const counts = useMemo(() => ({
-    all:      users.length,
-    student:  users.filter((u) => u.role === "student").length,
-    teacher:  users.filter((u) => u.role === "teacher").length,
-    operator: users.filter((u) => u.role === "operator").length,
-  }), [users]);
+  const counts = useMemo(
+    () => ({
+      all: users.length,
+      student: users.filter((u) => u.role === "student").length,
+      teacher: users.filter((u) => u.role === "teacher").length,
+      guardian: users.filter((u) => u.role === "guardian").length,
+      operator: users.filter((u) => u.role === "operator").length,
+    }),
+    [users]
+  );
 
-  const openOperator = () => { setForm({ name: "", email: "", password: "" }); setModal("operator"); };
-  const openUser     = () => { setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "" }); setModal("user"); };
-
-  const createOperator = async (e: FormEvent) => {
+  const handleCreateUser = async (e: FormEvent) => {
     e.preventDefault();
+    if (!form.name || !form.email || !form.password) {
+      showToast("error", "Please fill in all required fields.");
+      return;
+    }
     setSaving(true);
     try {
-      await api.createOperator({ name: form.name, email: form.email, password: form.password });
-      showToast("success", `Operator "${form.name}" created.`);
+      if (modal === "operator") {
+        await api.createOperator({ name: form.name, email: form.email, password: form.password });
+        showToast("success", `Operator "${form.name}" created successfully.`);
+      } else {
+        await api.register({
+          name: form.name,
+          email: form.email,
+          password: form.password,
+          role: form.role,
+          grade_level_id:
+            form.role === "student" ? Number(form.grade_level_id) || undefined : undefined,
+          dob: form.role === "student" ? form.dob || undefined : undefined,
+          phone: form.role === "teacher" ? form.phone || undefined : undefined,
+        });
+        showToast("success", `User "${form.name}" created successfully.`);
+      }
       setModal(null);
+      setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "", dob: "", phone: "" });
       await refresh();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to create operator");
-    } finally { setSaving(false); }
+      showToast("error", err instanceof Error ? err.message : "Creation failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const createUser = async (e: FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
+  const handleActivate = async (user: User) => {
     try {
-      const selectedGrade = gradeLevels.find((g) => String(g.id) === String(form.grade_level_id));
-      await api.register({
-        name:     form.name,
-        email:    form.email,
-        password: form.password,
-        role:     form.role,
-        ...(form.role === "student" ? { 
-          grade_level_id: form.grade_level_id ? Number(form.grade_level_id) : null,
-          grade: selectedGrade?.name || ""
-        } : {}),
-      });
-      showToast("success", `${form.role === "teacher" ? "Teacher" : "Student"} "${form.name}" created.`);
-      setModal(null);
+      await api.activateUser(user.id);
+      showToast("success", `User "${user.name}" activated.`);
       await refresh();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to create user");
-    } finally { setSaving(false); }
+      showToast("error", err instanceof Error ? err.message : "Failed to activate user");
+    }
   };
 
-  const deactivate = async (u: any) => {
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
     try {
-      await api.deleteUser(u.id);
-      showToast("success", `"${u.name}" deactivated.`);
+      await api.deleteUser(confirmDelete.id);
+      showToast("success", `User "${confirmDelete.name}" removed.`);
       setConfirmDelete(null);
       await refresh();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Deactivate failed");
+      showToast("error", err instanceof Error ? err.message : "Failed to delete user");
     }
   };
 
   const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
-    if (!newPassword || newPassword.length < 8) {
-      showToast("error", "Password must be at least 8 characters");
+    const pwd = newPassword.trim();
+    if (!resetModal || !pwd) {
+      showToast("error", "Please provide a new password");
+      return;
+    }
+    if (pwd.length < 4) {
+      showToast("error", "Password must be at least 4 characters");
       return;
     }
     setResetting(true);
     try {
-      await api.resetPassword(resetModal.id, newPassword);
-      showToast("success", `Password reset for ${resetModal.name}`);
+      await api.resetPassword(resetModal.id, pwd);
+      showToast("success", `Password successfully reset for ${resetModal.name}`);
       setResetModal(null);
       setNewPassword("");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Reset failed");
+      showToast("error", err instanceof Error ? err.message : "Failed to reset password");
     } finally {
       setResetting(false);
     }
   };
 
-  if (loading) return <div className="loadingWrap"><div className="spinner" /></div>;
-
-  const tabs: { key: Tab; label: string }[] = [
-    { key: "all",      label: `All (${counts.all})` },
-    { key: "student",  label: `Students (${counts.student})` },
-    { key: "teacher",  label: `Teachers (${counts.teacher})` },
-    { key: "operator", label: `Operators (${counts.operator})` },
-  ];
-
   return (
-    <>
-      {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
-
-      <div className="pageHeader">
-        <div>
-          <h1 className="pageTitle">Users</h1>
-          <p className="pageSubtitle">Manage students, teachers, and operators</p>
+    <div className={styles.container}>
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`${styles.toast} ${
+            toast.type === "success" ? styles.toastSuccess : styles.toastError
+          }`}
+        >
+          {toast.text}
         </div>
-        <div className={styles.headerActions}>
-          <button className={`btn btn-ghost`} onClick={openUser}>
-            <PlusIcon width="14" height="14" />
-            Add Student / Teacher
+      )}
+
+      {/* ── Page Header ── */}
+      <PageHeader
+        eyebrow="Administration"
+        title="Users & Access Control"
+        subtitle="Manage student cohorts, faculty members, and administrative operator accounts."
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              leftIcon={<UsersIcon width="14" height="14" />}
+              onClick={() => {
+                setForm({ name: "", email: "", password: "", role: "operator" });
+                setModal("operator");
+              }}
+            >
+              + New Operator
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<PlusIcon width="14" height="14" />}
+              onClick={() => {
+                setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "", dob: "", phone: "" });
+                setModal("user");
+              }}
+            >
+              Register User
+            </Button>
+          </div>
+        }
+      />
+
+      {/* ── 1. Unified Command Strip (Tabs + Filter/Search) ── */}
+      <div className={styles.commandStrip}>
+        <div className={styles.tabList}>
+          <button
+            type="button"
+            className={`${styles.tabItem} ${tab === "all" ? styles.tabActive : ""}`}
+            onClick={() => setTab("all")}
+          >
+            All Accounts
+            <span className={styles.tabCount}>{counts.all}</span>
           </button>
-          <button className={`btn btn-primary`} onClick={openOperator}>
-            <PlusIcon width="14" height="14" />
-            Add Operator
+          <button
+            type="button"
+            className={`${styles.tabItem} ${tab === "student" ? styles.tabActive : ""}`}
+            onClick={() => setTab("student")}
+          >
+            Students
+            <span className={styles.tabCount}>{counts.student}</span>
           </button>
+          <button
+            type="button"
+            className={`${styles.tabItem} ${tab === "teacher" ? styles.tabActive : ""}`}
+            onClick={() => setTab("teacher")}
+          >
+            Teachers
+            <span className={styles.tabCount}>{counts.teacher}</span>
+          </button>
+          <button
+            type="button"
+            className={`${styles.tabItem} ${tab === "guardian" ? styles.tabActive : ""}`}
+            onClick={() => setTab("guardian")}
+          >
+            Guardians
+            <span className={styles.tabCount}>{counts.guardian}</span>
+          </button>
+          <button
+            type="button"
+            className={`${styles.tabItem} ${tab === "operator" ? styles.tabActive : ""}`}
+            onClick={() => setTab("operator")}
+          >
+            Operators
+            <span className={styles.tabCount}>{counts.operator}</span>
+          </button>
+        </div>
+
+        <div className={styles.searchWrapper}>
+          <input
+            type="text"
+            className={styles.searchInput}
+            placeholder="Search name, email, cohort..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search users"
+          />
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className={styles.tabs}>
-        {tabs.map((t) => (
-          <button key={t.key} className={`${styles.tabBtn} ${tab === t.key ? styles.tabActive : ""}`} onClick={() => setTab(t.key)}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search */}
-      <div className={`searchBar ${styles.search}`}>
-        <SearchIcon width="14" height="14" />
-        <input placeholder="Search by name or email…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      </div>
-
-      {/* Table */}
-      <div className={`card ${styles.tableCard}`}>
-        {filtered.length === 0 ? (
-          <div className={styles.empty}>
-            <div className={styles.emptyIconWrapper}>
-              <UsersIcon width="48" height="48" />
-            </div>
-            <p>{search ? "No users match your search." : "No users in this group."}</p>
+      {/* ── 2. Invisible Data Table Container ── */}
+      <div className={styles.tableContainer}>
+        {loading ? (
+          <div className={styles.emptyState}>
+            <div className="w-8 h-8 border-2 border-slate-700 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+            <div className={styles.emptySubtitle}>Loading directory accounts...</div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className={styles.emptyState}>
+            <EmptyState
+              title="No Users Found"
+              description={
+                search
+                  ? "No accounts match your search filters. Try clearing your search query."
+                  : "No registered accounts found under this tab category."
+              }
+              action={
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leftIcon={<PlusIcon width="14" height="14" />}
+                  onClick={() => {
+                    setForm({ name: "", email: "", password: "", role: "student", grade_level_id: "", dob: "", phone: "" });
+                    setModal("user");
+                  }}
+                >
+                  Register User
+                </Button>
+              }
+            />
           </div>
         ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Reg ID</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>Grade</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((u) => (
-                <tr key={u.id}>
-                  <td>
-                    <div className={styles.userCell}>
-                      <div className={styles.avatar}>{u.name?.charAt(0)?.toUpperCase()}</div>
-                      <span style={{ fontWeight: 500 }}>{u.name}</span>
-                    </div>
-                  </td>
-                  <td><code className={styles.code}>{u.reg_id || "—"}</code></td>
-                  <td style={{ color: "var(--color-muted)", fontSize: "0.85rem" }}>{u.email}</td>
-                  <td><span className={`badge ${roleBadge[u.role] ?? "badge-muted"}`}>{u.role}</span></td>
-                  <td style={{ color: "var(--color-muted)", fontSize: "0.85rem" }}>{u.grade || "—"}</td>
-                  <td>
-                    <span className={`badge ${u.is_active ? "badge-success" : "badge-danger"}`}>
-                      {u.is_active ? "Active" : "Inactive"}
-                    </span>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                      {u.is_active ? (
-                        <>
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => { setResetModal(u); setNewPassword(""); }}
+          <div className={styles.tableWrapper}>
+            <table className={styles.minimalTable}>
+              <thead>
+                <tr>
+                  <th scope="col">User / Account</th>
+                  <th scope="col">Role</th>
+                  <th scope="col">Class / Cohort</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" style={{ textAlign: "right" }}>
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((u) => {
+                  const roleClass =
+                    u.role === "operator"
+                      ? styles.roleOperator
+                      : u.role === "teacher"
+                      ? styles.roleTeacher
+                      : styles.roleStudent;
+
+                  return (
+                    <tr key={u.id} className={styles.rowHover}>
+                      {/* User Name & Mono Email */}
+                      <td>
+                        <div className={styles.userCell}>
+                          <span className={styles.userName}>{u.name}</span>
+                          <span className={styles.userEmail}>{u.email}</span>
+                        </div>
+                      </td>
+
+                      {/* Role with deliberate typographic treatment */}
+                      <td>
+                        <span className={`${styles.roleCell} ${roleClass}`}>{u.role}</span>
+                      </td>
+
+                      {/* Cohort / Grade Level */}
+                      <td>
+                        <span className={u.grade ? styles.cohortCell : styles.cohortEmpty}>
+                          {u.grade || "None assigned"}
+                        </span>
+                      </td>
+
+                      {/* Status */}
+                      <td>
+                        {u.is_active ? (
+                          <div className={`${styles.statusCell} ${styles.statusActive}`}>
+                            <span className={`${styles.statusDot} ${styles.statusDotActive}`} />
+                            Active
+                          </div>
+                        ) : (
+                          <div className={`${styles.statusCell} ${styles.statusInactive}`}>
+                            <span className={`${styles.statusDot} ${styles.statusDotInactive}`} />
+                            <button
+                              type="button"
+                              onClick={() => handleActivate(u)}
+                              className={styles.activateBtn}
+                              title="Click to activate account"
+                            >
+                              Activate
+                            </button>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Progressive Disclosure Actions */}
+                      <td>
+                        <div className={styles.actionsCell}>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            className={styles.actionTextBtn}
+                            onClick={() => {
+                              setResetModal(u);
+                              setNewPassword("");
+                            }}
                           >
                             Reset Pwd
-                          </button>
+                          </Button>
                           <button
-                            className="btn btn-sm"
-                            style={{ background: "var(--color-danger-bg)", color: "var(--color-danger)", border: "1px solid var(--color-danger-border)" }}
+                            type="button"
                             onClick={() => setConfirmDelete(u)}
+                            className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+                            title={`Delete ${u.name}`}
                           >
-                            Deactivate
+                            <TrashIcon width="14" height="14" />
                           </button>
-                        </>
-                      ) : (
-                        <span style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>Inactive</span>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
-      {/* ── Add Operator Modal ── */}
-      <Modal open={modal === "operator"} onClose={() => setModal(null)} size="sm">
-        <h2>Add Operator</h2>
-        <p className="modal-desc">Operators have full admin access to the platform.</p>
-        <form onSubmit={createOperator} className={styles.form}>
-          <div className="field">
-            <label>Full Name *</label>
-            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. John Smith" required />
+      {/* ── MODAL 1: CREATE USER / OPERATOR ── */}
+      <Modal
+        open={Boolean(modal)}
+        onClose={() => setModal(null)}
+        title={modal === "operator" ? "Create Administrator Operator" : "Register New Account"}
+        size="md"
+      >
+        <form onSubmit={handleCreateUser}>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Full Name <span className={styles.requiredAsterisk}>*</span>
+            </label>
+            <input
+              type="text"
+              required
+              className={styles.formInput}
+              placeholder="e.g. Samuel Adebayo"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
           </div>
-          <div className="field">
-            <label>Email *</label>
-            <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="john@school.edu" required />
-          </div>
-          <div className="field">
-            <label>Password *</label>
-            <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Min 8 characters" required />
-          </div>
-          <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Creating…" : "Create Operator"}</button>
-          </div>
-        </form>
-      </Modal>
 
-      {/* ── Add Student / Teacher Modal ── */}
-      <Modal open={modal === "user"} onClose={() => setModal(null)} size="sm">
-        <h2>Add {form.role === "teacher" ? "Teacher" : "Student"}</h2>
-        <form onSubmit={createUser} className={styles.form}>
-          <div className="field">
-            <label>Role</label>
-            <div className={styles.roleToggle}>
-              <button type="button" className={`${styles.roleBtn} ${form.role === "student" ? styles.roleBtnActive : ""}`} onClick={() => setForm({ ...form, role: "student" })}>Student</button>
-              <button type="button" className={`${styles.roleBtn} ${form.role === "teacher" ? styles.roleBtnActive : ""}`} onClick={() => setForm({ ...form, role: "teacher" })}>Teacher</button>
-            </div>
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>
+              Email / Username <span className={styles.requiredAsterisk}>*</span>
+            </label>
+            <input
+              type="email"
+              required
+              className={styles.formInput}
+              placeholder="e.g. samuel@school.edu.ng"
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
           </div>
-          <div className="field">
-            <label>Full Name *</label>
-            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Full name" required />
-          </div>
-          <div className="field">
-            <label>Email *</label>
-            <input className="input" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="email@school.edu" required />
-          </div>
-          <div className="field">
-            <label>Password *</label>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <input className="input" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Min 8 characters" required style={{ flex: 1 }} />
-              {form.role === "teacher" && (
-                <button type="button" className="btn btn-ghost" onClick={() => setForm({ ...form, password: generateSecureCode() })}>Generate Code</button>
-              )}
-            </div>
-            {form.password && form.role === "teacher" && form.password.startsWith("TCH-") && (
-              <div style={{ fontSize: "0.85rem", color: "var(--color-primary)", marginTop: "0.4rem" }}>
-                Teacher Code: <strong>{form.password}</strong> (Share this with the teacher)
+
+          {modal === "user" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className={styles.formLabel}>
+                  Account Role <span className={styles.requiredAsterisk}>*</span>
+                </label>
+                <select
+                  className={styles.formSelect}
+                  value={form.role}
+                  onChange={(e) => setForm({ ...form, role: e.target.value })}
+                >
+                  <option value="student">Student / Candidate</option>
+                  <option value="teacher">Faculty / Teacher</option>
+                  <option value="guardian">Guardian / Parent</option>
+                </select>
               </div>
-            )}
-          </div>
-          {form.role === "student" && (
-            <div className="field">
-              <label>Grade / Class *</label>
-              <select
-                className="select"
-                value={form.grade_level_id}
-                onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })}
-                required
-              >
-                <option value="">— Select Grade / Class —</option>
-                {gradeLevels.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
+              {form.role === "teacher" && (
+                <div>
+                  <label className={styles.formLabel}>Phone <span className={styles.requiredAsterisk}>*</span></label>
+                  <input
+                    type="tel"
+                    className={styles.formInput}
+                    placeholder="080..."
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    required
+                  />
+                </div>
+              )}
+
+              {form.role === "student" && (
+                <>
+                  <div>
+                    <label className={styles.formLabel}>Grade Level / Class</label>
+                    <select
+                      className={styles.formSelect}
+                      value={form.grade_level_id}
+                      onChange={(e) => setForm({ ...form, grade_level_id: e.target.value })}
+                    >
+                      <option value="">Select class...</option>
+                      {gradeLevels.map((gl) => (
+                        <option key={gl.id} value={gl.id}>
+                          {gl.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={styles.formLabel}>Date of Birth <span className={styles.requiredAsterisk}>*</span></label>
+                    <input
+                      type="date"
+                      className={styles.formInput}
+                      value={form.dob}
+                      onChange={(e) => setForm({ ...form, dob: e.target.value })}
+                      required
+                    />
+                  </div>
+                </>
+              )}
             </div>
           )}
-          <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Creating…" : `Create ${form.role === "teacher" ? "Teacher" : "Student"}`}</button>
-          </div>
-        </form>
-      </Modal>
 
-      {/* ── Deactivate Confirm Modal ── */}
-      <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} size="sm">
-        <h2>Deactivate User?</h2>
-        <p className="modal-desc">
-          <strong style={{ color: "var(--color-text)" }}>{confirmDelete?.name}</strong> will be deactivated and unable to log in.
-        </p>
-        <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
-          <button className="btn btn-danger" onClick={() => deactivate(confirmDelete)}>Deactivate</button>
-        </div>
-      </Modal>
-
-      {/* ── Reset Password Modal ── */}
-      <Modal open={!!resetModal} onClose={() => { setResetModal(null); setNewPassword(""); }} size="sm">
-        <h2>Reset Password</h2>
-        <p className="modal-desc">
-          Set a new password for <strong style={{ color: "var(--color-text)" }}>{resetModal?.name}</strong>.
-        </p>
-        <form onSubmit={handleResetPassword} className={styles.form}>
-          <div className="field">
-            <label>New Password *</label>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <input
-                className="input"
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Min 8 characters"
-                required
-                minLength={8}
-                autoFocus
-                style={{ flex: 1 }}
-              />
-              {resetModal?.role === "teacher" && (
-                <button type="button" className="btn btn-ghost" onClick={() => setNewPassword(generateSecureCode())}>Generate Code</button>
-              )}
+          <div className={styles.formGroup}>
+            <div className="flex items-center justify-between mb-1">
+              <label className={styles.formLabel}>
+                Password <span className={styles.requiredAsterisk}>*</span>
+              </label>
+              <button
+                type="button"
+                className="text-[11px] font-bold text-slate-700 hover:text-black hover:underline cursor-pointer"
+                onClick={() => setForm({ ...form, password: generateSecureCode() })}
+              >
+                Generate Passcode
+              </button>
             </div>
-            {newPassword && resetModal?.role === "teacher" && newPassword.startsWith("TCH-") && (
-              <div style={{ fontSize: "0.85rem", color: "var(--color-primary)", marginTop: "0.4rem" }}>
-                New Teacher Code: <strong>{newPassword}</strong> (Share this with the teacher)
-              </div>
-            )}
+            <input
+              type="text"
+              required
+              className={`${styles.formInput} ${styles.formInputMono}`}
+              placeholder="Enter or generate password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
           </div>
-          <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={() => { setResetModal(null); setNewPassword(""); }}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={resetting}>{resetting ? "Resetting…" : "Reset Password"}</button>
+
+          <div className={styles.modalFooter}>
+            <Button type="button" variant="outline" size="md" onClick={() => setModal(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              leftIcon={<CheckIcon width="16" height="16" />}
+              loading={saving}
+            >
+              Create Account
+            </Button>
           </div>
         </form>
       </Modal>
-    </>
+
+      {/* ── MODAL 2: RESET PASSWORD ── */}
+      <Modal
+        open={Boolean(resetModal)}
+        onClose={() => setResetModal(null)}
+        title={`Reset Password: ${resetModal?.name || ""}`}
+        size="md"
+      >
+        <form onSubmit={handleResetPassword}>
+          <p className="text-xs text-slate-600 mb-4">
+            Enter a new access password for account <strong>{resetModal?.email}</strong>.
+          </p>
+
+          <div className={styles.formGroup}>
+            <div className="flex items-center justify-between mb-1">
+              <label className={styles.formLabel}>
+                New Password <span className={styles.requiredAsterisk}>*</span>
+              </label>
+              <button
+                type="button"
+                className="text-[11px] font-bold text-slate-700 hover:text-black hover:underline cursor-pointer"
+                onClick={() => setNewPassword(generateSecureCode())}
+              >
+                Generate Passcode
+              </button>
+            </div>
+            <input
+              type="text"
+              required
+              className={`${styles.formInput} ${styles.formInputMono}`}
+              placeholder="Enter new password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </div>
+
+          <div className={styles.modalFooter}>
+            <Button type="button" variant="outline" size="md" onClick={() => setResetModal(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              leftIcon={<CheckIcon width="16" height="16" />}
+              loading={resetting}
+            >
+              Update Password
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ── CONFIRM DIALOG: DELETE USER ── */}
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={handleDelete}
+        title="Confirm Account Deletion"
+        message={`Are you sure you want to permanently delete account "${confirmDelete?.name}" (${confirmDelete?.email})? This action cannot be reversed.`}
+      />
+    </div>
   );
 }

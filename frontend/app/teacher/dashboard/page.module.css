@@ -1,170 +1,358 @@
-/* ── Teacher Dashboard ─────────────────────────────────── */
+/* ── Minimalist Teacher Dashboard Design (Neutral-First) ── */
 
-/* Stats Pills */
-.pills { display: flex; gap: 0.625rem; margin-top: 0.75rem; flex-wrap: wrap; }
-.pill {
-  background: var(--color-surface);
-  border: 1.5px solid var(--color-border);
-  padding: 0.375rem 1rem;
-  border-radius: 999px;
-  font-size: 0.8125rem;
-  font-weight: 600;
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* ── Minimalist KPI Metrics Row ─────────────────────────── */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.875rem;
+}
+
+.statCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.5rem;
+  transition: border-color 150ms ease;
+}
+
+.statCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+.statTop {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  color: var(--color-muted);
-  box-shadow: var(--shadow-sm);
-  position: relative;
-  overflow: hidden;
-  transition: all var(--duration) var(--ease);
 }
-.pill:hover { box-shadow: var(--shadow-md); border-color: var(--color-border-hover); }
-/* Bottom accent line removed per user request for a cleaner look */
-.pillNum {
-  color: var(--color-text);
-  font-weight: 900;
-  font-size: 1.125rem;
+
+.statLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statIcon {
+  color: var(--color-muted-2, #94A3B8);
+  display: flex;
+  align-items: center;
+}
+
+.statValue {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text, #0F172A);
+  line-height: 1.1;
   letter-spacing: -0.03em;
 }
 
-/* ── Subject Grid ─────────────────────────────────────── */
-.grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1rem;
-  margin-top: 0.75rem;
+.statFootnote {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
 }
 
-/* ── Subject Card ─────────────────────────────────────── */
-.card {
-  background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.04);
-  border-radius: 24px;
-  padding: 1.5rem;
+/* ── Operational Status Banner ──────────────────────────── */
+.statusBanner {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.statusLeft {
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.05);
-  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  position: relative;
-  overflow: hidden;
-  min-width: 0;
-  gap: 1.25rem;
+  gap: 0.35rem;
 }
-.card:hover {
-  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.08);
-  border-color: rgba(0, 0, 0, 0.08);
-  transform: translateY(-4px);
+
+.statusPillGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
-.cardLive  { }
-.cardDraft { }
 
-/* Top status strip removed per request */
-.cardTopStrip { display: none; }
+.termTag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface-2, #F1F5F9);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #E2E8F0);
+}
 
-/* Card header */
-.cardHeader {
+.roleTag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface-2, #F1F5F9);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.statusTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  margin: 0;
+}
+
+.statusSubtitle {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+}
+
+.bannerActions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* ── Section Title ──────────────────────────────────────── */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sectionTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.sectionCount {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+  font-family: var(--font-mono, monospace);
+}
+
+/* ── Course Grid ────────────────────────────────────────── */
+.courseGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.courseCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+  transition: all 150ms ease;
+}
+
+.courseCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.courseCardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.courseName {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  line-height: 1.3;
+}
+
+.codeBadge {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface-2, #F1F5F9);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.statusTag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.statusLive {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #CBD5E1);
+}
+
+.statusDraft {
+  background: transparent;
+  color: var(--color-muted, #64748B);
+  border: 1px dashed var(--color-border, #E2E8F0);
+}
+
+.courseMetaGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metaLabel {
+  font-size: 0.6875rem;
+  color: var(--color-muted, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metaValue {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.courseActions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.primaryActionBtn {
+  flex: 1;
+  text-align: center;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: var(--color-primary, #0F172A);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.primaryActionBtn:hover {
+  background: #1E293B;
+}
+
+.secondaryActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: all 120ms ease;
+}
+
+.secondaryActionBtn:hover {
+  background: var(--color-surface-2, #F8FAFC);
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+/* ── Report Cards / Submissions Strip ────────────────────── */
+.reportCardContainer {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.studentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.studentCard {
+  background: var(--color-surface-2, #F8FAFC);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-}
-.subjectIconBox {
-  width: 48px; height: 48px;
-  background: linear-gradient(135deg, rgba(15, 118, 110, 0.1), rgba(15, 118, 110, 0.05));
-  color: var(--color-primary);
-  border-radius: 16px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.1);
-}
-.cardLive .subjectIconBox {
-  background: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(5, 150, 105, 0.05));
-  color: var(--color-success);
-  box-shadow: 0 4px 10px rgba(5, 150, 105, 0.1);
+  cursor: pointer;
+  transition: all 120ms ease;
 }
 
-/* Card body */
-.cardBody {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
+.studentCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+  background: #FFFFFF;
 }
-.subjectName {
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: #0f172a;
-  line-height: 1.3;
-  letter-spacing: -0.02em;
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.codeRow { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.code {
-  font-size: 0.75rem;
-  color: #64748b;
-  background: #f1f5f9;
-  border: none;
-  padding: 0.25rem 0.6rem;
+
+.studentAvatar {
+  width: 32px;
+  height: 32px;
   border-radius: 6px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-/* Meta section */
-.meta { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem; }
-.metaRow {
-  display: flex; align-items: center; gap: 0.5rem;
-  font-size: 0.85rem; color: #475569; font-weight: 500;
-}
-.metaRow svg { flex-shrink: 0; opacity: 0.7; }
-
-/* Meta badges */
-.metaBadges { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
-.metaBadge {
-  display: inline-flex; align-items: center; gap: 0.35rem;
-  background: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.75rem; font-weight: 700; color: #334155;
-  transition: all 0.2s ease;
-}
-.metaBadge:hover { background: #f1f5f9; border-color: #cbd5e1; }
-
-/* Card footer actions */
-.cardActions {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-top: auto;
-}
-.actionRow { display: flex; gap: 0.75rem; }
-.actionBtn    { width: 100%; justify-content: center; font-size: 0.9rem; padding: 0.75rem; border-radius: 12px; }
-.actionBtnSm  { flex: 1; justify-content: center; font-size: 0.85rem; padding: 0.6rem; border-radius: 10px; background: #f8fafc; border: 1px solid #e2e8f0; color: #475569; font-weight: 600; }
-.actionBtnSm:hover { background: #f1f5f9; color: #0f172a; border-color: #cbd5e1; }
-
-/* ── Error state ──────────────────────────────────────── */
-.errorState {
-  display: flex; flex-direction: column; align-items: center;
-  gap: 1.25rem; padding: 4rem 2rem;
-  background: var(--color-danger-bg); color: var(--color-danger);
-  border-radius: var(--radius-xl);
-  border: 1.5px dashed var(--color-danger-border);
-  text-align: center; font-weight: 700; font-size: 1.125rem;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  color: var(--color-text, #0F172A);
 }
 
-/* ── Responsive ───────────────────────────────────────── */
-@media (max-width: 1280px) {
-  .grid { grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
-@media (max-width: 960px) {
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 1.25rem; }
-}
+
 @media (max-width: 640px) {
-  .grid { grid-template-columns: 1fr; gap: 1rem; }
-  .card { padding: 1.25rem; }
-  .pills { gap: 0.4rem; }
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
+  .statusBanner {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }

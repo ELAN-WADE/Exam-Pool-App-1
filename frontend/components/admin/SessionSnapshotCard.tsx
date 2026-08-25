@@ -1,19 +1,22 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { api } from "../../lib/api";
 import { useAcademic } from "../context/AcademicContext";
 import {
   CalendarIcon,
+  TrendingUpIcon,
+  RefreshIcon,
+  ChevronRightIcon,
+  CrownIcon,
+  SparklesIcon,
+  GraduationCapIcon,
   UsersIcon,
   BookIcon,
   DocumentIcon,
   CheckCircleIcon,
-  BarChartIcon,
-  RefreshIcon,
-  ChevronRightIcon,
 } from "../icons/Icons";
+import { ActiveGoldBadge } from "../ui/ActiveGoldBadge";
 
 interface TermStat {
   term_id: number;
@@ -60,7 +63,6 @@ export function SessionSnapshotCard() {
       const list: SessionSnapshot[] = res.snapshots || [];
       setSnapshots(list);
       if (list.length > 0 && !expandedSessionId) {
-        // Expand the active session or the first session by default
         const active = list.find((s) => s.is_active === 1) || list[0];
         setExpandedSessionId(active.session_id);
       }
@@ -86,62 +88,71 @@ export function SessionSnapshotCard() {
 
   return (
     <div style={{
-      background: "var(--color-surface)",
-      border: "1px solid var(--color-border)",
-      borderRadius: "var(--radius-xl, 14px)",
-      padding: "1.5rem",
-      marginBottom: "2rem",
-      boxShadow: "0 4px 20px rgba(0, 0, 0, 0.04)",
+      background: "var(--color-surface, #FFFFFF)",
+      border: "1px solid var(--color-border, #E2E8F0)",
+      borderRadius: "12px",
+      padding: "1.25rem",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.875rem",
     }}>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem" }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            <span style={{ fontSize: "1.3rem" }}>📊</span>
-            <h2 style={{ fontSize: "1.15rem", fontWeight: 800, margin: 0, color: "var(--color-text)" }}>
-              Session Snapshots & Academic Historical Stats
-            </h2>
-          </div>
-          <p style={{ color: "var(--color-muted)", fontSize: "0.825rem", margin: "0.25rem 0 0 0" }}>
-            Comprehensive performance analytics, promotion metrics, and term breakdowns across past and present sessions.
-          </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+          <span className="text-indigo-600 flex items-center">
+            <TrendingUpIcon width="16" height="16" />
+          </span>
+          <h2 style={{ fontSize: "0.9375rem", fontWeight: 600, margin: 0, color: "var(--color-text, #0F172A)", letterSpacing: "-0.01em" }}>
+            Session Analytics &amp; History
+          </h2>
         </div>
 
         <button
           onClick={fetchSnapshots}
-          className="btn btn-ghost btn-sm"
-          style={{ fontSize: "0.8rem" }}
+          style={{
+            fontSize: "0.6875rem",
+            fontWeight: 500,
+            padding: "0.25rem 0.55rem",
+            borderRadius: "6px",
+            border: "1px solid var(--color-border, #E2E8F0)",
+            background: "transparent",
+            color: "var(--color-muted, #64748B)",
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.3rem",
+          }}
           disabled={loading}
         >
-          <RefreshIcon width="14" height="14" /> Refresh
+          <RefreshIcon width="11" height="11" /> Refresh
         </button>
       </div>
 
       {loading && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "2.5rem 0", gap: "0.75rem", color: "var(--color-muted)" }}>
-          <div className="spinner" style={{ width: 20, height: 20 }} />
-          <span>Aggregating session metrics…</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "1.5rem 0", gap: "0.5rem", color: "var(--color-muted, #64748B)" }}>
+          <div className="spinner" style={{ width: 14, height: 14 }} />
+          <span style={{ fontSize: "0.75rem" }}>Aggregating session metrics…</span>
         </div>
       )}
 
       {error && (
-        <div style={{ padding: "0.85rem 1rem", borderRadius: "8px", background: "#fef2f2", color: "#dc2626", fontSize: "0.85rem", marginBottom: "1rem" }}>
+        <div style={{ padding: "0.625rem 0.875rem", borderRadius: "6px", background: "rgba(220, 38, 38, 0.05)", border: "1px solid rgba(220, 38, 38, 0.15)", color: "var(--color-danger, #DC2626)", fontSize: "0.75rem" }}>
           {error}
         </div>
       )}
 
       {!loading && !error && snapshots.length === 0 && (
-        <div style={{ textAlign: "center", padding: "2.5rem 1rem", color: "var(--color-muted)" }}>
-          <CalendarIcon width="36" height="36" style={{ opacity: 0.4, margin: "0 auto 0.75rem" }} />
-          <p style={{ fontWeight: 600, margin: 0 }}>No academic sessions registered yet.</p>
+        <div style={{ textAlign: "center", padding: "1.5rem 1rem", color: "var(--color-muted, #64748B)" }}>
+          <p style={{ fontWeight: 500, color: "var(--color-text, #0F172A)", margin: 0, fontSize: "0.8125rem" }}>No academic sessions registered</p>
         </div>
       )}
 
-      {/* Snapshots Grid */}
-      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      {/* Snapshots List */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
         {snapshots.map((snap) => {
           const isExpanded = expandedSessionId === snap.session_id;
           const isCurrentSelected = selectedSession?.id === snap.session_id;
+          const isSnapActive = snap.is_active === 1;
           const stats = snap.stats || {
             total_students: (snap as any).total_students_enrolled ?? 0,
             total_teachers: (snap as any).total_teachers_active ?? 0,
@@ -159,169 +170,206 @@ export function SessionSnapshotCard() {
             <div
               key={snap.session_id}
               style={{
-                border: isCurrentSelected ? "1.5px solid var(--color-primary)" : "1px solid var(--color-border)",
-                borderRadius: "12px",
-                background: "var(--color-surface-2)",
+                border: isSnapActive
+                  ? "1px solid var(--color-gold-border, rgba(202, 138, 4, 0.35))"
+                  : "1px solid var(--color-border, #E2E8F0)",
+                borderRadius: "8px",
+                background: "var(--color-surface, #FFFFFF)",
+                boxShadow: isSnapActive
+                  ? "0 2px 8px rgba(234, 179, 8, 0.08)"
+                  : "none",
                 overflow: "hidden",
-                transition: "all 0.2s ease",
               }}
             >
-              {/* Session Banner / Accordion Header */}
+              {/* Header Toggle */}
               <div
                 onClick={() => setExpandedSessionId(isExpanded ? null : snap.session_id)}
                 style={{
-                  padding: "1rem 1.25rem",
+                  padding: "0.65rem 0.875rem",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
                   cursor: "pointer",
                   userSelect: "none",
-                  background: isExpanded ? "rgba(99, 102, 241, 0.05)" : "transparent",
+                  background: isExpanded
+                    ? isSnapActive
+                      ? "rgba(254, 249, 195, 0.25)"
+                      : "var(--color-surface-2, #F8FAFC)"
+                    : "transparent",
                   flexWrap: "wrap",
-                  gap: "0.75rem",
+                  gap: "0.5rem",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-                  <span style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--color-text)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--color-text, #0F172A)" }}>
                     {snap.session_name}
                   </span>
 
-                  {snap.is_active === 1 && (
-                    <span className="badge badge-success" style={{ fontSize: "0.72rem", padding: "0.2rem 0.55rem" }}>
-                      Active School Session
-                    </span>
+                  {isSnapActive && (
+                    <ActiveGoldBadge
+                      type="session"
+                      label="Active Session"
+                      size="sm"
+                      glowing={true}
+                    />
                   )}
 
                   {isCurrentSelected && (
-                    <span className="badge badge-primary" style={{ fontSize: "0.72rem", padding: "0.2rem 0.55rem" }}>
-                      Currently Viewing
+                    <span style={{
+                      fontSize: "0.625rem",
+                      fontWeight: 500,
+                      padding: "0.1rem 0.35rem",
+                      borderRadius: "4px",
+                      background: "var(--color-surface-2, #F1F5F9)",
+                      color: "var(--color-muted, #64748B)",
+                    }}>
+                      Filtered
                     </span>
                   )}
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleFocusSession(snap.session_id);
-                    }}
-                    className={`btn btn-sm ${isCurrentSelected ? "btn-ghost" : "btn-primary"}`}
-                    style={{ fontSize: "0.75rem", padding: "0.25rem 0.65rem" }}
-                  >
-                    {isCurrentSelected ? "Filtered" : "Filter Dashboard View"}
-                  </button>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  {!isCurrentSelected && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFocusSession(snap.session_id);
+                      }}
+                      style={{
+                        fontSize: "0.6875rem",
+                        fontWeight: 500,
+                        padding: "0.2rem 0.45rem",
+                        borderRadius: "4px",
+                        border: "1px solid var(--color-border, #E2E8F0)",
+                        background: "var(--color-surface, #FFFFFF)",
+                        color: "var(--color-text, #0F172A)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Filter View
+                    </button>
+                  )}
 
-                  <span style={{ fontSize: "0.85rem", color: "var(--color-muted)", transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s ease" }}>
-                    ▶
-                  </span>
+                  <div style={{
+                    width: "16px",
+                    height: "16px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--color-muted-2, #94A3B8)",
+                    transform: isExpanded ? "rotate(90deg)" : "none",
+                    transition: "transform 150ms ease",
+                  }}>
+                    <ChevronRightIcon width="12" height="12" />
+                  </div>
                 </div>
               </div>
 
               {/* Collapsible Content */}
               {isExpanded && (
-                <div style={{ padding: "1.25rem", borderTop: "1px solid var(--color-border)", background: "var(--color-surface)" }}>
-                  {/* Metric Cards Row */}
+                <div style={{ padding: "0.875rem", borderTop: "1px solid var(--color-border, #E2E8F0)", background: "var(--color-surface, #FFFFFF)" }}>
+                  {/* Metric Chips */}
                   <div style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                    gap: "0.75rem",
-                    marginBottom: "1.25rem",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+                    gap: "0.5rem",
+                    marginBottom: "0.75rem",
                   }}>
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Students</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-primary)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Students</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.total_students ?? 0}
                       </div>
                     </div>
 
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Teachers</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-success)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Teachers</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.total_teachers ?? 0}
                       </div>
                     </div>
 
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Subjects</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-warning)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Subjects</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.total_subjects ?? 0}
                       </div>
                     </div>
 
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Exams Completed</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-purple)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Exams Done</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.completed_exams ?? 0}
                       </div>
                     </div>
 
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Avg Score</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-primary)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Avg Score</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.avg_exam_score != null ? `${stats.avg_exam_score}%` : "—"}
                       </div>
                     </div>
 
-                    <div style={{ padding: "0.75rem", borderRadius: "10px", background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
-                      <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", fontWeight: 600 }}>Report Cards</div>
-                      <div style={{ fontSize: "1.3rem", fontWeight: 800, color: "var(--color-text)", marginTop: "0.2rem" }}>
+                    <div style={{ padding: "0.5rem 0.65rem", borderRadius: "6px", background: "var(--color-surface-2, #F8FAFC)", border: "1px solid var(--color-border, #E2E8F0)" }}>
+                      <span style={{ fontSize: "0.625rem", color: "var(--color-muted, #64748B)", textTransform: "uppercase" }}>Report Cards</span>
+                      <div style={{ fontSize: "1rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)", marginTop: "0.15rem" }}>
                         {stats.report_cards_count ?? 0}
                       </div>
                     </div>
                   </div>
 
-                  {/* Promotion Stats & Term Breakdown */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
-                    {/* Promotion Breakdown */}
+                  {/* Promotion & Term Rows */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.625rem" }}>
+                    {/* Decisions */}
                     <div style={{
-                      padding: "1rem",
-                      borderRadius: "10px",
-                      background: "var(--color-surface-2)",
-                      border: "1px solid var(--color-border)",
+                      padding: "0.65rem",
+                      borderRadius: "6px",
+                      background: "var(--color-surface-2, #F8FAFC)",
+                      border: "1px solid var(--color-border, #E2E8F0)",
                     }}>
-                      <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.6rem", color: "var(--color-text)" }}>
-                        🎓 Annual Promotion & Decision Metrics
+                      <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "var(--color-muted, #64748B)", textTransform: "uppercase", marginBottom: "0.4rem" }}>
+                        Annual Decisions
                       </div>
-                      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                        <div style={{ flex: 1, minWidth: 70, textAlign: "center", padding: "0.5rem", borderRadius: "8px", background: "rgba(16, 185, 129, 0.1)" }}>
-                          <div style={{ fontSize: "0.72rem", color: "var(--color-success)", fontWeight: 700 }}>PROMOTED</div>
-                          <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--color-success)" }}>
+                      <div style={{ display: "flex", gap: "0.375rem" }}>
+                        <div style={{ flex: 1, textAlign: "center", padding: "0.35rem", borderRadius: "4px", background: "rgba(22, 163, 74, 0.06)", border: "1px solid rgba(22, 163, 74, 0.2)" }}>
+                          <div style={{ fontSize: "0.625rem", color: "#16A34A", fontWeight: 600 }}>Promoted</div>
+                          <div style={{ fontSize: "0.875rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "#16A34A" }}>
                             {stats.promoted_count ?? 0}
                           </div>
                         </div>
 
-                        <div style={{ flex: 1, minWidth: 70, textAlign: "center", padding: "0.5rem", borderRadius: "8px", background: "rgba(239, 68, 68, 0.1)" }}>
-                          <div style={{ fontSize: "0.72rem", color: "#dc2626", fontWeight: 700 }}>REPEATED</div>
-                          <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "#dc2626" }}>
+                        <div style={{ flex: 1, textAlign: "center", padding: "0.35rem", borderRadius: "4px", background: "rgba(220, 38, 38, 0.06)", border: "1px solid rgba(220, 38, 38, 0.2)" }}>
+                          <div style={{ fontSize: "0.625rem", color: "#DC2626", fontWeight: 600 }}>Repeated</div>
+                          <div style={{ fontSize: "0.875rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "#DC2626" }}>
                             {stats.repeated_count ?? 0}
                           </div>
                         </div>
 
-                        <div style={{ flex: 1, minWidth: 70, textAlign: "center", padding: "0.5rem", borderRadius: "8px", background: "rgba(99, 102, 241, 0.1)" }}>
-                          <div style={{ fontSize: "0.72rem", color: "var(--color-primary)", fontWeight: 700 }}>GRADUATED</div>
-                          <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "var(--color-primary)" }}>
+                        <div style={{ flex: 1, textAlign: "center", padding: "0.35rem", borderRadius: "4px", background: "rgba(79, 70, 229, 0.06)", border: "1px solid rgba(79, 70, 229, 0.2)" }}>
+                          <div style={{ fontSize: "0.625rem", color: "#4F46E5", fontWeight: 600 }}>Graduated</div>
+                          <div style={{ fontSize: "0.875rem", fontWeight: 700, fontFamily: "var(--font-mono, monospace)", color: "#4F46E5" }}>
                             {stats.graduated_count ?? 0}
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Terms Breakdown */}
+                    {/* Terms */}
                     <div style={{
-                      padding: "1rem",
-                      borderRadius: "10px",
-                      background: "var(--color-surface-2)",
-                      border: "1px solid var(--color-border)",
+                      padding: "0.65rem",
+                      borderRadius: "6px",
+                      background: "var(--color-surface-2, #F8FAFC)",
+                      border: "1px solid var(--color-border, #E2E8F0)",
                     }}>
-                      <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.6rem", color: "var(--color-text)" }}>
-                        📅 Term-by-Term Progress
+                      <div style={{ fontSize: "0.6875rem", fontWeight: 600, color: "var(--color-muted, #64748B)", textTransform: "uppercase", marginBottom: "0.4rem" }}>
+                        Term Breakdown
                       </div>
 
                       {termsList.length === 0 ? (
-                        <div style={{ fontSize: "0.8rem", color: "var(--color-muted)" }}>No terms recorded for this session.</div>
+                        <div style={{ fontSize: "0.6875rem", color: "var(--color-muted, #64748B)" }}>No terms recorded</div>
                       ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                           {termsList.map((t) => (
                             <div
                               key={t.term_id}
@@ -329,26 +377,22 @@ export function SessionSnapshotCard() {
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "space-between",
-                                padding: "0.4rem 0.6rem",
-                                borderRadius: "6px",
-                                background: "var(--color-surface)",
-                                border: "1px solid var(--color-border)",
-                                fontSize: "0.8rem",
+                                padding: "0.3rem 0.5rem",
+                                borderRadius: "4px",
+                                background: t.is_active ? "rgba(254, 249, 195, 0.35)" : "var(--color-surface, #FFFFFF)",
+                                border: t.is_active ? "1px solid var(--color-gold-border, rgba(202, 138, 4, 0.35))" : "1px solid var(--color-border, #E2E8F0)",
+                                fontSize: "0.6875rem",
                               }}
                             >
-                              <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                                <span style={{ fontWeight: 700 }}>{t.term_name}</span>
-                                {t.is_active === 1 && (
-                                  <span className="badge badge-success" style={{ fontSize: "0.65rem", padding: "0.1rem 0.35rem" }}>
-                                    Active
-                                  </span>
+                              <div className="flex items-center gap-1.5">
+                                {t.is_active && (
+                                  <SparklesIcon width="11" height="11" style={{ color: "#CA8A04" }} />
                                 )}
+                                <span style={{ fontWeight: 600, color: t.is_active ? "#B45309" : "var(--color-text, #0F172A)" }}>{t.term_name}</span>
                               </div>
-
-                              <div style={{ display: "flex", gap: "0.75rem", color: "var(--color-muted)", fontSize: "0.75rem" }}>
-                                <span>Exams: <strong style={{ color: "var(--color-text)" }}>{t.completed_exams ?? 0}</strong></span>
-                                <span>Avg: <strong style={{ color: "var(--color-primary)" }}>{t.avg_score != null ? `${t.avg_score}%` : "—"}</strong></span>
-                                <span>Cards: <strong style={{ color: "var(--color-text)" }}>{t.report_cards ?? 0}</strong></span>
+                              <div style={{ display: "flex", gap: "0.5rem", color: "var(--color-muted, #64748B)" }}>
+                                <span>Done: <strong style={{ fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)" }}>{t.completed_exams ?? 0}</strong></span>
+                                <span>Avg: <strong style={{ fontFamily: "var(--font-mono, monospace)", color: "var(--color-text, #0F172A)" }}>{t.avg_score != null ? `${t.avg_score}%` : "—"}</strong></span>
                               </div>
                             </div>
                           ))}

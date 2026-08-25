@@ -1,0 +1,191 @@
+/* ── Guardian My Children Mobile Screen Styles ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pageTitle {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #0F172A;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.addWardBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #165AF6;
+  color: #FFFFFF;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(22, 90, 246, 0.28);
+  transition: transform 140ms ease, background 140ms ease;
+  text-decoration: none;
+}
+
+.addWardBtn:hover {
+  background: #1248C8;
+  transform: scale(1.04);
+}
+
+.childrenList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.childCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 18px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  text-decoration: none;
+  color: inherit;
+}
+
+.childCard:hover {
+  border-color: #CBD5E1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+}
+
+.childCard:active {
+  transform: scale(0.985);
+}
+
+.childCardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.childIdentityGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.childAvatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #165AF6 0%, #0D47C9 100%);
+  color: #FFFFFF;
+  font-size: 1.125rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 2px solid #EFF4FF;
+}
+
+.childMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.childName {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.childClass {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #165AF6;
+}
+
+.childAdmission {
+  font-size: 0.6875rem;
+  color: #94A3B8;
+}
+
+.chevronIcon {
+  color: #94A3B8;
+  flex-shrink: 0;
+}
+
+/* 3-Column Metrics Row */
+.childMetricsRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid #F1F5F9;
+}
+
+.metricCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metricLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metricValue {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: #0F172A;
+}
+
+.metricSubtext {
+  font-size: 0.6875rem;
+  color: #059669;
+  font-weight: 600;
+}
+
+/* Quick Action Strip on Card */
+.quickActionsRow {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: -0.25rem;
+}
+
+.quickActionBtn {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #475569;
+  text-align: center;
+  text-decoration: none;
+  transition: all 140ms ease;
+}
+
+.quickActionBtn:hover {
+  background: #EFF4FF;
+  border-color: #DBEAFE;
+  color: #165AF6;
+}

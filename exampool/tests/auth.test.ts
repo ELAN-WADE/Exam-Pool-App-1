@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { apiGet, apiPost, apiPut, extractToken, json, login } from "./helpers";
+import { apiGet, apiPost, apiPut, extractToken, json, login, TEST_OPERATOR_EMAIL, TEST_OPERATOR_PASSWORD, TEST_OPERATOR_NAME } from "./helpers";
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -18,8 +18,6 @@ let studentUserId   = 0;
 let teacherUserId   = 0;
 const BASE_TS       = Date.now();
 
-const OP_EMAIL      = `op_auth_${BASE_TS}@exampool.test`;
-const OP_PASS       = "Operator@123";
 const STU_EMAIL     = `stu_auth_${BASE_TS}@exampool.test`;
 const STU_PASS      = "Student@123";
 const TCH_EMAIL     = `tch_auth_${BASE_TS}@exampool.test`;
@@ -28,7 +26,7 @@ const TCH_PASS      = "Teacher@123";
 beforeAll(async () => {
   // Bootstrap operator via setup (idempotent — skip if 403)
   const setupRes = await apiPost("/api/setup", {
-    name: "Auth Test Op", email: OP_EMAIL, password: OP_PASS,
+    name: TEST_OPERATOR_NAME, email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD,
     schoolName: "QA School", currentTerm: "2026-T1",
   });
   if (setupRes.status === 201) {
@@ -36,7 +34,7 @@ beforeAll(async () => {
     operatorToken = extractToken(setupRes, body);
   } else {
     // Already configured — login
-    const loginRes = await apiPost("/api/auth/login", { email: OP_EMAIL, password: OP_PASS });
+    const loginRes = await apiPost("/api/auth/login", { email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD });
     const body = await json(loginRes);
     operatorToken = extractToken(loginRes, body);
   }

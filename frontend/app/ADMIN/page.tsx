@@ -9,7 +9,7 @@ function AdminLoginHero() {
     <div className={styles.heroPanl}>
       <div className={styles.heroBrand}>
         <div className={styles.heroBrandIcon}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
             <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
           </svg>
         </div>
@@ -21,8 +21,22 @@ function AdminLoginHero() {
           System<br />Administration.
         </h2>
         <p className={styles.heroSub}>
-          Welcome to the Admin Portal. Manage users, network settings, system configurations, and subjects from the local server.
+          Central control for school academic calendars, user management, timetables, and system settings.
         </p>
+      </div>
+
+      <div className={styles.heroFeatures}>
+        {[
+          "Master curriculum & timetable control",
+          "Form & Class Teacher assignments",
+          "Automated grading configurations",
+          "Network telemetry & host server controls",
+        ].map((f) => (
+          <div key={f} className={styles.heroFeatureItem}>
+            <span className={styles.heroFeatureDot} />
+            {f}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -36,9 +50,19 @@ export default function AdminPage() {
       </div>
     }>
       <main className={styles.page}>
-        <AdminLoginHero />
-        <div className={styles.formPanl}>
-          <LoginForm expectedRole="operator" />
+        <div className={styles.authContainer}>
+          <AdminLoginHero />
+          <div className={styles.formPanl}>
+            <div className={styles.mobileBrand}>
+              <div className={styles.heroBrandIcon}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                </svg>
+              </div>
+              <span className={styles.heroBrandName}>ExamPool</span>
+            </div>
+            <LoginForm expectedRole="operator" />
+          </div>
         </div>
       </main>
     </Suspense>

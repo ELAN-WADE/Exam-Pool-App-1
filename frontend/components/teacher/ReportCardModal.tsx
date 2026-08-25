@@ -699,7 +699,7 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                         {cumRows.map((r, i) => {
                           const cumPct = r.cumulative_avg ?? 0;
                           const cumGrade = letterGrade(cumPct);
-                          const gradeCol = cumPct >= 70 ? "#059669" : cumPct >= 40 ? "#d97706" : "#dc2626";
+                          const gradeCol = cumPct >= 75 ? "#059669" : cumPct >= 40 ? "#d97706" : "#dc2626";
                           return (
                             <tr key={r.code} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
                               <td style={{ padding: "2mm 3mm", borderBottom: "1pt solid #e2e8f0", fontWeight: 600, fontSize: "8pt" }}>{r.subject_name}</td>
@@ -720,7 +720,7 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                           <tr style={{ background: "#f1f5f9", color: "#0f172a" }}>
                             <td colSpan={7} style={{ padding: "2mm 3mm", fontWeight: 800, textTransform: "uppercase", fontSize: "8pt" }}>Cumulative Average</td>
                             <td style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 900, fontSize: "9pt", color: "#0f766e" }}>{overallCumAvg}%</td>
-                            <td style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 900, fontSize: "9pt", color: overallCumAvg >= 70 ? "#059669" : overallCumAvg >= 40 ? "#d97706" : "#dc2626" }}>{overallCumGrade}</td>
+                            <td style={{ padding: "2mm 3mm", textAlign: "center", fontWeight: 900, fontSize: "9pt", color: overallCumAvg >= 75 ? "#059669" : overallCumAvg >= 40 ? "#d97706" : "#dc2626" }}>{overallCumGrade}</td>
                           </tr>
                         </tfoot>
                       )}
@@ -743,7 +743,7 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                       {selectedList.map((e, i) => {
                         const pct = scorePct(e.score, e.total_score);
                         const grade = letterGrade(pct);
-                        const gradeCol = pct >= 70 ? "#059669" : pct >= 40 ? "#d97706" : "#dc2626";
+                        const gradeCol = pct >= 75 ? "#059669" : pct >= 40 ? "#d97706" : "#dc2626";
                         return (
                           <tr key={e.exam_id} style={{ background: i % 2 === 0 ? "#fff" : "#f8fafc" }}>
                             <td style={{ padding: "3mm 4mm", borderBottom: "1pt solid #e2e8f0", fontWeight: 600 }}>{e.subject_name}</td>
@@ -761,7 +761,7 @@ export function ReportCardModal({ student, onClose }: { student: any; onClose: (
                         <tr style={{ background: "#f1f5f9", color: "#0f172a" }}>
                           <td colSpan={3} style={{ padding: "3mm 4mm", fontWeight: 800, textTransform: "uppercase", fontSize: "9pt" }}>Overall Average</td>
                           <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: "#0f766e" }}>{avgPct}%</td>
-                          <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: avgPct >= 70 ? "#059669" : avgPct >= 40 ? "#d97706" : "#dc2626" }}>{letterGrade(avgPct)}</td>
+                          <td style={{ padding: "3mm 4mm", textAlign: "center", fontWeight: 900, fontSize: "11pt", color: avgPct >= 75 ? "#059669" : avgPct >= 40 ? "#d97706" : "#dc2626" }}>{letterGrade(avgPct)}</td>
                           <td />
                         </tr>
                       </tfoot>

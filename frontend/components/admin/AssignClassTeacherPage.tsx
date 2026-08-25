@@ -4,7 +4,9 @@ import React, { useEffect, useState, FormEvent, useMemo } from "react";
 import { api } from "../../lib/api";
 import { User } from "../../lib/types";
 import { Modal } from "../ui/Modal";
-import { UsersIcon, WarningIcon } from "../icons/Icons";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { PageHeader, Tabs, Button } from "../ui";
+import { UsersIcon, SearchIcon, CheckCircleIcon, WarningIcon } from "../icons/Icons";
 import styles from "./AssignClassTeacherPage.module.css";
 
 const STANDARDIZED_GRADES = [
@@ -15,11 +17,11 @@ const STANDARDIZED_GRADES = [
   "ND 1", "ND 2", "HND 1", "HND 2"
 ];
 
-function getGradeCategory(gradeName: string): { label: string; key: "primary" | "junior" | "senior" | "higher"; badgeClass: string } {
-  if (gradeName.startsWith("Primary")) return { label: "Primary", key: "primary", badgeClass: styles.badgePrimary };
-  if (gradeName.startsWith("JSS")) return { label: "Junior Secondary", key: "junior", badgeClass: styles.badgeJunior };
-  if (gradeName.startsWith("SS")) return { label: "Senior Secondary", key: "senior", badgeClass: styles.badgeSenior };
-  return { label: "Higher Institution", key: "higher", badgeClass: styles.badgeHigher };
+function getGradeCategory(gradeName: string): { label: string; key: "primary" | "junior" | "senior" | "higher" } {
+  if (gradeName.startsWith("Primary")) return { label: "Primary", key: "primary" };
+  if (gradeName.startsWith("JSS")) return { label: "Junior Secondary", key: "junior" };
+  if (gradeName.startsWith("SS")) return { label: "Senior Secondary", key: "senior" };
+  return { label: "Higher Institution", key: "higher" };
 }
 
 export function AssignClassTeacherPage() {
@@ -28,7 +30,7 @@ export function AssignClassTeacherPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<"classes" | "history">("classes");
+  const [activeTab, setActiveTab] = useState<string>("classes");
 
   // Filtering
   const [selectedTier, setSelectedTier] = useState<string>("all");
@@ -42,13 +44,15 @@ export function AssignClassTeacherPage() {
   const [assignmentNotes, setAssignmentNotes] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
-  // Toast
+  // Toast / Feedback
   const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const showToast = (type: "success" | "error", text: string) => {
     setToast({ type, text });
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), 3500);
   };
+
+  const [confirmState, setConfirmState] = useState<{ open: boolean; title: string; message: string; onConfirm: () => void } | null>(null);
 
   const loadData = async () => {
     try {
@@ -60,7 +64,7 @@ export function AssignClassTeacherPage() {
       setClasses(classList || []);
       setTeachers(teacherList || []);
     } catch (err: any) {
-      showToast("error", err.message || "Failed to load class data");
+      showToast("error", err.message || "Failed to load class roster");
     } finally {
       setLoading(false);
     }
@@ -72,7 +76,7 @@ export function AssignClassTeacherPage() {
       const res = await api.getClassTeacherAssignmentHistory();
       setHistory(res || []);
     } catch (err: any) {
-      showToast("error", err.message || "Failed to load assignment history");
+      showToast("error", err.message || "Failed to load audit history");
     } finally {
       setHistoryLoading(false);
     }
@@ -88,7 +92,7 @@ export function AssignClassTeacherPage() {
     }
   }, [activeTab]);
 
-  // Standardized unique classes (deduplicated)
+  // Deduplicated standardized classes
   const standardizedClasses = useMemo(() => {
     const seen = new Set<string>();
     return classes
@@ -101,7 +105,6 @@ export function AssignClassTeacherPage() {
       .sort((a: any, b: any) => STANDARDIZED_GRADES.indexOf(a.name) - STANDARDIZED_GRADES.indexOf(b.name));
   }, [classes]);
 
-  // Stats calculation
   const totalClasses = standardizedClasses.length;
   const assignedCount = standardizedClasses.filter((c) => c.class_teacher_id).length;
   const unassignedCount = totalClasses - assignedCount;
@@ -150,21 +153,28 @@ export function AssignClassTeacherPage() {
     }
   };
 
-  const handleQuickUnassign = async (cls: any) => {
-    if (!confirm(`Are you sure you want to unassign ${cls.class_teacher_name} from ${cls.name}?`)) return;
-    try {
-      setSaving(true);
-      await api.assignClassTeacher(cls.id, null, "Quick unassign via class card");
-      showToast("success", `Unassigned class teacher for ${cls.name}`);
-      await loadData();
-    } catch (err: any) {
-      showToast("error", err.message || "Failed to unassign class teacher");
-    } finally {
-      setSaving(false);
-    }
+  const handleQuickUnassign = (cls: any) => {
+    setConfirmState({
+      open: true,
+      title: "Unassign Class Teacher?",
+      message: `Unassign ${cls.class_teacher_name} from ${cls.name}?`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          setSaving(true);
+          await api.assignClassTeacher(cls.id, null, "Direct unassignment");
+          showToast("success", `Unassigned class teacher for ${cls.name}`);
+          await loadData();
+        } catch (err: any) {
+          showToast("error", err.message || "Failed to unassign class teacher");
+        } finally {
+          setSaving(false);
+        }
+      },
+    });
   };
 
-  // Find if currently selected teacher in modal is already assigned to a different class
+  // Detect conflict
   const existingTeacherClass = useMemo(() => {
     if (!selectedTeacherId || !selectedClass) return null;
     const tid = Number(selectedTeacherId);
@@ -172,364 +182,337 @@ export function AssignClassTeacherPage() {
   }, [selectedTeacherId, selectedClass, standardizedClasses]);
 
   return (
-    <div className={styles.pageWrapper}>
+    <div className={styles.container}>
+      <ConfirmDialog
+        open={Boolean(confirmState?.open)}
+        onClose={() => setConfirmState(null)}
+        onConfirm={() => confirmState?.onConfirm()}
+        title={confirmState?.title || ""}
+        message={confirmState?.message || ""}
+      />
+
       {toast && (
-        <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>
+        <div style={{
+          position: "fixed",
+          bottom: "1.5rem",
+          right: "1.5rem",
+          zIndex: 50,
+          padding: "0.6rem 1rem",
+          borderRadius: "8px",
+          fontSize: "0.8125rem",
+          fontWeight: 600,
+          background: "var(--color-text, #0F172A)",
+          color: "#FFFFFF",
+          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.15)",
+        }}>
           {toast.text}
         </div>
       )}
 
-      {/* Header */}
-      <div className="pageHeader">
-        <div>
-          <h1 className="pageTitle">Class Teachers Management</h1>
-          <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem", margin: "0.25rem 0 0 0" }}>
-            Assign authorized class teachers to standardized grades. Only class teachers can generate cumulative term report cards and evaluate broad class performance.
-          </p>
-        </div>
-      </div>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Academic Structure"
+        title="Class Teachers"
+        subtitle="Authorize faculty members to oversee class cohorts, broadsheets, and cumulative report cards."
+      />
 
-      {/* Stats Grid */}
-      <div className={styles.statsGrid}>
+      {/* ── Minimalist KPI Metrics Row ──────────────────────── */}
+      <section className={styles.statsGrid}>
         <div className={styles.statCard}>
-          <div className={`${styles.statIcon} ${styles.statIconPrimary}`}>
-            <UsersIcon width="24" height="24" />
-          </div>
-          <div className={styles.statContent}>
-            <span className={styles.statValue}>{totalClasses}</span>
+          <div className={styles.statTop}>
             <span className={styles.statLabel}>Standard Classes</span>
+            <div className={styles.statIcon} style={{ color: "#3B82F6" }}><UsersIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{totalClasses}</div>
+            <div className={styles.statFootnote}>Curriculum grade levels</div>
           </div>
         </div>
 
         <div className={styles.statCard}>
-          <div className={`${styles.statIcon} ${styles.statIconSuccess}`}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </div>
-          <div className={styles.statContent}>
-            <span className={styles.statValue}>{assignedCount}</span>
+          <div className={styles.statTop}>
             <span className={styles.statLabel}>Assigned Classes</span>
+            <div className={styles.statIcon} style={{ color: "#10B981" }}><CheckCircleIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{assignedCount}</div>
+            <div className={styles.statFootnote}>Active faculty appointed</div>
           </div>
         </div>
 
         <div className={styles.statCard}>
-          <div className={`${styles.statIcon} ${styles.statIconWarning}`}>
-            <WarningIcon width="24" height="24" />
-          </div>
-          <div className={styles.statContent}>
-            <span className={styles.statValue}>{unassignedCount}</span>
+          <div className={styles.statTop}>
             <span className={styles.statLabel}>Unassigned Classes</span>
+            <div className={styles.statIcon} style={{ color: "#F97316" }}><WarningIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{unassignedCount}</div>
+            <div className={styles.statFootnote}>Pending appointment</div>
           </div>
         </div>
+      </section>
 
-        <div className={styles.statCard}>
-          <div className={`${styles.statIcon} ${styles.statIconInfo}`}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 00-3-3.87" />
-              <path d="M16 3.13a4 4 0 010 7.75" />
-            </svg>
-          </div>
-          <div className={styles.statContent}>
-            <span className={styles.statValue}>{teachers.length}</span>
-            <span className={styles.statLabel}>Active Teachers</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className={styles.tabsContainer}>
-        <button
-          className={`${styles.tabButton} ${activeTab === "classes" ? styles.tabButtonActive : ""}`}
-          onClick={() => setActiveTab("classes")}
-        >
-          Classes & Assignments ({totalClasses})
-        </button>
-        <button
-          className={`${styles.tabButton} ${activeTab === "history" ? styles.tabButtonActive : ""}`}
-          onClick={() => setActiveTab("history")}
-        >
-          Assignment Audit History
-        </button>
-      </div>
+      {/* ── Navigation Tabs ────────────────────────────────── */}
+      <Tabs
+        tabs={[
+          { id: "classes", label: "Classes Matrix", count: totalClasses },
+          { id: "history", label: "Assignment Audit History" },
+        ]}
+        activeTab={activeTab}
+        onChange={setActiveTab}
+      />
 
       {activeTab === "classes" ? (
         <>
-          {/* Controls / Filter Bar */}
-          <div className={styles.controlsRow}>
-            <div className={styles.categoryPills}>
-              <button
-                className={`${styles.pillBtn} ${selectedTier === "all" ? styles.pillBtnActive : ""}`}
-                onClick={() => setSelectedTier("all")}
-              >
-                All Grades
-              </button>
-              <button
-                className={`${styles.pillBtn} ${selectedTier === "primary" ? styles.pillBtnActive : ""}`}
-                onClick={() => setSelectedTier("primary")}
-              >
-                Primary (1-6)
-              </button>
-              <button
-                className={`${styles.pillBtn} ${selectedTier === "junior" ? styles.pillBtnActive : ""}`}
-                onClick={() => setSelectedTier("junior")}
-              >
-                Junior Sec (JSS 1-3)
-              </button>
-              <button
-                className={`${styles.pillBtn} ${selectedTier === "senior" ? styles.pillBtnActive : ""}`}
-                onClick={() => setSelectedTier("senior")}
-              >
-                Senior Sec (SS 1-3)
-              </button>
-              <button
-                className={`${styles.pillBtn} ${selectedTier === "higher" ? styles.pillBtnActive : ""}`}
-                onClick={() => setSelectedTier("higher")}
-              >
-                Tertiary & Higher
-              </button>
+          {/* ── Filter Strip ─────────────────────────────────── */}
+          <div className={styles.filterStrip}>
+            <div className={styles.searchBox}>
+              <SearchIcon width="14" height="14" className={styles.searchIcon} />
+              <input
+                type="text"
+                placeholder="Search class or faculty name…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className={styles.searchInput}
+              />
             </div>
 
-            <div className={styles.searchFilters}>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
               <select
-                className="select"
+                value={selectedTier}
+                onChange={(e) => setSelectedTier(e.target.value)}
+                className={styles.selectFilter}
+              >
+                <option value="all">All Education Tiers</option>
+                <option value="primary">Primary (Grades 1-6)</option>
+                <option value="junior">Junior Secondary (JSS 1-3)</option>
+                <option value="senior">Senior Secondary (SS 1-3)</option>
+                <option value="higher">Higher Institution (100L-600L)</option>
+              </select>
+
+              <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                style={{ width: "160px" }}
+                className={styles.selectFilter}
               >
                 <option value="all">All Statuses</option>
                 <option value="assigned">Assigned Only</option>
                 <option value="unassigned">Unassigned Only</option>
               </select>
-
-              <div className={styles.searchInput}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-                <input
-                  type="text"
-                  placeholder="Search class or teacher…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="input"
-                />
-              </div>
             </div>
           </div>
 
-          {/* Classes Cards Grid */}
-          {loading ? (
-            <div className="loadingWrap"><div className="spinner" /></div>
-          ) : filteredClasses.length === 0 ? (
-            <div className={styles.emptyHistory}>
-              <UsersIcon width="48" height="48" />
-              <p>No classes match your search or filter criteria.</p>
-            </div>
-          ) : (
-            <div className={styles.classesGrid}>
-              {filteredClasses.map((cls) => {
-                const cat = getGradeCategory(cls.name);
-                const hasTeacher = Boolean(cls.class_teacher_id);
-                return (
-                  <div key={cls.id} className={styles.classCard}>
-                    <div>
-                      <div className={styles.cardHeader}>
-                        <h3 className={styles.className}>{cls.name}</h3>
-                        <span className={`${styles.classBadge} ${cat.badgeClass}`}>
-                          {cat.label}
-                        </span>
-                      </div>
-
-                      <div className={styles.teacherBox} style={{ marginTop: "1rem" }}>
-                        <div className={`${styles.teacherAvatar} ${!hasTeacher ? styles.teacherAvatarUnassigned : ""}`}>
-                          {hasTeacher ? (
-                            cls.class_teacher_name
-                              ? cls.class_teacher_name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase()
-                              : "CT"
-                          ) : (
-                            "?"
-                          )}
-                        </div>
-                        <div className={styles.teacherInfo}>
-                          {hasTeacher ? (
-                            <>
-                              <span className={styles.teacherName}>{cls.class_teacher_name}</span>
-                              <span className={styles.teacherMeta}>{cls.class_teacher_email || "Class Teacher"}</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className={styles.teacherName}>Unassigned</span>
-                              <span className={styles.unassignedText}>No class teacher assigned</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className={styles.cardFooter}>
-                      <span className={styles.studentCount}>
-                        👥 {cls.enrolled_students_count ?? 0} Students
-                      </span>
-                      <div className={styles.cardActions}>
-                        {hasTeacher && (
-                          <button
-                            className="btn btn-ghost btn-sm"
-                            onClick={() => handleQuickUnassign(cls)}
-                            title="Unassign Teacher"
-                            style={{ color: "var(--color-danger, #ef4444)" }}
-                          >
-                            Unassign
-                          </button>
-                        )}
-                        <button
-                          className={`btn ${hasTeacher ? "btn-secondary" : "btn-primary"} btn-sm`}
-                          onClick={() => openAssignModal(cls)}
-                        >
-                          {hasTeacher ? "Change Teacher" : "Assign Teacher"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
-      ) : (
-        /* History Tab */
-        <div className={styles.historyTableCard}>
-          {historyLoading ? (
-            <div className="loadingWrap" style={{ padding: "3rem" }}><div className="spinner" /></div>
-          ) : history.length === 0 ? (
-            <div className={styles.emptyHistory}>
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              <p>No class teacher assignment activity recorded yet.</p>
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table className={styles.historyTable}>
+          {/* ── Structured Directory Table ───────────────────── */}
+          <div className={styles.tableCard}>
+            <div className={styles.tableWrapper}>
+              <table className={styles.tbl}>
                 <thead>
                   <tr>
-                    <th>Date & Time</th>
-                    <th>Class</th>
-                    <th>Teacher</th>
-                    <th>Action</th>
-                    <th>Assigned By</th>
-                    <th>Notes</th>
+                    <th>Class / Level</th>
+                    <th>Tier</th>
+                    <th>Assigned Faculty</th>
+                    <th>Status</th>
+                    <th style={{ textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((h) => {
-                    const actionClass =
-                      h.action === "assigned"
-                        ? styles.actionAssigned
-                        : h.action === "reassigned"
-                        ? styles.actionReassigned
-                        : styles.actionUnassigned;
-                    return (
-                      <tr key={h.id}>
-                        <td>{new Date(h.assigned_at).toLocaleString()}</td>
-                        <td><strong>{h.class_name}</strong></td>
-                        <td>{h.teacher_name ? `${h.teacher_name} (${h.teacher_email || ""})` : <span style={{ color: "#94a3b8" }}>— None —</span>}</td>
-                        <td><span className={`${styles.actionBadge} ${actionClass}`}>{h.action}</span></td>
-                        <td>{h.assigned_by_name || "System Admin"}</td>
-                        <td style={{ color: "var(--color-text-muted)", fontSize: "0.82rem" }}>{h.notes || "—"}</td>
-                      </tr>
-                    );
-                  })}
+                  {loading ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)" }}>
+                        Loading class assignments…
+                      </td>
+                    </tr>
+                  ) : filteredClasses.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)" }}>
+                        No classes match the selected filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredClasses.map((cls) => {
+                      const cat = getGradeCategory(cls.name);
+                      const isAssigned = Boolean(cls.class_teacher_id);
+
+                      return (
+                        <tr key={cls.id}>
+                          <td>
+                            <span className={styles.className}>{cls.name}</span>
+                          </td>
+                          <td>
+                            <span className={styles.tierTag}>{cat.label}</span>
+                          </td>
+                          <td>
+                            {isAssigned ? (
+                              <div>
+                                <div className={styles.teacherName}>{cls.class_teacher_name}</div>
+                                <div className={styles.teacherEmail}>{cls.class_teacher_email}</div>
+                              </div>
+                            ) : (
+                              <span style={{ color: "var(--color-muted, #64748B)", fontSize: "0.75rem", fontStyle: "italic" }}>
+                                Not Assigned
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            <span className={`${styles.statusPill} ${isAssigned ? styles.statusAssigned : styles.statusUnassigned}`}>
+                              {isAssigned ? "Assigned" : "Unassigned"}
+                            </span>
+                          </td>
+                          <td>
+                            <div className={styles.actionsCell}>
+                              <button
+                                type="button"
+                                className={styles.actionBtn}
+                                onClick={() => openAssignModal(cls)}
+                              >
+                                {isAssigned ? "Reassign" : "Assign"}
+                              </button>
+                              {isAssigned && (
+                                <button
+                                  type="button"
+                                  className={styles.unassignBtn}
+                                  onClick={() => handleQuickUnassign(cls)}
+                                >
+                                  Unassign
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </>
+      ) : (
+        /* ── Audit History Tab ──────────────────────────────── */
+        <div className={styles.tableCard}>
+          {historyLoading ? (
+            <div style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)", fontSize: "0.8125rem" }}>
+              Loading audit logs…
+            </div>
+          ) : history.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)", fontSize: "0.8125rem" }}>
+              No assignment changes recorded yet.
+            </div>
+          ) : (
+            <div>
+              {history.map((log) => (
+                <div key={log.id} className={styles.auditItem}>
+                  <div>
+                    <span style={{ fontWeight: 600, color: "var(--color-text, #0F172A)" }}>{log.class_name}</span>
+                    {" → "}
+                    <span style={{ fontWeight: 600 }}>{log.teacher_name || "Unassigned"}</span>
+                    {log.notes && (
+                      <div style={{ color: "var(--color-muted, #64748B)", fontSize: "0.75rem", marginTop: "0.15rem" }}>
+                        {log.notes}
+                      </div>
+                    )}
+                  </div>
+                  <div className={styles.auditMeta}>
+                    {new Date(log.created_at).toLocaleString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* ── Assign / Reassign Modal ── */}
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="md">
-        <h2>{selectedClass?.class_teacher_id ? "Change Class Teacher" : "Assign Class Teacher"}</h2>
-        {selectedClass && (
-          <form onSubmit={handleSaveAssignment} className={styles.modalForm}>
-            <div className={styles.classSummaryBanner}>
-              <div>
-                <strong>Class: </strong> {selectedClass.name}
-              </div>
-              <div>
-                <strong>Current: </strong> {selectedClass.class_teacher_name || "Unassigned"}
-              </div>
-            </div>
+      {/* ── MODAL: ASSIGN CLASS TEACHER ─────────────────────── */}
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={`Assign Class Teacher: ${selectedClass?.name || ""}`}
+        size="md"
+      >
+        <form onSubmit={handleSaveAssignment} style={{ display: "flex", flexDirection: "column", gap: "1.125rem" }}>
+          <p style={{ fontSize: "0.8125rem", color: "var(--color-muted, #64748B)", margin: 0, lineHeight: 1.4 }}>
+            Appoint a faculty member responsible for <strong>{selectedClass?.name}</strong> term broadsheets and report card remarks.
+          </p>
 
-            <div className="field">
-              <label>Select Teacher *</label>
-              {teachers.length === 0 ? (
-                <div className={styles.warningBox}>
-                  <WarningIcon width="16" height="16" /> No active teachers registered in the system.
-                </div>
-              ) : (
-                <select
-                  className="select"
-                  value={selectedTeacherId}
-                  onChange={(e) => setSelectedTeacherId(e.target.value)}
-                >
-                  <option value="">— Unassign / No Teacher —</option>
-                  {teachers.map((t) => {
-                    const otherClass = standardizedClasses.find(
-                      (c) => c.class_teacher_id === t.id && c.id !== selectedClass.id
-                    );
-                    const tag = otherClass ? ` (already class teacher for ${otherClass.name})` : "";
-                    return (
-                      <option key={t.id} value={t.id}>
-                        {t.name} — {t.email} {tag}
-                      </option>
-                    );
-                  })}
-                </select>
-              )}
-            </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--color-text, #0F172A)" }}>
+              Faculty Member
+            </label>
+            <select
+              style={{
+                width: "100%",
+                padding: "0.5rem 0.75rem",
+                fontSize: "0.8125rem",
+                color: "var(--color-text, #0F172A)",
+                background: "var(--color-surface, #FFFFFF)",
+                border: "1px solid var(--color-border, #CBD5E1)",
+                borderRadius: "6px",
+                outline: "none",
+              }}
+              value={selectedTeacherId}
+              onChange={(e) => setSelectedTeacherId(e.target.value)}
+            >
+              <option value="">-- No Teacher (Unassigned) --</option>
+              {teachers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.email})
+                </option>
+              ))}
+            </select>
+          </div>
 
-            {existingTeacherClass && (
-              <div className={styles.warningBox}>
-                <WarningIcon width="16" height="16" />
-                <span>
-                  <strong>Note:</strong> This teacher is currently the class teacher for <strong>{existingTeacherClass.name}</strong>. Assigning them here will automatically unassign them from {existingTeacherClass.name}.
-                </span>
-              </div>
-            )}
-
-            <div className="field">
-              <label>Assignment Notes (Optional)</label>
-              <input
-                type="text"
-                className="input"
-                placeholder="e.g. Assigned for 2026 Academic Session"
-                value={assignmentNotes}
-                onChange={(e) => setAssignmentNotes(e.target.value)}
-              />
+          {existingTeacherClass && (
+            <div className={styles.conflictNotice}>
+              <strong>Note:</strong> This teacher is already assigned as the Class Teacher for <strong>{existingTeacherClass.name}</strong>. Assigning them here will transfer their role to {selectedClass?.name}.
             </div>
+          )}
 
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => setModalOpen(false)}
-                disabled={saving}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={saving}
-              >
-                {saving ? "Saving…" : selectedTeacherId ? "Confirm Assignment" : "Unassign Teacher"}
-              </button>
-            </div>
-          </form>
-        )}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--color-text, #0F172A)" }}>
+              Directive / Notes (Optional)
+            </label>
+            <textarea
+              rows={2}
+              style={{
+                width: "100%",
+                padding: "0.5rem 0.75rem",
+                fontSize: "0.8125rem",
+                color: "var(--color-text, #0F172A)",
+                background: "var(--color-surface, #FFFFFF)",
+                border: "1px solid var(--color-border, #CBD5E1)",
+                borderRadius: "6px",
+                outline: "none",
+                resize: "none",
+              }}
+              placeholder="e.g. Appointed for 2026/2027 academic session…"
+              value={assignmentNotes}
+              onChange={(e) => setAssignmentNotes(e.target.value)}
+            />
+          </div>
+
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: "0.625rem",
+            paddingTop: "1rem",
+            borderTop: "1px solid var(--color-border, #E2E8F0)",
+            marginTop: "0.5rem",
+          }}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" size="sm" loading={saving}>
+              Confirm Assignment
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

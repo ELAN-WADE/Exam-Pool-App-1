@@ -23,12 +23,18 @@ export default function RegisterPage() {
   const [successRegId, setSuccessRegId] = useState("");
 
   useEffect(() => {
+    const controller = new AbortController();
     api.getGradeLevels().then((res) => {
-      setGradeLevels(res.grades || []);
-      if (res.grades?.length > 0) {
-        setGradeLevelId(String(res.grades[0].id));
+      if (!controller.signal.aborted) {
+        setGradeLevels(res.grades || []);
+        if (res.grades?.length > 0) {
+          setGradeLevelId(String(res.grades[0].id));
+        }
       }
-    }).catch(console.error);
+    }).catch(err => {
+      if (!controller.signal.aborted) console.error(err);
+    });
+    return () => controller.abort();
   }, []);
 
   const onSubmit = async (e: FormEvent) => {

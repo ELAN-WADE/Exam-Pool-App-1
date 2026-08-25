@@ -14,11 +14,11 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { apiGet, apiPost, apiPut, extractToken, json } from "./helpers";
+import { apiGet, apiPost, apiPut, extractToken, json, TEST_OPERATOR_EMAIL, TEST_OPERATOR_PASSWORD, TEST_OPERATOR_NAME } from "./helpers";
 
 const N_CLIENTS    = 50;
 const BASE_TS      = Date.now();
-const EXAM_START   = new Date(Date.now() - 60_000).toISOString(); // already started
+const EXAM_START   = new Date(Date.now() - 30_000).toISOString(); // already started (within 1-min grace)
 
 let operatorToken  = "";
 let teacherId      = 0;
@@ -34,13 +34,13 @@ const clients: Array<{ token: string; userId: number; examId: number }> = [];
 beforeAll(async () => {
   // Operator
   const setupRes = await apiPost("/api/setup", {
-    name: "Concur Op", email: `op_concur_${BASE_TS}@q.test`,
-    password: "Operator@123", schoolName: "Load School", currentTerm: "2026-T1",
+    name: TEST_OPERATOR_NAME, email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD,
+    schoolName: "Load School", currentTerm: "2026-T1",
   });
   if (setupRes.status === 201) {
     operatorToken = extractToken(setupRes, await json(setupRes));
   } else {
-    const lr = await apiPost("/api/auth/login", { email: `op_concur_${BASE_TS}@q.test`, password: "Operator@123" });
+    const lr = await apiPost("/api/auth/login", { email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD });
     operatorToken = extractToken(lr, await json(lr));
   }
 
@@ -294,9 +294,11 @@ describe("T-240  Mixed read/write concurrent load", () => {
     const tl = await apiPost("/api/auth/login", { email: email2, password: "Teacher@123" });
     const t2token = extractToken(tl, await json(tl));
 
+    // Use a fresh future datetime for this test
+    const freshExamStart = new Date(Date.now() + 60_000).toISOString();
     const sr = await apiPost("/api/subjects", {
       name: "Wave2 Sub", code: `W2_${BASE_TS}`, term: "2026-T1",
-      duration: 60, exam_datetime: EXAM_START, teacher_id: teacherId,
+      duration: 60, exam_datetime: freshExamStart, teacher_id: teacherId,
     }, operatorToken);
     const w2SubId = (await json(sr)).data.id;
     await apiPut(`/api/subjects/${w2SubId}`, { is_published: 1 }, operatorToken);

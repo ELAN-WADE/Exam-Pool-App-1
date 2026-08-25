@@ -1,0 +1,455 @@
+/* ── Minimalist Academic Sessions Design (Neutral-First) ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* ── Live Status Banner ─────────────────────────────────── */
+.liveBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.25rem 1.5rem;
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  box-shadow: 0 1px 2px 0 rgba(15, 23, 42, 0.03);
+  transition: all 200ms ease;
+}
+
+.liveBannerActiveGold {
+  background: var(--color-gold-banner, linear-gradient(135deg, rgba(254, 249, 195, 0.6) 0%, rgba(255, 255, 255, 1) 100%));
+  border: 1px solid var(--color-gold-border, rgba(202, 138, 4, 0.40));
+  box-shadow: 0 4px 20px rgba(234, 179, 8, 0.12), 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.liveBannerLeft {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.liveBannerIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #E2E8F0);
+  flex-shrink: 0;
+}
+
+.liveBannerText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.liveBannerLabel {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted, #64748B);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.statusDotActive {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10B981;
+}
+
+.statusDotInactive {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-muted-2, #94A3B8);
+}
+
+.liveBannerValue {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--color-text, #0F172A);
+  line-height: 1.4;
+}
+
+.liveBannerValue strong {
+  font-weight: 700;
+}
+
+.liveBannerAction {
+  flex-shrink: 0;
+}
+
+/* ── Chronological Timeline Section ─────────────────────── */
+.timelineSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sectionTitle {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sectionCount {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-muted, #64748B);
+  background: var(--color-surface-2, #F1F5F9);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.timelineCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.75rem;
+}
+
+.timelineContainer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+/* Central vertical alignment rule */
+.timelineContainer::before {
+  content: '';
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 6px;
+  width: 1px;
+  background: var(--color-border, #E2E8F0);
+  z-index: 0;
+}
+
+.timelineYearGroup {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-left: 2rem;
+}
+
+.timelineYearMarker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  position: relative;
+}
+
+.timelineYearDot {
+  position: absolute;
+  left: -2rem;
+  top: 50%;
+  transform: translateY(-50%) translateX(1px);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-surface, #FFFFFF);
+  border: 2px solid var(--color-muted-2, #94A3B8);
+  box-shadow: 0 0 0 4px var(--color-surface, #FFFFFF);
+  transition: all 150ms ease;
+}
+
+.timelineYearGroupActive .timelineYearDot {
+  border-color: #10B981;
+  background: #10B981;
+}
+
+.timelineYearName {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text, #0F172A);
+  margin: 0;
+  line-height: 1.2;
+}
+
+.timelineYearNameInactive {
+  color: var(--color-muted, #64748B);
+}
+
+.activeSessionBadge {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.activeTermBadge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+
+.activateTermLink {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4F46E5;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+.activateTermLink:hover {
+  background: var(--color-surface, #FFFFFF);
+}
+
+.noTerms {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+}
+
+.addTermInline {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4F46E5;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.activeTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #CBD5E1);
+}
+
+.activateLink {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-primary, #4F46E5);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  transition: background 150ms ease;
+}
+
+.activateLink:hover {
+  background: var(--color-surface-2, #F1F5F9);
+}
+
+/* ── Terms Table / List ─────────────────────────────────── */
+.termsList {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-2, #F8FAFC);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.termRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  font-size: 0.8125rem;
+}
+
+.termRow:last-child {
+  border-bottom: none;
+}
+
+.termName {
+  font-weight: 500;
+  color: var(--color-text, #0F172A);
+}
+
+.termMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.emptyTerms {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+  padding: 0.875rem 1rem;
+  font-style: italic;
+}
+
+/* ── Feedback Alert Banner ──────────────────────────────── */
+.alertBanner {
+  padding: 0.75rem 1.125rem;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: var(--color-surface-2, #F8FAFC);
+  border: 1px solid var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+}
+
+.alertSuccess {
+  border-color: rgba(22, 163, 74, 0.3);
+}
+
+.alertError {
+  border-color: rgba(220, 38, 38, 0.3);
+  color: var(--color-danger, #DC2626);
+}
+
+.alertClose {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748B);
+  cursor: pointer;
+}
+
+.alertClose:hover {
+  color: var(--color-text, #0F172A);
+}
+
+/* ── Modals & Forms ─────────────────────────────────────── */
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  gap: 1.125rem;
+}
+
+.modalIntro {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--color-muted, #64748B);
+  margin: 0;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.formLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.formInput,
+.formSelect {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #CBD5E1);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.formInput:focus,
+.formSelect:focus {
+  border-color: var(--color-primary, #4F46E5);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+}
+
+.radioGroup {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 0.25rem;
+}
+
+.radioLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text, #334155);
+  cursor: pointer;
+}
+
+.radioInput {
+  accent-color: var(--color-primary, #0F172A);
+  cursor: pointer;
+}
+
+.modalFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  margin-top: 0.5rem;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .liveBanner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .liveBannerAction {
+    width: 100%;
+  }
+  .liveBannerAction button {
+    width: 100%;
+  }
+  .timelineCard {
+    padding: 1.25rem;
+  }
+}

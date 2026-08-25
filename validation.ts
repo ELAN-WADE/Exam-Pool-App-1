@@ -21,9 +21,9 @@ export function isValidPassword(password: unknown): password is string {
   return typeof password === "string" && password.length >= MIN_PASSWORD_LENGTH;
 }
 
-/** Exam duration in minutes per schema: 1–360 inclusive. */
+/** Exam duration in minutes per schema: 1–1440 inclusive (up to 24 hours). */
 export function isValidSubjectDuration(n: number): boolean {
-  return Number.isInteger(n) && n > 0 && n <= 360;
+  return Number.isInteger(n) && n > 0 && n <= 1440;
 }
 
 export function isValidExamDateTime(isoOrDate: string): boolean {
@@ -51,8 +51,8 @@ export function isExamDatetimeEditValid(isoOrDate: string): boolean {
   return isValidExamDateTime(isoOrDate);
 }
 
-export function isValidRoleParam(role: string): role is "student" | "teacher" | "operator" {
-  return role === "student" || role === "teacher" || role === "operator";
+export function isValidRoleParam(role: string): role is "student" | "teacher" | "operator" | "guardian" {
+  return role === "student" || role === "teacher" || role === "operator" || role === "guardian";
 }
 
 export function isPositiveIntId(n: unknown): n is number {

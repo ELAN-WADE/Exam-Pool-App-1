@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { useAuth } from "../../hooks/useAuth";
 import { useToast } from "../../hooks/useToast";
-import { api } from "../../lib/api";
+import { api, API_BASE } from "../../lib/api";
 import styles from "../../app/page.module.css";
 
-export default function LoginForm({ expectedRole }: { expectedRole: "student" | "teacher" | "operator" }) {
+export default function LoginForm({ expectedRole }: { expectedRole: "student" | "teacher" | "operator" | "guardian" }) {
   const router = useRouter();
   const { isAuthenticated, user, login, logout, isLoading, setupRequired } = useAuth();
   const { showToast } = useToast();
@@ -18,17 +18,40 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState("");
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
-  const [serverIp, setServerIp] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetch("/api/server-info")
-      .then((r) => { if (!r.ok) throw new Error("not ok"); return r.json(); })
-      .then((data) => {
-        if (data.data?.ip) setServerIp(`${data.data.ip}:${data.data.port}`);
-        setServerOnline(true);
-      })
-      .catch(() => setServerOnline(false));
+    let cancelled = false;
+    const checkServer = async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!cancelled) setServerOnline(true);
+      } catch {
+        try {
+          const directRes = await fetch("http://127.0.0.1:8001/api/auth/me", {
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (!cancelled) setServerOnline(true);
+        } catch {
+          if (!cancelled) setServerOnline(false);
+        }
+      }
+    };
+
+    checkServer();
+    const interval = setInterval(checkServer, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -44,6 +67,14 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
       logout().then(() => {
         setError("Please use the correct portal to log in for your role.");
       });
+      return;
+    }
+
+    // Check redirect param if available
+    const searchParams = new URLSearchParams(window.location.search);
+    const redirectTarget = searchParams.get("redirect");
+    if (redirectTarget && redirectTarget.startsWith(`/${user.role}`)) {
+      window.location.href = redirectTarget;
       return;
     }
 
@@ -72,6 +103,8 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
       });
     } else if (user.role === "teacher") {
       window.location.href = "/teacher/dashboard/";
+    } else if (user.role === "guardian") {
+      window.location.href = "/guardian/dashboard/";
     } else {
       window.location.href = "/ADMIN/dashboard/";
     }
@@ -182,7 +215,7 @@ export default function LoginForm({ expectedRole }: { expectedRole: "student" | 
         {serverOnline === null
           ? "Checking server…"
           : serverOnline
-            ? `Server online${serverIp ? ` · ${serverIp}` : ""}`
+            ? "Server online"
             : "Server offline — check connection"}
       </div>
     </div>

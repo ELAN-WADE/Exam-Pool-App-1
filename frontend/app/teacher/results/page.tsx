@@ -6,8 +6,22 @@ import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { ExamResult } from "../../../lib/types";
-import { scorePct, letterGrade, gradeBadgeClass, gradeColor, fmtDate } from "../../../lib/gradeUtils";
-import { BarChartIcon, SearchIcon, EyeIcon, ArrowUpIcon, DocumentIcon } from "../../../components/icons/Icons";
+import { scorePct, letterGrade, fmtDate } from "../../../lib/gradeUtils";
+import {
+  PageHeader,
+  Button,
+  FilterBar,
+  Table,
+  type TableColumn,
+} from "../../../components/ui";
+
+import {
+  BarChartIcon,
+  CheckCircleIcon,
+  DocumentIcon,
+  SubjectIcon,
+  UsersIcon,
+} from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
 export default function TeacherResultsPage() {
@@ -19,20 +33,17 @@ export default function TeacherResultsPage() {
 }
 
 function TeacherResults() {
-  const [gradeLevels, setGradeLevels] = useState<{ id: number; name: string }[]>([]);
-  const [rows,            setRows]            = useState<ExamResult[]>([]);
-  const [query,           setQuery]           = useState("");
-  const { selectedSession, selectedTerm } = useAcademic();
-  const [loading,         setLoading]         = useState(true);
-  const [error,           setError]           = useState("");
-  const [toast,           setToast]           = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [gradeModal,      setGradeModal]      = useState<any | null>(null);   // row being promoted/demoted
-  const [gradeValue,      setGradeValue]      = useState("");
-  const [gradeSaving,     setGradeSaving]     = useState(false);
-  const [reviewModal,     setReviewModal]     = useState<any | null>(null);   // row for exam review
-  const [reviewData,      setReviewData]      = useState<any | null>(null);
-  const [reviewLoading,   setReviewLoading]   = useState(false);
-  const printRef                              = useRef<HTMLDivElement>(null);
+  const [rows, setRows] = useState<ExamResult[]>([]);
+  const [query, setQuery] = useState("");
+  const { selectedSession, selectedTerm, activeSession, activeTerm } = useAcademic();
+  const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
+  const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [reviewModal, setReviewModal] = useState<any | null>(null);
+  const [reviewData, setReviewData] = useState<any | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const showToast = (type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -42,13 +53,9 @@ function TeacherResults() {
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const [data, grades] = await Promise.all([
-        api.getResults(selectedSession?.id, selectedTerm?.id) as Promise<ExamResult[]>,
-        api.getGradeLevels() as Promise<{ grades: { id: number; name: string }[] }>
-      ]);
+      const data = (await api.getResults(selectedSession?.id, selectedTerm?.id)) as ExamResult[];
       if (signal?.aborted) return;
       setRows(data ?? []);
-      setGradeLevels(grades?.grades ?? []);
     } catch (err) {
       if (!signal?.aborted) setError(err instanceof Error ? err.message : "Failed to load results");
     } finally {
@@ -62,7 +69,6 @@ function TeacherResults() {
     return () => controller.abort();
   }, [load, selectedSession?.id, selectedTerm?.id]);
 
-  // ── Live-update: re-fetch table when a student submits an exam ──
   useEffect(() => {
     const handler = (e: Event) => {
       const notif = (e as CustomEvent).detail;
@@ -77,38 +83,38 @@ function TeacherResults() {
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
     if (!q) return rows;
-    return rows.filter((r) =>
-      String(r.student_name || "").toLowerCase().includes(q) ||
-      String(r.subject_name || "").toLowerCase().includes(q),
+    return rows.filter(
+      (r) =>
+        String(r.student_name || "").toLowerCase().includes(q) ||
+        String(r.subject_name || "").toLowerCase().includes(q) ||
+        String(r.reg_id || "").toLowerCase().includes(q)
     );
   }, [rows, query]);
 
   const stats = useMemo(() => {
-    if (!rows.length) return { total: 0, avg: 0, highest: 0, pass: 0 };
+    if (!rows.length) return { total: 0, avg: 0, highest: 0, passRate: 0 };
     const scores = rows.map((r) => scorePct(r.score, r.total_score));
-    const avg     = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
     const highest = scores.length > 0 ? Math.round(Math.max(...scores)) : 0;
-    const pass    = scores.filter((s) => s >= 50).length;
-    return { total: rows.length, avg, highest, pass };
+    const pass = scores.filter((s) => s >= 40).length;
+    const passRate = Math.round((pass / scores.length) * 100);
+    return { total: rows.length, avg, highest, passRate };
   }, [rows]);
 
-  // PDF print — uses browser print dialog on the result table only
   const handlePdfExport = () => {
     window.print();
   };
 
-  // CSV download
   const handleCsvExport = () => {
     api.exportResultsCsv();
   };
 
-  // Open review
   const openReview = async (row: any) => {
     setReviewModal(row);
     setReviewData(null);
     setReviewLoading(true);
     try {
-      const data = await api.getExamReview(Number(row.id)) as any;
+      const data = (await api.getExamReview(Number(row.id))) as any;
       setReviewData(data);
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : "Failed to load review");
@@ -118,176 +124,259 @@ function TeacherResults() {
     }
   };
 
-  // Promote / demote
-  const openGradeModal = (row: any) => {
-    setGradeModal(row);
-    const matched = gradeLevels.find(g => g.name === row.grade || g.id === Number(row.grade_level_id || row.grade));
-    setGradeValue(matched ? String(matched.id) : (row.grade_level_id ? String(row.grade_level_id) : ""));
-  };
+  const [publishing, setPublishing] = useState(false);
 
-  const saveGrade = async () => {
-    if (!gradeModal || !gradeValue.trim()) return;
-    setGradeSaving(true);
+  const handlePublishResults = async (subjectId: number) => {
     try {
-      const selectedGradeName = gradeLevels.find(g => g.id === Number(gradeValue))?.name || gradeValue;
-      await api.updateStudentGrade(Number(gradeModal.student_user_id), Number(gradeValue));
-      showToast("success", `${gradeModal.student_name} moved to ${selectedGradeName}`);
-      setGradeModal(null);
-      await load();
-    } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to update grade");
+      setPublishing(true);
+      const res = await api.releaseSubjectResults(subjectId);
+      showToast("success", `Results published! ${res.count} student results are now live.`);
+      load();
+    } catch (err: any) {
+      showToast("error", err?.message || "Failed to publish results");
     } finally {
-      setGradeSaving(false);
+      setPublishing(false);
     }
   };
 
-  if (loading) return <div className="loadingWrap"><div className="spinner" /></div>;
-  if (error)   return <div className={styles.errorBanner}>{error}</div>;
+  // Check if there are unpublished manual results
+  const unpublishedSubjects = useMemo(() => {
+    const unpubMap = new Map<number, { subject_name: string; count: number }>();
+    for (const r of rows) {
+      if (r.result_status === "hidden") {
+        const sid = Number(r.subject_id);
+        const existing = unpubMap.get(sid) || { subject_name: r.subject_name || `Subject #${sid}`, count: 0 };
+        existing.count++;
+        unpubMap.set(sid, existing);
+      }
+    }
+    return Array.from(unpubMap.entries()).map(([id, data]) => ({ id, ...data }));
+  }, [rows]);
+
+  const columns: TableColumn<ExamResult>[] = [
+    {
+      key: "student_name",
+      header: "Candidate",
+      sortable: true,
+      render: (r) => (
+        <div className={styles.studentCell}>
+          <div className={styles.avatar}>{String(r.student_name || "?").charAt(0).toUpperCase()}</div>
+          <div>
+            <div style={{ fontWeight: 600, color: "var(--color-text)", fontSize: "0.8125rem" }}>
+              {r.student_name || "—"}
+            </div>
+            <div style={{ fontSize: "0.6875rem", color: "var(--color-muted)" }}>{r.grade || "General"}</div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "reg_id",
+      header: "Reg Number",
+      render: (r) => (
+        <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "0.75rem", color: "var(--color-muted)" }}>
+          {r.reg_id || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "subject_name",
+      header: "Subject / Assessment",
+      sortable: true,
+      render: (r) => (
+        <div>
+          <span style={{ fontWeight: 500, color: "var(--color-text)", fontSize: "0.8125rem", display: "block" }}>
+            {r.subject_name || `Subject #${r.subject_id}`}
+          </span>
+          <span style={{ fontSize: "0.6875rem", color: r.result_status === "hidden" ? "#D97706" : "#059669", fontWeight: 600 }}>
+            {r.result_status === "hidden" ? "● Unpublished" : "● Live"}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: "end_time",
+      header: "Submitted",
+      render: (r) => (
+        <span style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>
+          {fmtDate(r.end_time)}
+        </span>
+      ),
+    },
+    {
+      key: "score",
+      header: "Score & Performance",
+      render: (r) => {
+        const pct = scorePct(r.score, r.total_score);
+        return (
+          <div className={styles.scoreCell}>
+            <span className={styles.scoreMono}>{r.score ?? 0}</span>
+            <span className={styles.scoreTotalMono}>/ {Number(r.total_score ?? 0) || "?"}</span>
+            <div className={styles.pctBar}>
+              <div className={styles.pctFill} style={{ width: `${pct}%` }} />
+            </div>
+            <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "0.75rem", color: "var(--color-muted)" }}>
+              {pct}%
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: "grade",
+      header: "Grade",
+      align: "center",
+      width: "90px",
+      render: (r) => {
+        const pct = scorePct(r.score, r.total_score);
+        const grade = letterGrade(pct);
+        return <span className={styles.gradeBadge}>{grade}</span>;
+      },
+    },
+    {
+      key: "actions",
+      header: "Action",
+      align: "right",
+      width: "120px",
+      render: (r) => (
+        <div style={{ display: "flex", gap: "0.35rem", justifyContent: "flex-end" }}>
+          <Button variant="secondary" size="xs" onClick={() => openReview(r)}>
+            Review
+          </Button>
+        </div>
+      ),
+    },
+  ];
 
   return (
-    <>
-      {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
-
-      <div className="pageHeader" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
-        <div>
-          <h1 className="pageTitle">Exam Results</h1>
-          <p style={{ color: "var(--color-muted)", fontSize: "0.8rem", marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px rgba(34,197,94,0.7)" }} />
-            Live — updates automatically when students submit
-          </p>
+    <div className={styles.container}>
+      {toast && (
+        <div style={{ position: "fixed", bottom: "1.5rem", right: "1.5rem", padding: "0.65rem 1rem", borderRadius: "8px", background: "var(--color-text)", color: "#FFFFFF", fontSize: "0.8125rem", fontWeight: 600, zIndex: 1100 }}>
+          {toast.text}
         </div>
-        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
-          <button className="btn btn-ghost" onClick={handleCsvExport}>
-            <DocumentIcon width="14" height="14" />
-            Export CSV
-          </button>
-          <button className="btn btn-ghost" onClick={handlePdfExport}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>
-            Print / PDF
-          </button>
-        </div>
-      </div>
+      )}
 
-      {/* Stats */}
-      <div className={styles.statsRow}>
-        {[
-          { label: "Total Exams",   value: stats.total,                                                                              color: "#4f7cff" },
-          { label: "Average Score", value: `${stats.avg}%`,                                                                         color: "#22c55e" },
-          { label: "Highest Score", value: `${stats.highest}%`,                                                                     color: "#f59e0b" },
-          { label: "Pass Rate",     value: `${stats.total ? Math.round((stats.pass / stats.total) * 100) : 0}%`,                    color: "#38bdf8" },
-        ].map((s) => (
-          <div key={s.label} className={styles.statCard}>
-            <div className={styles.statValue} style={{ color: s.color }}>{s.value}</div>
-            <div className={styles.statLabel}>{s.label}</div>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Evaluation & Performance Analytics"
+        title="Exam Results"
+        subtitle={`Academic Session ${currentSessionName} · ${currentTermName}`}
+        actions={
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <Button variant="secondary" size="sm" leftIcon={<DocumentIcon width="13" height="13" />} onClick={handleCsvExport}>
+              Export CSV
+            </Button>
+            <Button variant="secondary" size="sm" onClick={handlePdfExport}>
+              Print Broadsheet
+            </Button>
           </div>
-        ))}
-      </div>
+        }
+      />
 
-      {/* Search */}
-      <div className={`searchBar ${styles.search}`}>
-        <SearchIcon width="14" height="14" />
-        <input placeholder="Search by student or subject…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      </div>
-
-      <div ref={printRef} className={`card ${styles.tableCard}`}>
-        {filtered.length === 0 ? (
-          <div className={styles.empty}>
-            <div className={styles.emptyIconWrapper}>
-              <BarChartIcon width="48" height="48" />
-            </div>
-            <p>{query ? "No results match your search." : "No exam results yet."}</p>
+      {/* Unpublished Results Banner */}
+      {unpublishedSubjects.length > 0 && (
+        <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: "12px", padding: "1rem 1.25rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+          <div>
+            <strong style={{ color: "#92400E", fontSize: "0.875rem", display: "block" }}>
+              Unpublished Student Results ({unpublishedSubjects.reduce((a, b) => a + b.count, 0)} pending)
+            </strong>
+            <span style={{ color: "#B45309", fontSize: "0.8125rem" }}>
+              Students who took manual-release assessments cannot view their score until you publish.
+            </span>
           </div>
-        ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Student</th>
-                <th>Reg ID</th>
-                <th>Subject</th>
-                <th>Submitted</th>
-                <th>Score</th>
-                <th>Grade</th>
-                <th style={{ textAlign: "right" }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((r) => {
-                const pct        = scorePct(r.score, r.total_score);
-                const grade      = letterGrade(pct);
-                const gradeClass = gradeBadgeClass(pct);
-                return (
-                  <tr key={r.id}>
-                    <td>
-                      <div className={styles.studentCell}>
-                        <div className={styles.avatar}>{String(r.student_name || "?").charAt(0).toUpperCase()}</div>
-                        <div>
-                          <span style={{ fontWeight: 500 }}>{r.student_name || "—"}</span>
-                          <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{r.grade || "—"}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ fontSize: "0.8rem", color: "var(--color-muted)", fontFamily: "monospace" }}>{r.reg_id || "—"}</td>
-                    <td style={{ fontSize: "0.875rem" }}>{r.subject_name || `Subject #${r.subject_id}`}</td>
-                    <td style={{ color: "var(--color-muted)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                      {fmtDate(r.end_time)}
-                    </td>
-                    <td>
-                      <div className={styles.scoreCell}>
-                        <span style={{ fontWeight: 600 }}>{r.score ?? 0}</span>
-                        <span style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>/ {Number(r.total_score ?? 0) || "?"}</span>
-                        <div className={styles.pctBar}>
-                          <div className={styles.pctFill} style={{ width: `${pct}%`, background: gradeColor(pct) }} />
-                        </div>
-                        <span style={{ fontSize: "0.8rem", color: "var(--color-muted)" }}>{pct}%</span>
-                      </div>
-                    </td>
-                    <td><span className={`badge ${gradeClass}`}>{grade}</span></td>
-                    <td>
-                      <div style={{ display: "flex", gap: "0.4rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openReview(r)} title="View per-question review">
-                          <EyeIcon width="14" height="14" />
-                          Review
-                        </button>
-                        <button className="btn btn-ghost btn-sm" onClick={() => openGradeModal(r)} title="Promote / demote student">
-                          <ArrowUpIcon width="14" height="14" />
-                          Promote
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Grade / Promote modal */}
-      {gradeModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setGradeModal(null)}>
-          <div className="modal" style={{ maxWidth: 420 }}>
-            <h2>Promote / Demote Student</h2>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginTop: "0.4rem" }}>
-              Updating class grade for <strong>{gradeModal.student_name}</strong> (currently: <strong>{gradeModal.grade || "unset"}</strong>)
-            </p>
-            <div className="field" style={{ marginTop: "1rem" }}>
-              <label>New Grade / Class *</label>
-              <select className="select" value={gradeValue} onChange={(e) => setGradeValue(e.target.value)}>
-                <option value="">Select class...</option>
-                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
-              <button className="btn btn-ghost" onClick={() => setGradeModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={saveGrade} disabled={gradeSaving || !gradeValue.trim()}>
-                {gradeSaving ? "Saving…" : "Save Grade"}
-              </button>
-            </div>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {unpublishedSubjects.map((s) => (
+              <Button
+                key={s.id}
+                variant="primary"
+                size="sm"
+                onClick={() => handlePublishResults(s.id)}
+                disabled={publishing}
+              >
+                Publish {s.subject_name} ({s.count})
+              </Button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Exam Review Modal */}
+      {error && (
+        <div style={{ padding: "0.875rem 1rem", background: "var(--color-surface-2)", border: "1px solid var(--color-border)", borderRadius: "8px", color: "var(--color-danger, #DC2626)", fontSize: "0.8125rem" }}>
+          {error}
+        </div>
+      )}
+
+      {/* ── Minimalist KPI Metrics Row ──────────────────────── */}
+      <section className={styles.statsGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Submissions</span>
+            <div className={styles.statIcon} style={{ color: "#4F46E5" }}><UsersIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.total}</div>
+            <div className={styles.statFootnote}>Submitted examinations</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Average Score</span>
+            <div className={styles.statIcon} style={{ color: "#06B6D4" }}><BarChartIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.avg}%</div>
+            <div className={styles.statFootnote}>Cohort mean performance</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Top Score</span>
+            <div className={styles.statIcon} style={{ color: "#F97316" }}><SubjectIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.highest}%</div>
+            <div className={styles.statFootnote}>Highest recorded result</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Pass Rate</span>
+            <div className={styles.statIcon} style={{ color: "#10B981" }}><CheckCircleIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.passRate}%</div>
+            <div className={styles.statFootnote}>Scored 40% and above</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Filter Bar ─────────────────────────────────────────── */}
+      <FilterBar
+        searchQuery={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Search candidates by name, reg ID, or subject..."
+        hasActiveFilters={Boolean(query)}
+        onReset={() => setQuery("")}
+      />
+
+      {/* ── Results Table ──────────────────────────────────────── */}
+      <div className={styles.tableContainer}>
+        <Table
+          columns={columns}
+          data={filtered}
+          keyExtractor={(r) => r.id}
+          loading={loading}
+          emptyTitle="No Examination Results Found"
+          emptySubtitle={query ? "No submissions match your search parameters." : "Submissions will appear here live as candidates complete their tests."}
+        />
+      </div>
+
+
+
+      {/* Exam Question-by-Question Review Modal */}
       {reviewModal && (
         <ReviewModal
           activeSubjectName={reviewModal.subject_name || `Subject #${reviewModal.subject_id}`}
@@ -296,16 +385,12 @@ function TeacherResults() {
           reviewLoading={reviewLoading}
           onClose={() => setReviewModal(null)}
           onGradeUpdate={(examId, newTotal) => {
-            // Optimistically update the rows list with the new score
-            setRows(rows.map(r => {
-              if (r.id === examId) {
-                return { ...r, score: newTotal };
-              }
-              return r;
-            }));
+            setRows((prev) =>
+              prev.map((r) => (r.id === examId ? { ...r, score: newTotal } : r))
+            );
           }}
         />
       )}
-    </>
+    </div>
   );
 }

@@ -47,31 +47,15 @@
   border-color: var(--color-border-hover);
 }
 
-/* Breadcrumb */
-.breadcrumb {
+.clockWrapper {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  min-width: 0;
 }
-.breadcrumbRole {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--color-muted);
-  white-space: nowrap;
-}
-.breadcrumbSep {
-  color: var(--color-muted-2);
-  flex-shrink: 0;
-  opacity: 0.6;
-}
-.breadcrumbPage {
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+@media (max-width: 640px) {
+  .clockWrapper {
+    display: none;
+  }
 }
 
 /* ── Right side ───────────────────────────────────── */

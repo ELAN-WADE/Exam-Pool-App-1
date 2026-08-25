@@ -2,35 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;0,14..32,900;1,14..32,400&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400..700;1,400..700&family=Noto+Sans+Arabic:wght@400..700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;1,14..32,400;1,14..32,500;1,14..32,600&family=Geist+Mono:wght@400;500;600;700&family=Noto+Sans:ital,wght@0,400..700;1,400..700&display=swap');
 
 :root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-system: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-body: 'Noto Sans', 'Noto Sans Arabic', var(--font-system);
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', 'Fira Code', monospace;
+  --font-local: 'Noto Sans', 'Noto Sans Arabic', sans-serif;
   
-  /* v4.1 Mode Visual Tokens */
-  --color-exam-primary: #0D9488;       /* Teal — official exam */
+  /* Mode Visual Tokens */
+  --color-exam-primary: #4F46E5;       /* Indigo — official exam */
   --color-practice-lan: #F59E0B;       /* Amber — LAN practice */
   --color-practice-home: #F97316;      /* Orange — home practice */
-  --color-bg-elevated: #F1F5F9;
-
-  /* Typography for Nigerian Accessibility */
-  --font-body: 'Inter', 'Noto Sans', system-ui, sans-serif;
-  --font-local: 'Noto Sans', 'Noto Sans Arabic', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --color-bg-elevated: #F8FAFC;
 
   /* Touch Targets (WCAG 2.5.5) */
   --touch-target-min: 48px;
   --touch-target-optimal: 56px;
 
   /* Animation Tokens */
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
   --duration-instant: 100ms;
-  --duration-fast: 200ms;
-  --duration-normal: 300ms;
-  --duration-slow: 500ms;
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+  --duration-slow: 400ms;
 
   /* JS Reference Breakpoints */
   --bp-mobile: 360px;
@@ -38,10 +34,10 @@
   --bp-tablet: 768px;
   --bp-desktop: 1024px;
 
-  /* ── Color Palette (Cool Slate & Teal) ──────── */
-  --color-bg:           #F1F5F9;
+  /* ── Color Palette (Slate & Indigo SaaS) ──────── */
+  --color-bg:           #F8FAFC;
   --color-surface:      #FFFFFF;
-  --color-surface-2:    #F8FAFC;
+  --color-surface-2:    #F1F5F9;
   --color-surface-3:    #E2E8F0;
   --color-border:       #E2E8F0;
   --color-border-hover: #CBD5E1;
@@ -51,23 +47,44 @@
   --color-muted:        #64748B;
   --color-muted-2:      #94A3B8;
 
-  /* Primary – Teal */
-  --color-primary:        #0f766e;
-  --color-primary-dark:   #115e59;
-  --color-primary-light:  #14b8a6;
-  --color-primary-glow:   rgba(15, 118, 110, 0.10);
-  --color-primary-glow-2: rgba(15, 118, 110, 0.18);
+  /* Primary – Indigo #4F46E5 */
+  --color-primary:        #4F46E5;
+  --color-primary-dark:   #4338CA;
+  --color-primary-light:  #6366F1;
+  --color-primary-glow:   rgba(79, 70, 229, 0.08);
+  --color-primary-glow-2: rgba(79, 70, 229, 0.16);
 
-  /* Success – Emerald */
-  --color-success:        #059669;
-  --color-success-dark:   #047857;
-  --color-success-bg:     rgba(5, 150, 105, 0.09);
-  --color-success-border: rgba(5, 150, 105, 0.22);
+  /* Success – Emerald #16A34A */
+  --color-success:        #16A34A;
+  --color-success-dark:   #15803D;
+  --color-success-bg:     rgba(22, 163, 74, 0.08);
+  --color-success-border: rgba(22, 163, 74, 0.20);
 
-  /* Warning – Amber */
-  --color-warning:        #d97706;
-  --color-warning-dark:   #b45309;
-  --color-warning-bg:     rgba(217, 119, 6, 0.09);
+  /* Warning – Amber #D97706 */
+  --color-warning:        #D97706;
+  --color-warning-dark:   #B45309;
+  --color-warning-bg:     rgba(217, 119, 6, 0.08);
+  --color-warning-border: rgba(217, 119, 6, 0.20);
+
+  /* Danger / Error – Red #DC2626 */
+  --color-danger:         #DC2626;
+  --color-danger-dark:    #B91C1C;
+  --color-danger-bg:      rgba(220, 38, 38, 0.08);
+  --color-danger-border:  rgba(220, 38, 38, 0.20);
+
+  /* Info – Royal Electric Blue #165AF6 */
+  --color-info:           #165AF6;
+  --color-info-dark:      #1248C8;
+  --color-info-bg:        rgba(22, 90, 246, 0.08);
+  --color-info-border:    rgba(22, 90, 246, 0.20);
+
+  /* Purple / Secondary #7C3AED */
+  --color-purple:         #7C3AED;
+  --color-purple-bg:      rgba(124, 58, 237, 0.08);
+
+  /* Orange accent */
+  --color-orange:         #EA580C;
+  --color-orange-bg:      rgba(234, 88, 12, 0.08);
   --color-warning-border: rgba(217, 119, 6, 0.22);
 
   /* Danger – Rose */
@@ -76,11 +93,11 @@
   --color-danger-bg:      rgba(225, 29, 72, 0.08);
   --color-danger-border:  rgba(225, 29, 72, 0.20);
 
-  /* Info – Sky Blue */
-  --color-info:           #0284c7;
-  --color-info-dark:      #0369a1;
-  --color-info-bg:        rgba(2, 132, 199, 0.09);
-  --color-info-border:    rgba(2, 132, 199, 0.22);
+  /* Info – Royal Electric Blue */
+  --color-info:           #165AF6;
+  --color-info-dark:      #1248C8;
+  --color-info-bg:        rgba(22, 90, 246, 0.09);
+  --color-info-border:    rgba(22, 90, 246, 0.22);
 
   /* Purple accent */
   --color-purple:         #7c3aed;
@@ -89,6 +106,52 @@
   /* Orange accent */
   --color-orange:         #ea580c;
   --color-orange-bg:      rgba(234, 88, 12, 0.09);
+
+  /* ── Active Academic Gold Tokens (Luminous Metallic Gold) ── */
+  --color-gold:             #EAB308;
+  --color-gold-dark:        #CA8A04;
+  --color-gold-deep:        #78350F;
+  --color-gold-text:        #B45309;
+  --color-gold-bg:          rgba(234, 179, 8, 0.10);
+  --color-gold-bg-hover:    rgba(234, 179, 8, 0.16);
+  --color-gold-border:      rgba(202, 138, 4, 0.35);
+  --color-gold-border-glow: rgba(234, 179, 8, 0.60);
+  --color-gold-glow:        0 0 16px rgba(234, 179, 8, 0.22);
+  --color-gold-gradient:    linear-gradient(135deg, rgba(254, 249, 195, 0.7) 0%, rgba(254, 240, 138, 0.25) 100%);
+  --color-gold-banner:      linear-gradient(135deg, rgba(254, 249, 195, 0.5) 0%, rgba(255, 255, 255, 1) 100%);
+
+  /* ── Complementary Multi-Coloured Icon Accent Tokens ── */
+  --accent-indigo:          #4F46E5;
+  --accent-indigo-bg:       rgba(79, 70, 229, 0.08);
+  --accent-indigo-border:   rgba(79, 70, 229, 0.20);
+
+  --accent-cyan:            #0891B2;
+  --accent-cyan-bg:         rgba(8, 145, 178, 0.08);
+  --accent-cyan-border:     rgba(8, 145, 178, 0.20);
+
+  --accent-emerald:         #059669;
+  --accent-emerald-bg:      rgba(5, 150, 105, 0.08);
+  --accent-emerald-border:  rgba(5, 150, 105, 0.20);
+
+  --accent-purple:          #7C3AED;
+  --accent-purple-bg:       rgba(124, 58, 237, 0.08);
+  --accent-purple-border:   rgba(124, 58, 237, 0.20);
+
+  --accent-orange:          #EA580C;
+  --accent-orange-bg:       rgba(234, 88, 12, 0.08);
+  --accent-orange-border:   rgba(234, 88, 12, 0.20);
+
+  --accent-rose:            #E11D48;
+  --accent-rose-bg:         rgba(225, 29, 72, 0.08);
+  --accent-rose-border:     rgba(225, 29, 72, 0.20);
+
+  --accent-amber:           #D97706;
+  --accent-amber-bg:        rgba(217, 119, 6, 0.10);
+  --accent-amber-border:    rgba(217, 119, 6, 0.22);
+
+  --accent-sky:             #165AF6;
+  --accent-sky-bg:          rgba(22, 90, 246, 0.08);
+  --accent-sky-border:      rgba(22, 90, 246, 0.20);
 
   /* ── Sidebar (dark) ──────────────────────────────── */
   --sidebar-w:              268px;
@@ -136,6 +199,69 @@
   --glass-blur:         blur(16px);
   --accent-gradient:    var(--color-primary);
 }
+
+/* ── Active Academic Gold Badge & Chip Utilities ── */
+.gold-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  background: var(--color-gold-bg, rgba(234, 179, 8, 0.10));
+  border: 1px solid var(--color-gold-border, rgba(202, 138, 4, 0.35));
+  color: var(--color-gold-text, #B45309);
+  box-shadow: 0 1px 3px rgba(234, 179, 8, 0.08);
+}
+.gold-active-badge-glowing {
+  box-shadow: 0 0 12px rgba(234, 179, 8, 0.24), 0 1px 3px rgba(234, 179, 8, 0.08);
+}
+.gold-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.65rem;
+  border-radius: 8px;
+  background: var(--color-gold-bg, rgba(234, 179, 8, 0.10));
+  border: 1px solid var(--color-gold-border, rgba(202, 138, 4, 0.35));
+  color: var(--color-gold-text, #B45309);
+}
+.gold-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-gold, #EAB308);
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.8);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Multi-Coloured Icon Accent Utility Wrappers ── */
+.icon-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: all 150ms ease;
+}
+.icon-box-sm { width: 28px; height: 28px; border-radius: 6px; }
+.icon-box-md { width: 36px; height: 36px; border-radius: 8px; }
+.icon-box-lg { width: 44px; height: 44px; border-radius: 10px; }
+
+.icon-box-indigo { background: var(--accent-indigo-bg); color: var(--accent-indigo); border: 1px solid var(--accent-indigo-border); }
+.icon-box-cyan   { background: var(--accent-cyan-bg);   color: var(--accent-cyan);   border: 1px solid var(--accent-cyan-border); }
+.icon-box-emerald{ background: var(--accent-emerald-bg);color: var(--accent-emerald);border: 1px solid var(--accent-emerald-border); }
+.icon-box-purple { background: var(--accent-purple-bg); color: var(--accent-purple); border: 1px solid var(--accent-purple-border); }
+.icon-box-orange { background: var(--accent-orange-bg); color: var(--accent-orange); border: 1px solid var(--accent-orange-border); }
+.icon-box-rose   { background: var(--accent-rose-bg);   color: var(--accent-rose);   border: 1px solid var(--accent-rose-border); }
+.icon-box-amber  { background: var(--accent-amber-bg);  color: var(--accent-amber);  border: 1px solid var(--accent-amber-border); }
+.icon-box-gold   { background: var(--color-gold-bg);    color: var(--color-gold-text);border: 1px solid var(--color-gold-border); box-shadow: var(--color-gold-glow); }
+.icon-box-sky    { background: var(--accent-sky-bg);    color: var(--accent-sky);    border: 1px solid var(--accent-sky-border); }
 
 /* ── Premium Utility Classes ── */
 .glass-panel {
@@ -295,25 +421,39 @@ button, [role="button"], input, select { min-height: 40px; }
 .btn-icon.btn-sm { width: 32px; height: 32px; min-height: 32px; border-radius: var(--radius-sm); }
 
 /* ─── Inputs ─────────────────────────────────────── */
-.field { display: flex; flex-direction: column; gap: 0.375rem; width: 100%; }
+.field { display: flex; flex-direction: column; gap: 0.3rem; width: 100%; }
 .field label {
-  font-size: 0.79rem;
-  font-weight: 700;
-  color: var(--color-text-2);
-  letter-spacing: 0.025em;
+  font-size: 0.785rem;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: 0.01em;
   display: block;
-  text-transform: uppercase;
 }
-.input, .select, textarea {
+.input, .select {
   width: 100%;
-  background: var(--color-surface);
-  border: 1.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 0.6875rem 0.9375rem;
+  height: 40px;
+  background: var(--color-bg, #F8FAFC);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.5rem 0.85rem;
   color: var(--color-text);
   box-shadow: var(--shadow-xs);
   transition: all var(--duration) var(--ease);
-  font-size: 0.9125rem;
+  font-size: 0.845rem;
+  font-family: inherit;
+}
+textarea {
+  width: 100%;
+  min-height: 80px;
+  background: var(--color-bg, #F8FAFC);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.6rem 0.85rem;
+  color: var(--color-text);
+  box-shadow: var(--shadow-xs);
+  transition: all var(--duration) var(--ease);
+  font-size: 0.845rem;
+  font-family: inherit;
 }
 .input:hover, .select:hover, textarea:hover { border-color: var(--color-border-hover); }
 .input:focus, .select:focus, textarea:focus {
@@ -322,7 +462,7 @@ button, [role="button"], input, select { min-height: 40px; }
   outline: none;
   background: var(--color-surface);
 }
-.input::placeholder, textarea::placeholder { color: var(--color-muted-2); }
+.input::placeholder, textarea::placeholder { color: var(--color-muted-2); font-size: 0.8125rem; }
 .input-error  { border-color: var(--color-danger) !important; }
 .input-error:focus { box-shadow: var(--ring-danger) !important; }
 

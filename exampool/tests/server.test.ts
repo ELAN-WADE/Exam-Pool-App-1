@@ -8,13 +8,14 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { BASE_URL, apiGet, apiPost, extractToken, json } from "./helpers";
+import { BASE_URL, apiGet, apiPost, extractToken, json, TEST_OPERATOR_EMAIL, TEST_OPERATOR_PASSWORD, TEST_OPERATOR_NAME } from "./helpers";
 
 // ── Operator bootstrap (setup flow) ─────────────────────────────────────────
 
 let operatorToken = "";
-const OPERATOR_EMAIL    = `op_server_${Date.now()}@exampool.test`;
-const OPERATOR_PASSWORD = "Secure@123";
+const OPERATOR_EMAIL    = TEST_OPERATOR_EMAIL;
+const OPERATOR_PASSWORD = TEST_OPERATOR_PASSWORD;
+const OPERATOR_NAME     = TEST_OPERATOR_NAME;
 
 beforeAll(async () => {
   // If server is fresh (empty DB), call /api/setup. Otherwise login.
@@ -22,7 +23,7 @@ beforeAll(async () => {
   expect(info.status).toBe(200);
 
   const setupRes = await apiPost("/api/setup", {
-    name:        "Test Operator",
+    name:        OPERATOR_NAME,
     email:       OPERATOR_EMAIL,
     password:    OPERATOR_PASSWORD,
     schoolName:  "Exampool QA School",

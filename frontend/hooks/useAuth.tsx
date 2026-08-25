@@ -81,7 +81,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "SET_LOADING", payload: true });
     try {
       const result = await api.login({ email, password });
-      if (!result) return;
+      // fetchWithAuth now throws on 401, so result should always be truthy here.
+      // Keep the null guard as a safety net for unexpected edge cases.
+      if (!result) throw new Error("Login failed. Please try again.");
       dispatch({ type: "LOGIN", payload: (result.user ?? result) as User });
     } finally {
       dispatch({ type: "SET_LOADING", payload: false });

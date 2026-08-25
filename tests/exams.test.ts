@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { apiGet, apiPost, apiPut, apiDelete, extractToken, json } from "./helpers";
+import { apiGet, apiPost, apiPut, apiDelete, extractToken, json, bootstrapOperator } from "./helpers";
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -28,17 +28,7 @@ const BASE_TS = Date.now();
 const EXAM_START = new Date(Date.now() - 60_000).toISOString();
 
 beforeAll(async () => {
-  // ── Operator bootstrap ──
-  const setupRes = await apiPost("/api/setup", {
-    name: "Exam Op", email: `op_exam_${BASE_TS}@q.test`,
-    password: "Operator@123", schoolName: "Exam School", currentTerm: "2026-T1",
-  });
-  if (setupRes.status === 201) {
-    operatorToken = extractToken(setupRes, await json(setupRes));
-  } else {
-    const lr = await apiPost("/api/auth/login", { email: `op_exam_${BASE_TS}@q.test`, password: "Operator@123" });
-    operatorToken = extractToken(lr, await json(lr));
-  }
+  operatorToken = await bootstrapOperator(`op_exam_${BASE_TS}@q.test`, "Operator@123");
 
   // ── Teacher ──
   const tReg = await apiPost("/api/auth/register", {

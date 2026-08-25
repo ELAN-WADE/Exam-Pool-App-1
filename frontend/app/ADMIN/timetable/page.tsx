@@ -5,30 +5,55 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
-const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
-import { CalendarIcon, ClockIcon, EditIcon, CheckCircleIcon, WarningIcon, PlusIcon, TrashIcon } from "../../../components/icons/Icons";
+const Modal = dynamic(() => import("../../../components/ui/Modal").then((mod) => mod.Modal), { ssr: false });
+import {
+  PageHeader,
+  Button,
+} from "../../../components/ui";
+import {
+  CalendarIcon,
+  ClockIcon,
+  SearchIcon,
+  CheckCircleIcon,
+  WarningIcon,
+} from "../../../components/icons/Icons";
 import styles from "./page.module.css";
 
 type Toast = { type: "success" | "error"; text: string } | null;
-type Subject = {
-  id: number; name: string; code: string; term: string;
-  teacher_id: number; can_retake?: number; mode?: string;
-};
-type Timetable = {
-  id: number; subject_id: number; subject_name: string; subject_code: string;
-  class: string | null; section: string | null;
-  exam_date: string; start_time: string; end_time: string;
-  duration: number; exam_mode: string; allow_students: number;
-};
-type User = { id: number; name: string; email: string; role: string; is_active: number };
 
-export default function OperatorTimetablePage() {
-  return (
-    <RequireRole role="operator">
-      <TimetableContent />
-    </RequireRole>
-  );
-}
+type Subject = {
+  id: number;
+  name: string;
+  code: string;
+  term: string;
+  teacher_id: number;
+  can_retake?: number;
+  mode?: string;
+  class?: string;
+};
+
+type Timetable = {
+  id: number;
+  subject_id: number;
+  subject_name: string;
+  subject_code: string;
+  class: string | null;
+  section: string | null;
+  exam_date: string;
+  start_time: string;
+  end_time: string;
+  duration: number;
+  exam_mode: string;
+  allow_students: number;
+};
+
+type User = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  is_active: number;
+};
 
 const emptyForm = {
   subject_id: "",
@@ -39,27 +64,36 @@ const emptyForm = {
   end_time: "",
   duration: "60",
   exam_mode: "CBT",
-  allow_students: false,
+  allow_students: true,
   teacher_id: "",
   can_retake: true,
   schedule_status: "scheduled",
-  subject_mode: "exam"
+  subject_mode: "exam",
 };
 
+export default function OperatorTimetablePage() {
+  return (
+    <RequireRole role="operator">
+      <TimetableContent />
+    </RequireRole>
+  );
+}
+
 function TimetableContent() {
-  const [subjects,  setSubjects]  = useState<Subject[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [timetables, setTimetables] = useState<Timetable[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [gradeLevels, setGradeLevels] = useState<any[]>([]);
   const { selectedSession, selectedTerm } = useAcademic();
-  const [loading,   setLoading]   = useState(true);
-  const [toast,     setToast]     = useState<Toast>(null);
-  
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<Toast>(null);
+
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing,   setEditing]   = useState<Timetable | null>(null);
-  const [deleting,  setDeleting]  = useState<Timetable | null>(null);
-  const [search,    setSearch]    = useState("");
-  const [saving,    setSaving]    = useState(false);
+  const [editing, setEditing] = useState<Timetable | null>(null);
+  const [deleting, setDeleting] = useState<Timetable | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState(emptyForm);
 
@@ -68,52 +102,83 @@ function TimetableContent() {
     setTimeout(() => setToast(null), 3200);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
       const [s, t, u, g] = await Promise.all([
         api.getSubjects(selectedSession?.id, selectedTerm?.id),
-        api.getTimetables(),
+        api.getTimetables(selectedSession?.id, selectedTerm?.id),
         api.getUsers(),
-        api.getGradeLevels()
+        api.getGradeLevels(),
       ]);
+      if (signal?.aborted) return;
       setSubjects((s as Subject[]) ?? []);
       setTimetables((t as Timetable[]) ?? []);
       setUsers((u as User[]) ?? []);
       setGradeLevels((g as any)?.grades ?? []);
     } catch {
-      showToast("error", "Failed to load timetable data.");
+      if (!signal?.aborted) showToast("error", "Failed to load timetable schedule.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [showToast, selectedSession?.id, selectedTerm?.id]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const teachers = useMemo(() => users.filter((u) => u.role === "teacher" && u.is_active), [users]);
 
-  const filteredSubjects = useMemo(() => {
-    const q = search.toLowerCase();
-    if (!q) return subjects;
-    return subjects.filter(
-      (s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)
-    );
-  }, [subjects, search]);
+  // Combined subject & timetable rows
+  const scheduleItems = useMemo(() => {
+    return subjects.map((s) => {
+      const t = timetables.find((tt) => tt.subject_id === s.id);
+      return { subject: s, timetable: t };
+    });
+  }, [subjects, timetables]);
+
+  const filteredItems = useMemo(() => {
+    return scheduleItems.filter(({ subject, timetable }) => {
+      const q = search.toLowerCase();
+      const matchSearch =
+        !q ||
+        subject.name.toLowerCase().includes(q) ||
+        subject.code.toLowerCase().includes(q) ||
+        (timetable?.exam_date && timetable.exam_date.includes(q)) ||
+        (timetable?.class && timetable.class.toLowerCase().includes(q));
+
+      if (statusFilter === "scheduled" && !timetable) return false;
+      if (statusFilter === "unscheduled" && timetable) return false;
+
+      return matchSearch;
+    });
+  }, [scheduleItems, search, statusFilter]);
+
+  // Statistics
+  const stats = useMemo(() => {
+    const total = subjects.length;
+    const scheduled = timetables.length;
+    const allowed = timetables.filter((t) => t.allow_students === 1).length;
+    const pending = total - scheduled;
+    return { total, scheduled, allowed, pending };
+  }, [subjects, timetables]);
 
   const openSchedule = (subject: Subject, existingTimetable?: Timetable) => {
     setEditing(existingTimetable || null);
     if (existingTimetable) {
       setForm({
         subject_id: String(subject.id),
-        class: existingTimetable.class || "",
+        class: existingTimetable.class || subject.class || "",
         section: existingTimetable.section || "",
         exam_date: existingTimetable.exam_date,
         start_time: existingTimetable.start_time,
         end_time: existingTimetable.end_time,
-        duration: String(existingTimetable.duration),
-        exam_mode: existingTimetable.exam_mode,
+        duration: String(existingTimetable.duration || 60),
+        exam_mode: existingTimetable.exam_mode || "CBT",
         allow_students: existingTimetable.allow_students === 1,
-        teacher_id: String(subject.teacher_id || ""),
+        teacher_id: String(subject.teacher_id || (teachers[0]?.id || "")),
         can_retake: subject.can_retake !== 0,
         schedule_status: "scheduled",
         subject_mode: subject.mode || "exam",
@@ -122,9 +187,10 @@ function TimetableContent() {
       setForm({
         ...emptyForm,
         subject_id: String(subject.id),
-        teacher_id: String(subject.teacher_id || ""),
+        class: subject.class || "",
+        teacher_id: String(subject.teacher_id || (teachers[0]?.id || "")),
         can_retake: subject.can_retake !== 0,
-        schedule_status: "unscheduled",
+        schedule_status: "scheduled",
         subject_mode: subject.mode || "exam",
       });
     }
@@ -161,20 +227,20 @@ function TimetableContent() {
         teacher_id: Number(form.teacher_id),
         can_retake: form.can_retake ? 1 : 0,
         schedule_status: form.schedule_status,
-        subject_mode: form.subject_mode
+        subject_mode: form.subject_mode,
       };
-      
+
       if (editing) {
         await api.updateTimetable(editing.id, payload);
-        showToast("success", "Timetable updated.");
+        showToast("success", "Timetable window updated.");
       } else {
         await api.createTimetable(payload);
-        showToast("success", "Timetable created.");
+        showToast("success", "Timetable slot created.");
       }
       setModalOpen(false);
       await load();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Save failed.");
+      showToast("error", err instanceof Error ? err.message : "Failed to save schedule.");
     } finally {
       setSaving(false);
     }
@@ -183,7 +249,7 @@ function TimetableContent() {
   const remove = async (t: Timetable) => {
     try {
       await api.deleteTimetable(t.id);
-      showToast("success", "Timetable deleted.");
+      showToast("success", "Timetable slot removed.");
       setDeleting(null);
       await load();
     } catch (err) {
@@ -191,227 +257,372 @@ function TimetableContent() {
     }
   };
 
-  if (loading) return <div className="loadingWrap"><div className="spinner" /></div>;
-
   return (
-    <>
-      {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
+    <div className={styles.container}>
+      {toast && <div className={styles.toast}>{toast.text}</div>}
 
-      <div className="pageHeader" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 className="pageTitle">Exam Timetable</h1>
-      </div>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Academic Structure"
+        title="Timetable & CBT Windows"
+        subtitle="Schedule examination dates, access windows, and candidate testing slots."
+      />
 
-      <div className={`searchBar ${styles.search}`}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-        <input placeholder="Search subjects to schedule…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      </div>
-
-      <div className={styles.tableCard}>
-        <div className={styles.tblHeader}>
-          <span className={styles.tblTitle}>Timetable Schedule</span>
-          <span className={styles.tblCount}>{filteredSubjects.length} subjects</span>
+      {/* ── Minimalist KPI Metrics Row ──────────────────────── */}
+      <section className={styles.statsGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Total Subjects</span>
+            <div className={styles.statIcon} style={{ color: "#06B6D4" }}><CalendarIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.total}</div>
+            <div className={styles.statFootnote}>Curriculum courses</div>
+          </div>
         </div>
 
-        {filteredSubjects.length === 0 ? (
-          <div className={styles.empty}>
-            <CalendarIcon width="48" height="48" />
-            <p>{search ? "No subjects match your search." : "No subjects available."}</p>
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Scheduled Slots</span>
+            <div className={styles.statIcon} style={{ color: "#10B981" }}><CheckCircleIcon width="15" height="15" /></div>
           </div>
-        ) : (
-          <div className={styles.tableWrap}>
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Schedule</th>
-                  <th>Time Window</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredSubjects.map((s) => {
-                  const t = timetables.find(tt => tt.subject_id === s.id);
-                  return (
-                    <tr key={s.id}>
-                      <td>
-                        <div className={styles.subjectName}>{s.name}</div>
-                        <div className={styles.subjectDesc}><code>{s.code}</code></div>
-                      </td>
-                      <td className={styles.dateCell}>
-                        {t ? (
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                            <CalendarIcon width="14" height="14" />
-                            {t.exam_date}
-                          </div>
-                        ) : (
-                          <span style={{ color: "var(--color-text-muted)" }}>Unscheduled</span>
-                        )}
-                      </td>
-                      <td>
-                        {t ? (
-                          <>
-                            {t.start_time} - {t.end_time}
-                            <span className={styles.durationCell} style={{ display: "block", marginTop: "4px" }}>
-                              <ClockIcon width="12" height="12" /> {t.duration} min | {t.exam_mode}
-                            </span>
-                          </>
-                        ) : "—"}
-                      </td>
-                      <td>
-                        {t ? (
-                          <span className={`badge ${t.allow_students ? "badge-success" : "badge-muted"}`}>
-                            {t.allow_students ? "Allowed" : "Locked"}
-                          </span>
-                        ) : "—"}
-                      </td>
-                      <td>
-                        <div className={styles.actions}>
-                          {t ? (
-                            <>
-                              <button className="btn btn-ghost btn-sm" onClick={() => openSchedule(s, t)} title="Edit Schedule">
-                                <EditIcon width="13" height="13" /> Edit
-                              </button>
-                              <button className="btn btn-sm" style={{ background: "var(--color-danger-bg)", color: "var(--color-danger)", border: "1px solid var(--color-danger-border)" }} onClick={() => setDeleting(t)}>
-                                <TrashIcon width="13" height="13" />
-                              </button>
-                            </>
-                          ) : (
-                            <button className="btn btn-primary btn-sm" onClick={() => openSchedule(s)}>
-                              <PlusIcon width="13" height="13" /> Schedule
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div>
+            <div className={styles.statValue}>{stats.scheduled}</div>
+            <div className={styles.statFootnote}>Active exam windows</div>
           </div>
-        )}
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Open for Candidates</span>
+            <div className={styles.statIcon} style={{ color: "#F97316" }}><ClockIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.allowed}</div>
+            <div className={styles.statFootnote}>Unlocked test sessions</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Unscheduled</span>
+            <div className={styles.statIcon} style={{ color: "#F59E0B" }}><WarningIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{stats.pending}</div>
+            <div className={styles.statFootnote}>Awaiting time slots</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Filter Strip ─────────────────────────────────────── */}
+      <div className={styles.filterStrip}>
+        <div className={styles.searchBox}>
+          <SearchIcon width="14" height="14" className={styles.searchIcon} />
+          <input
+            type="text"
+            placeholder="Search subject, date, or class…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className={styles.searchInput}
+          />
+        </div>
+
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          className={styles.selectFilter}
+        >
+          <option value="all">All Statuses</option>
+          <option value="scheduled">Scheduled Only</option>
+          <option value="unscheduled">Unscheduled Only</option>
+        </select>
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} size="md">
-        <h2>{editing ? "Edit Timetable" : "Create Timetable"}</h2>
-        <form onSubmit={submit} className={styles.form}>
-          <div className="field">
-            <label>Subject *</label>
-            <select className="select" value={form.subject_id} onChange={(e) => setForm({ ...form, subject_id: e.target.value })} required disabled>
-              <option value="">-- Select a subject --</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code})</option>)}
-            </select>
+      {/* ── Schedule Table ───────────────────────────────────── */}
+      <div className={styles.tableCard}>
+        <div className={styles.tableWrapper}>
+          <table className={styles.tbl}>
+            <thead>
+              <tr>
+                <th>Subject / Code</th>
+                <th>Target Class</th>
+                <th>Exam Date</th>
+                <th>Time Window</th>
+                <th>Student Access</th>
+                <th style={{ textAlign: "right" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)" }}>
+                    Loading timetable schedule…
+                  </td>
+                </tr>
+              ) : filteredItems.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)" }}>
+                    No subjects found matching the filter.
+                  </td>
+                </tr>
+              ) : (
+                filteredItems.map(({ subject, timetable }) => (
+                  <tr key={subject.id}>
+                    <td>
+                      <div className={styles.subjectName}>{subject.name}</div>
+                      <div style={{ marginTop: "0.15rem" }}>
+                        <span className={styles.codeBadge}>{subject.code}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span style={{ fontSize: "0.8125rem" }}>
+                        {timetable?.class || subject.class || "All Cohorts"}
+                        {timetable?.section ? ` (${timetable.section})` : ""}
+                      </span>
+                    </td>
+                    <td>
+                      {timetable ? (
+                        <div style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "0.8125rem", color: "var(--color-text)" }}>
+                          {timetable.exam_date}
+                        </div>
+                      ) : (
+                        <span style={{ color: "var(--color-muted)", fontSize: "0.75rem", fontStyle: "italic" }}>
+                          Not scheduled
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {timetable ? (
+                        <div>
+                          <div className={styles.timeWindow}>
+                            {timetable.start_time} – {timetable.end_time}
+                          </div>
+                          <div className={styles.durationTag}>
+                            <ClockIcon width="11" height="11" /> {timetable.duration} min · {timetable.exam_mode}
+                          </div>
+                        </div>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td>
+                      {timetable ? (
+                        <span className={`${styles.statusPill} ${timetable.allow_students ? styles.statusAllowed : styles.statusLocked}`}>
+                          {timetable.allow_students ? "Open" : "Locked"}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td>
+                      <div className={styles.actionBtnGroup}>
+                        {timetable ? (
+                          <>
+                            <button
+                              type="button"
+                              className={styles.actionBtn}
+                              onClick={() => openSchedule(subject, timetable)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.actionBtnDanger}
+                              onClick={() => setDeleting(timetable)}
+                            >
+                              Unschedule
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className={styles.actionBtn}
+                            onClick={() => openSchedule(subject)}
+                          >
+                            Schedule
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── MODAL: SCHEDULE EXAM ─────────────────────────────── */}
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editing ? "Edit Timetable Slot" : "Schedule Exam Window"}
+        size="md"
+      >
+        <form onSubmit={submit} className={styles.formGrid}>
+          <div className={styles.formGrid2}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Target Class</label>
+              <select
+                className={styles.formSelect}
+                value={form.class}
+                onChange={(e) => setForm({ ...form, class: e.target.value })}
+              >
+                <option value="">Select a class…</option>
+                {gradeLevels.map((g) => (
+                  <option key={g.id} value={g.name}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Section / Arm (Optional)</label>
+              <input
+                className={styles.formInput}
+                placeholder="e.g. Gold, Diamond"
+                value={form.section}
+                onChange={(e) => setForm({ ...form, section: e.target.value })}
+              />
+            </div>
           </div>
 
-          <div className="field">
-            <label>Assign Teacher *</label>
-            {teachers.length === 0 ? (
-              <div className={styles.noTeacher}><WarningIcon width="16" height="16" /> No active teachers found.</div>
-            ) : (
-              <select className="select" value={form.teacher_id} onChange={(e) => setForm({ ...form, teacher_id: e.target.value })} required>
-                <option value="">— Select a teacher —</option>
-                {teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            )}
-          </div>
-          
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Class</label>
-              <select className="select" value={form.class} onChange={(e) => setForm({ ...form, class: e.target.value })}>
-                <option value="">Select a class...</option>
-                {gradeLevels.map((g) => <option key={g.id} value={g.name}>{g.name}</option>)}
+          <div className={styles.formGrid2}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Invigilating Faculty *</label>
+              <select
+                className={styles.formSelect}
+                value={form.teacher_id}
+                onChange={(e) => setForm({ ...form, teacher_id: e.target.value })}
+                required
+              >
+                <option value="">Select a teacher…</option>
+                {teachers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
               </select>
             </div>
-            <div className="field">
-              <label>Section</label>
-              <input className="input" value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value })} />
-            </div>
-          </div>
-          
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Schedule Status</label>
-              <div style={{ display: "flex", gap: "1rem", marginTop: "0.5rem" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", textTransform: "none", fontWeight: 500 }}>
-                  <input type="radio" name="schedule_status" value="scheduled" checked={form.schedule_status === "scheduled"} onChange={() => setForm({ ...form, schedule_status: "scheduled" })} /> Scheduled
-                </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer", textTransform: "none", fontWeight: 500 }}>
-                  <input type="radio" name="schedule_status" value="unscheduled" checked={form.schedule_status === "unscheduled"} onChange={() => setForm({ ...form, schedule_status: "unscheduled" })} /> Unscheduled
-                </label>
-              </div>
-            </div>
-            <div className="field">
-              <label>Assessment Mode *</label>
-              <select className="select" value={form.subject_mode} onChange={(e) => setForm({ ...form, subject_mode: e.target.value })}>
-                <option value="exam">Exam</option>
-                <option value="test">Test</option>
-                <option value="quiz">Quiz</option>
-              </select>
-            </div>
-          </div>
-          
-          {form.schedule_status === "scheduled" && (
-            <>
-              <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                <div className="field">
-                  <label>Exam Date *</label>
-                  <input className="input" type="date" value={form.exam_date} onChange={(e) => setForm({ ...form, exam_date: e.target.value })} required />
-                </div>
-                <div className="field">
-                  <label>Exam Mode *</label>
-                  <select className="select" value={form.exam_mode} onChange={(e) => setForm({ ...form, exam_mode: e.target.value })} required>
-                    <option value="CBT">CBT</option>
-                    <option value="Assignment">Assignment</option>
-                    <option value="Offline">Offline</option>
-                  </select>
-                </div>
-              </div>
 
-              <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
-                <div className="field">
-                  <label>Start Time *</label>
-                  <input className="input" type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} required />
-                </div>
-                <div className="field">
-                  <label>End Time *</label>
-                  <input className="input" type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} required />
-                </div>
-                <div className="field">
-                  <label>Duration (min) *</label>
-                  <input className="input" type="number" min={1} value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} required />
-                </div>
-              </div>
-              
-              <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem" }}>
-                <input type="checkbox" id="allow_students" checked={form.allow_students} onChange={(e) => setForm({ ...form, allow_students: e.target.checked })} style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
-                <label htmlFor="allow_students" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Take Exam</label>
-              </div>
-            </>
-          )}
-          <div className="field" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
-            <input type="checkbox" id="can_retake" checked={form.can_retake} onChange={(e) => setForm({ ...form, can_retake: e.target.checked })} style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
-            <label htmlFor="can_retake" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Testing Mode *</label>
+              <select
+                className={styles.formSelect}
+                value={form.exam_mode}
+                onChange={(e) => setForm({ ...form, exam_mode: e.target.value })}
+                required
+              >
+                <option value="CBT">CBT (Computer Based Test)</option>
+                <option value="Offline">Offline Written Exam</option>
+                <option value="Assignment">Take-Home Assignment</option>
+              </select>
+            </div>
           </div>
-          
-          <div className="modal-actions" style={{ marginTop: "1.5rem" }}>
-            <button type="button" className="btn btn-ghost" onClick={() => setModalOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Saving…" : "Save Timetable"}</button>
+
+          <div className={styles.formGrid3}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Exam Date *</label>
+              <input
+                className={styles.formInput}
+                type="date"
+                value={form.exam_date}
+                onChange={(e) => setForm({ ...form, exam_date: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Start Time *</label>
+              <input
+                className={styles.formInput}
+                type="time"
+                value={form.start_time}
+                onChange={(e) => setForm({ ...form, start_time: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>End Time *</label>
+              <input
+                className={styles.formInput}
+                type="time"
+                value={form.end_time}
+                onChange={(e) => setForm({ ...form, end_time: e.target.value })}
+                required
+              />
+            </div>
+          </div>
+
+          <div className={styles.formGroup}>
+            <label className={styles.formLabel}>Time Limit / Duration (Minutes) *</label>
+            <input
+              className={styles.formInput}
+              type="number"
+              min={1}
+              value={form.duration}
+              onChange={(e) => setForm({ ...form, duration: e.target.value })}
+              required
+            />
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "0.5rem" }}>
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={form.allow_students}
+                onChange={(e) => setForm({ ...form, allow_students: e.target.checked })}
+              />
+              Allow Candidates to Access & Start Exam
+            </label>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                className={styles.checkboxInput}
+                checked={form.can_retake}
+                onChange={(e) => setForm({ ...form, can_retake: e.target.checked })}
+              />
+              Allow Candidate Retakes / Resits
+            </label>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", paddingTop: "1rem", borderTop: "1px solid var(--color-border)", marginTop: "0.5rem" }}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" size="sm" loading={saving}>
+              {editing ? "Save Schedule" : "Confirm Schedule"}
+            </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Delete Modal */}
-      <Modal open={!!deleting} onClose={() => setDeleting(null)} size="sm">
-        <h2>Delete Timetable?</h2>
-        <p className="modal-desc">This will permanently delete the timetable for <strong>{deleting?.subject_name}</strong>.</p>
-        <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={() => setDeleting(null)}>Cancel</button>
-          <button className="btn btn-danger" onClick={() => deleting && remove(deleting)}>Delete</button>
+      {/* ── MODAL: DELETE / UNSCHEDULE ───────────────────────── */}
+      <Modal
+        open={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        title="Unschedule Exam"
+        size="sm"
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <p style={{ fontSize: "0.8125rem", color: "var(--color-text)", margin: 0 }}>
+            Remove the timetable slot for <strong>{deleting?.subject_name}</strong>? Students will no longer see this scheduled exam time.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
+            <Button variant="secondary" size="sm" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => deleting && remove(deleting)}>
+              Remove Schedule
+            </Button>
+          </div>
         </div>
       </Modal>
-    </>
+    </div>
   );
 }

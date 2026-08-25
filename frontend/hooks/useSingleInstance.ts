@@ -12,22 +12,30 @@ import { useEffect, useMemo, useRef, useState } from "react";
  * - We use a `ts` (timestamp) in the claim so the older tab wins.
  * - localStorage is used as a fallback tie-breaker between tabs that open
  *   simultaneously (within the same millisecond).
+ * - FIXED: Race condition where original tab could be blocked by stale messages.
+ *   Now uses localStorage heartbeat as source of truth for which tab is active.
  */
 export function useSingleInstance(key: string) {
   const [tabId, setTabId] = useState("");
   const [openedAt, setOpenedAt] = useState(0);
   const [blocked, setBlocked] = useState(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
+  const myTabIdRef = useRef("");
+  const myOpenedAtRef = useRef(0);
 
   useEffect(() => {
-    setTabId(typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString());
-    setOpenedAt(Date.now());
+    const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString();
+    const ts = Date.now();
+    setTabId(id);
+    setOpenedAt(ts);
+    myTabIdRef.current = id;
+    myOpenedAtRef.current = ts;
   }, []);
 
   useEffect(() => {
     if (!tabId || !openedAt) return;
     const heartbeatKey = `exampool-heartbeat-${key}`;
-    const channel      = new BroadcastChannel("exampool-single-instance");
+    const channel = new BroadcastChannel("exampool-single-instance");
     channelRef.current = channel;
 
     const claim = () => {
@@ -38,11 +46,22 @@ export function useSingleInstance(key: string) {
 
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
-      if (!data || data.key !== key || data.tabId === tabId) return;
-      if (data.ts <= openedAt) {
-        setBlocked(true);
-      } else {
-        claim();
+      if (!data || data.key !== key || data.tabId === myTabIdRef.current) return;
+      
+      // Check localStorage heartbeat - this is the source of truth
+      try {
+        const stored = JSON.parse(localStorage.getItem(heartbeatKey) || "{}");
+        const otherTabActive = stored.tabId === data.tabId && (Date.now() - (stored.ts || 0)) < 10000;
+        
+        // Only block if the OTHER tab is actively sending heartbeats AND is older/equal
+        if (otherTabActive && data.ts <= myOpenedAtRef.current) {
+          setBlocked(true);
+        }
+      } catch {
+        // Fallback: if localStorage unavailable, use timestamp comparison
+        if (data.ts <= myOpenedAtRef.current) {
+          setBlocked(true);
+        }
       }
     };
 

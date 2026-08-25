@@ -3,12 +3,16 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../../hooks/useAuth";
+import { AcadBrandIcon } from "../icons/Icons";
 import styles from "./Sidebar.module.css";
+import React, { type ReactNode } from "react";
 
 export type NavItem = {
   href: string;
   label: string;
   icon: React.ReactNode;
+  section?: string;
+  badge?: ReactNode;
 };
 
 type Props = {
@@ -25,6 +29,9 @@ export function Sidebar({ items, title, open, onClose }: Props) {
 
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
 
+  // Group items by section transition
+  let lastSection: string | undefined = undefined;
+
   return (
     <>
       {/* Backdrop (mobile) */}
@@ -39,25 +46,16 @@ export function Sidebar({ items, title, open, onClose }: Props) {
         {/* Logo / brand */}
         <div className={styles.brand}>
           <div className={styles.brandIcon}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
+            <AcadBrandIcon width={20} height={20} stroke="currentColor" />
           </div>
           <div className={styles.brandMeta}>
-            <span className={styles.brandName}>ExamPool</span>
+            <span className={styles.brandName}>ACAD</span>
             <span className={styles.brandRole}>{title} Portal</span>
           </div>
           {/* Close btn on mobile */}
           <button
             onClick={onClose}
-            style={{
-              marginLeft: "auto", background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.10)", cursor: "pointer",
-              color: "rgba(148,163,184,0.8)", display: "flex", alignItems: "center",
-              borderRadius: "6px", padding: "4px", minHeight: "unset",
-            }}
+            className="md:hidden ml-auto p-1 text-slate-400 hover:text-white bg-slate-800 rounded border border-slate-700"
             aria-label="Close menu"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -69,48 +67,35 @@ export function Sidebar({ items, title, open, onClose }: Props) {
         {/* Navigation */}
         <nav className={styles.nav}>
           {items.map((item) => {
+            const showSection = item.section && item.section !== lastSection;
+            if (item.section) lastSection = item.section;
+
             const active =
               normalizedPathname === item.href.replace(/\/+$/, "") ||
-              normalizedPathname.startsWith(item.href.replace(/\/+$/, "") + "/");
+              (item.href !== "/ADMIN/dashboard" && item.href !== "/teacher/dashboard" && item.href !== "/student/dashboard" &&
+                normalizedPathname.startsWith(item.href.replace(/\/+$/, "") + "/"));
+
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={onClose}
-                className={`${styles.navItem} ${active ? styles.active : ""}`}
-              >
-                <span className={styles.navIcon}>{item.icon}</span>
-                <span className={styles.navLabel}>{item.label}</span>
-                {active && <span className={styles.activeDot} />}
-              </Link>
+              <React.Fragment key={item.href}>
+                {showSection && (
+                  <div className={styles.navSection}>
+                    <span className={styles.navSectionLabel}>{item.section}</span>
+                  </div>
+                )}
+                <Link
+                  href={item.href}
+                  onClick={onClose}
+                  className={`${styles.navItem} ${active ? styles.active : ""}`}
+                >
+                  <span className={styles.navIcon}>{item.icon}</span>
+                  <span className={styles.navLabel}>{item.label}</span>
+                  {item.badge && <span className="ml-auto text-xs">{item.badge}</span>}
+                  {active && <span className={styles.activeDot} />}
+                </Link>
+              </React.Fragment>
             );
           })}
         </nav>
-
-        {/* User footer */}
-        <div className={styles.footer}>
-          <div className={styles.userInfo}>
-            <div className={styles.avatar}>{user?.name?.charAt(0)?.toUpperCase() ?? "?"}</div>
-            <div className={styles.userMeta}>
-              <span className={styles.userName}>{user?.name ?? "—"}</span>
-              <span className={styles.userEmail}>{user?.email ?? ""}</span>
-            </div>
-          </div>
-          <button
-            className={styles.logoutBtn}
-            onClick={async () => {
-              await logout();
-              window.location.href = "/";
-            }}
-            title="Logout"
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          </button>
-        </div>
       </aside>
     </>
   );

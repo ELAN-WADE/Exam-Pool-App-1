@@ -7,9 +7,24 @@ import { RequireRole } from "../../../components/auth/RequireRole";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import dynamic from "next/dynamic";
-const Modal = dynamic(() => import("../../../components/ui/Modal").then(mod => mod.Modal), { ssr: false });
-import { SettingsIcon, PlusIcon, TrashIcon, EditIcon, CheckCircleIcon, DocumentIcon, LockIcon } from "../../../components/icons/Icons";
+const Modal = dynamic(() => import("../../../components/ui/Modal").then((mod) => mod.Modal), { ssr: false });
+import {
+  PageHeader,
+  Button,
+} from "../../../components/ui";
+import {
+  SettingsIcon,
+  PlusIcon,
+  TrashIcon,
+  EditIcon,
+  CheckCircleIcon,
+  DocumentIcon,
+  LockIcon,
+  ClockIcon,
+  BookIcon,
+} from "../../../components/icons/Icons";
 import { BulkUploadModal } from "../../../components/teacher/BulkUploadModal";
+import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import styles from "./page.module.css";
 
 export default function TeacherQuestionsPage() {
@@ -26,7 +41,9 @@ function parseOptions(value: string): string[] {
   try {
     const parsed = JSON.parse(value);
     return Array.isArray(parsed) ? parsed.map(String) : ["", "", "", ""];
-  } catch { return ["", "", "", ""]; }
+  } catch {
+    return ["", "", "", ""];
+  }
 }
 
 const OPTION_LABELS = ["A", "B", "C", "D"];
@@ -37,77 +54,115 @@ function QuestionsContent() {
   const searchParams = useSearchParams();
   const subjectId = Number(searchParams.get("subjectId") || 0);
 
-  const [subjects,       setSubjects]       = useState<any[]>([]);
-  const [questions,      setQuestions]      = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<any[]>([]);
   const { selectedSession, selectedTerm } = useAcademic();
-  const [loading,        setLoading]        = useState(true);
+  const [loading, setLoading] = useState(true);
   const [questionsReady, setQuestionsReady] = useState(false);
-  const [error,          setError]          = useState("");
-  const [toast,          setToast]          = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [editorMode,      setEditorMode]      = useState<EditorMode>("list");
+  const [editorMode, setEditorMode] = useState<EditorMode>("list");
   const [editSubjectOpen, setEditSubjectOpen] = useState(false);
-  const [bulkUploadOpen,  setBulkUploadOpen]  = useState(false);
-  const [editing,         setEditing]         = useState<any | null>(null);
-  const [deleting,        setDeleting]        = useState<any | null>(null);
-  const [saving,          setSaving]          = useState(false);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState<any | null>(null);
+  const [saving, setSaving] = useState(false);
   const actionHandled = useRef(false);
+  const [confirmState, setConfirmState] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    variant: "danger" | "primary";
+    loading: boolean;
+  }>({ open: false, title: "", message: "", variant: "danger", loading: false });
+  const confirmActionRef = useRef<(() => Promise<void>) | null>(null);
 
   // Editor form fields
-  const [questionText,  setQuestionText]  = useState("");
-  const [imageUrl,      setImageUrl]      = useState("");
-  const [imageMode,     setImageMode]     = useState<ImageInputMode>("url");
-  const [isDragging,    setIsDragging]    = useState(false);
-  const [questionType,  setQuestionType]  = useState("objective");
+  const [questionText, setQuestionText] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageMode, setImageMode] = useState<ImageInputMode>("url");
+  const [isDragging, setIsDragging] = useState(false);
+  const [questionType, setQuestionType] = useState("objective");
   const [teacherAnswer, setTeacherAnswer] = useState("");
-  const [options,       setOptions]       = useState(["", "", "", ""]);
+  const [explanation, setExplanation] = useState("");
+  const [solution, setSolution] = useState("");
+  const [options, setOptions] = useState(["", "", "", ""]);
   const [correctAnswer, setCorrectAnswer] = useState(0);
-  const [marks,         setMarks]         = useState(1);
-  const [isFileUpload,  setIsFileUpload]  = useState(false);
-  const [attachedFile,  setAttachedFile]  = useState<File | null>(null);
+  const [marks, setMarks] = useState(1);
+  const [isFileUpload, setIsFileUpload] = useState(false);
   const [attachedFileUrl, setAttachedFileUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const docInputRef  = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
 
-  // Subject edit fields
   const [subjDatetime, setSubjDatetime] = useState("");
   const [subjDuration, setSubjDuration] = useState(60);
   const [subjInstructions, setSubjInstructions] = useState("");
   const [subjCanRetake, setSubjCanRetake] = useState(true);
+  const [subjResultPolicy, setSubjResultPolicy] = useState("immediate");
+  const [subjReleaseTime, setSubjReleaseTime] = useState("");
 
-  const subject  = useMemo(() => subjects.find((s) => Number(s.id) === subjectId), [subjects, subjectId]);
+  const subject = useMemo(() => subjects.find((s) => Number(s.id) === subjectId), [subjects, subjectId]);
   const isLocked = Boolean(subject?.is_published);
 
   const showToast = useCallback((type: "success" | "error", text: string) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast({ type, text });
-    setTimeout(() => setToast(null), 3500);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 3500);
   }, []);
 
-  const loadSubjects = useCallback(async () => {
-    try {
-      const data = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as any[];
-      setSubjects(data ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed loading subjects");
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedSession?.id, selectedTerm?.id]);
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    };
+  }, []);
 
-  const loadQuestions = useCallback(async () => {
+  const loadSubjects = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const data = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as any[];
+        if (signal?.aborted) return;
+        setSubjects(data ?? []);
+      } catch (err) {
+        if (signal?.aborted) return;
+        setError(err instanceof Error ? err.message : "Failed loading subjects");
+      } finally {
+        if (!signal?.aborted) setLoading(false);
+      }
+    },
+    [selectedSession?.id, selectedTerm?.id]
+  );
+
+  const loadQuestions = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!subjectId) return;
+      try {
+        const data = (await api.getQuestions(subjectId)) as any[];
+        if (signal?.aborted) return;
+        setQuestions(data ?? []);
+      } catch (err) {
+        if (signal?.aborted) return;
+        setError(err instanceof Error ? err.message : "Failed loading questions");
+      } finally {
+        if (!signal?.aborted) setQuestionsReady(true);
+      }
+    },
+    [subjectId]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    loadSubjects(controller.signal);
+    return () => controller.abort();
+  }, [loadSubjects]);
+
+  useEffect(() => {
     if (!subjectId) return;
-    try {
-      const data = (await api.getQuestions(subjectId)) as any[];
-      setQuestions(data ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed loading questions");
-    } finally {
-      setQuestionsReady(true);
-    }
-  }, [subjectId]);
-
-  useEffect(() => { loadSubjects(); }, [loadSubjects]);
-  useEffect(() => { if (subjectId) loadQuestions(); }, [subjectId, loadQuestions]);
+    const controller = new AbortController();
+    loadQuestions(controller.signal);
+    return () => controller.abort();
+  }, [subjectId, loadQuestions]);
 
   useEffect(() => {
     if (actionHandled.current || !subjectId) return;
@@ -126,18 +181,18 @@ function QuestionsContent() {
     setImageMode("url");
     setQuestionType("objective");
     setTeacherAnswer("");
+    setExplanation("");
+    setSolution("");
     setOptions(["", "", "", ""]);
     setCorrectAnswer(0);
     setMarks(1);
     setIsFileUpload(false);
-    setAttachedFile(null);
     setAttachedFileUrl("");
   }
 
-  // ── Image handling ──────────────────────────────
   const handleFileSelect = (file: File) => {
     if (!file.type.startsWith("image/")) {
-      showToast("error", "Please select a valid image file (JPG, PNG, GIF, WebP).");
+      showToast("error", "Please select an image file (JPG, PNG, GIF, WebP).");
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
@@ -167,13 +222,16 @@ function QuestionsContent() {
   const handleDocFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (file.size > 10 * 1024 * 1024) { showToast("error", "Document must be smaller than 10MB"); return; }
+      if (file.size > 10 * 1024 * 1024) {
+        showToast("error", "Document must be smaller than 10MB");
+        return;
+      }
       try {
         setSaving(true);
         const { url } = await api.uploadFile(file);
         setAttachedFileUrl(url);
-        showToast("success", "Document attached successfully.");
-      } catch (err) {
+        showToast("success", "Document attached.");
+      } catch {
         showToast("error", "Failed to upload document");
       } finally {
         setSaving(false);
@@ -181,16 +239,22 @@ function QuestionsContent() {
     }
   };
 
-  const openCreate = () => { if (isLocked) return; resetForm(); setEditorMode("create"); };
+  const openCreate = () => {
+    if (isLocked) return;
+    resetForm();
+    setEditorMode("create");
+  };
+
   const openEdit = (q: any) => {
     if (isLocked) return;
     setEditing(q);
     setQuestionText(q.question_text ?? "");
     setImageUrl(q.image_url ?? "");
-    // Detect if saved url is base64 data url
     setImageMode(q.image_url?.startsWith("data:") ? "upload" : "url");
     setQuestionType(q.question_type ?? "objective");
     setTeacherAnswer(q.teacher_answer ?? "");
+    setExplanation(q.explanation ?? "");
+    setSolution(q.solution ?? "");
     setOptions(parseOptions(q.options_json));
     setCorrectAnswer(Number(q.correct_answer ?? 0));
     setMarks(Number(q.marks ?? 1));
@@ -205,6 +269,8 @@ function QuestionsContent() {
     setSubjDuration(subject.duration ?? 60);
     setSubjInstructions(subject.instructions ?? "");
     setSubjCanRetake(subject.can_retake !== 0);
+    setSubjResultPolicy(subject.result_policy || "immediate");
+    setSubjReleaseTime(subject.result_release_time ? new Date(subject.result_release_time).toISOString().slice(0, 16) : "");
     setEditSubjectOpen(true);
   };
 
@@ -217,57 +283,74 @@ function QuestionsContent() {
         duration: Number(subjDuration),
         instructions: subjInstructions,
         can_retake: subjCanRetake ? 1 : 0,
+        result_policy: subjResultPolicy,
+        result_release_time: subjResultPolicy === "scheduled" && subjReleaseTime ? new Date(subjReleaseTime).toISOString() : null,
       });
       showToast("success", "Subject settings saved.");
       setEditSubjectOpen(false);
       await loadSubjects();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to save.");
+      showToast("error", err instanceof Error ? err.message : "Failed to save settings.");
     } finally {
       setSaving(false);
     }
   };
 
   const onPublishSubject = async () => {
-    if (!confirm("Are you sure you're done setting questions? This will lock the subject from further editing and notify the Admin.")) return;
-    setSaving(true);
-    try {
-      await api.updateSubject(subjectId, { is_published: 1 });
-      showToast("success", "Subject marked as ready!");
-      await loadSubjects();
-    } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to update status.");
-    } finally {
-      setSaving(false);
-    }
+    confirmActionRef.current = async () => {
+      setConfirmState((prev) => ({ ...prev, loading: true }));
+      try {
+        await api.updateSubject(subjectId, { is_published: 1 });
+        showToast("success", "Subject marked as ready!");
+        await loadSubjects();
+      } catch (err) {
+        showToast("error", err instanceof Error ? err.message : "Failed to publish.");
+      } finally {
+        setConfirmState({ open: false, title: "", message: "", variant: "danger", loading: false });
+        confirmActionRef.current = null;
+      }
+    };
+    setConfirmState({
+      open: true,
+      title: "Mark Subject as Ready?",
+      message: "Are you sure you have finished setting all questions? This will lock the assessment from further editing and notify the administrator.",
+      variant: "primary",
+      loading: false,
+    });
   };
 
   const onSubmitQuestion = async (e: FormEvent) => {
     e.preventDefault();
-    if (!questionText.trim()) { showToast("error", "Question text is required."); return; }
+    if (!questionText.trim()) {
+      showToast("error", "Question text is required.");
+      return;
+    }
     if (questionType === "objective" && options.some((o) => !o.trim())) {
-      showToast("error", "Fill in all 4 options for multiple-choice."); return;
+      showToast("error", "Please fill in all 4 choices for multiple choice.");
+      return;
     }
     setSaving(true);
     try {
       const payloadOptions =
-        questionType === "true_false" ? ["True", "False", "", ""] :
-        questionType === "essay"      ? ["", "", "", ""] : options;
+        questionType === "true_false" ? ["True", "False", "", ""] : questionType === "essay" ? ["", "", "", ""] : options;
       const payloadCorrect = questionType === "essay" ? 0 : correctAnswer;
       const payload = {
         question_text: questionText,
         image_url: imageUrl || null,
         question_type: questionType,
         teacher_answer: teacherAnswer,
+        explanation: explanation.trim() || null,
+        solution: solution.trim() || null,
         options: payloadOptions,
         correct_answer: payloadCorrect,
         marks,
         is_file_upload: isFileUpload ? 1 : 0,
         attached_file_url: attachedFileUrl || null,
       };
+
       if (editing) {
         await api.updateQuestion(editing.id, payload);
-        showToast("success", "Question updated successfully.");
+        showToast("success", "Question updated.");
       } else {
         await api.createQuestion({ subject_id: subjectId, order_index: questions.length, ...payload });
         showToast("success", "Question created!");
@@ -276,7 +359,7 @@ function QuestionsContent() {
       resetForm();
       setEditorMode("list");
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Save failed.");
+      showToast("error", err instanceof Error ? err.message : "Failed to save question.");
     } finally {
       setSaving(false);
     }
@@ -290,373 +373,575 @@ function QuestionsContent() {
       if (editorMode === "edit") setEditorMode("list");
       await loadQuestions();
     } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Delete failed.");
+      showToast("error", err instanceof Error ? err.message : "Failed to delete question.");
     }
   };
+
+  // Assessment Total Marks computation
+  const totalScore = useMemo(() => {
+    return questions.reduce((acc, q) => acc + (Number(q.marks) || 1), 0);
+  }, [questions]);
 
   if (loading) return <div className="loadingWrap"><div className="spinner" /></div>;
 
   if (!subjectId) {
     return (
-      <div className={styles.noSubjectState}>
-        <LockIcon width="48" height="48" />
-        <h2>No Subject Selected</h2>
-        <p>Go to your dashboard and click "Manage Questions" on a subject.</p>
-        <Link href="/teacher/dashboard" className="btn btn-primary" style={{ marginTop: "0.5rem" }}>
-          Go to Dashboard
+      <div className={styles.emptyState}>
+        <LockIcon width="36" height="36" style={{ color: "var(--color-muted)" }} />
+        <div className={styles.emptyTitle}>No Subject Selected</div>
+        <div className={styles.emptySubtitle}>
+          Select a subject from your faculty dashboard to view or author examination questions.
+        </div>
+        <Link href="/teacher/dashboard" style={{ marginTop: "0.5rem" }}>
+          <Button variant="primary" size="sm">
+            Back to Dashboard
+          </Button>
         </Link>
       </div>
     );
   }
 
-  // ── FULL-PAGE SPLIT EDITOR ───────────────────────────────────────────
+  // ── FULL-PAGE AUTHORING STUDIO ──────────────────────────────────
   if (editorMode === "create" || editorMode === "edit") {
     return (
-      <div className={styles.editorContainer}>
-        {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
+      <div className={styles.container}>
+        {toast && <div className={styles.toast}>{toast.text}</div>}
 
-        {/* Left: Document */}
-        <div className={styles.editorMain}>
-          <header className={styles.editorHeader}>
-            <div className={styles.editorHeaderLeft}>
-              <button className="btn btn-ghost btn-sm inline" onClick={() => { resetForm(); setEditorMode("list"); }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-                Back
-              </button>
-              <div style={{ height: "20px", width: "1px", background: "var(--color-border)" }} />
-              <div>
-                <div className={styles.editorBreadcrumb}>{subject?.name ?? "Subject"}</div>
-                <h2 className={styles.editorTitle}>{editorMode === "edit" ? "Edit Question" : "New Question"}</h2>
+        <PageHeader
+          eyebrow={subject?.name || "Subject Item Bank"}
+          title={editorMode === "edit" ? "Edit Question" : "Author New Question"}
+          subtitle="Craft questions, attach diagrams, and define model answers or marking rubrics."
+          actions={
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  resetForm();
+                  setEditorMode("list");
+                }}
+              >
+                Back to Item List
+              </Button>
+              {editorMode === "edit" && !isLocked && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setDeleting(editing)}
+                >
+                  Delete Item
+                </Button>
+              )}
+            </div>
+          }
+        />
+
+        <div className={styles.editorContainer}>
+          {/* Main Question Stem Editor */}
+          <div className={styles.editorMain}>
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Question Text / Stem *</label>
+              <textarea
+                className={styles.richTextarea}
+                placeholder="Type the question stem clearly. Ensure unambiguous phrasing for candidates…"
+                value={questionText}
+                onChange={(e) => setQuestionText(e.target.value)}
+                autoFocus
+              />
+              <div style={{ fontSize: "0.6875rem", color: "var(--color-muted)", alignSelf: "flex-end" }}>
+                {questionText.length} characters
               </div>
             </div>
-            {editorMode === "edit" && !isLocked && (
-              <button className="btn btn-sm btn-ghost inline" style={{ color: "var(--color-danger)", borderColor: "var(--color-danger-bg)" }} onClick={() => setDeleting(editing)}>
-                <TrashIcon width="14" height="14" /> Delete
-              </button>
-            )}
-          </header>
 
-          <div className={styles.docBody}>
-            {/* Question Text */}
-            <textarea
-              className={styles.richTextarea}
-              placeholder="Type your question here…&#10;&#10;Be clear and specific. Avoid ambiguous phrasing."
-              value={questionText}
-              onChange={(e) => setQuestionText(e.target.value)}
-              autoFocus
-            />
-            <div className={styles.charCount}>{questionText.length} characters</div>
-
-            {/* Image Section */}
-            <div className={styles.imgSection}>
-              <div className={styles.imgSectionLabel}>Attach an image (optional)</div>
-
-              {/* Tabs */}
-              <div className={styles.imgTabs}>
+            {/* Image / Diagram Attachment */}
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Diagram / Illustration (Optional)</label>
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
                 <button
                   type="button"
-                  className={`${styles.imgTab} ${imageMode === "url" ? styles.imgTabActive : ""}`}
                   onClick={() => setImageMode("url")}
+                  style={{
+                    padding: "0.25rem 0.65rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--color-border)",
+                    background: imageMode === "url" ? "var(--color-surface-2)" : "#FFFFFF",
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
                 >
-                  🔗 Image URL
+                  Image URL
                 </button>
                 <button
                   type="button"
-                  className={`${styles.imgTab} ${imageMode === "upload" ? styles.imgTabActive : ""}`}
                   onClick={() => setImageMode("upload")}
+                  style={{
+                    padding: "0.25rem 0.65rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--color-border)",
+                    background: imageMode === "upload" ? "var(--color-surface-2)" : "#FFFFFF",
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
                 >
-                  📁 Upload from PC
+                  Upload from Device
                 </button>
               </div>
 
-              {/* URL Mode */}
               {imageMode === "url" && (
-                <div className={styles.imageUrlRow}>
+                <div style={{ display: "flex", gap: "0.5rem" }}>
                   <input
                     type="url"
-                    className={`input ${styles.imageUrlInput}`}
-                    placeholder="https://example.com/image.png"
+                    className={styles.formInput}
+                    placeholder="https://example.com/diagram.png"
                     value={imageUrl.startsWith("data:") ? "" : imageUrl}
                     onChange={(e) => setImageUrl(e.target.value)}
                   />
                   {imageUrl && (
-                    <button type="button" className={`btn btn-ghost btn-sm ${styles.imgClearBtn}`} onClick={() => setImageUrl("")}>
-                      ✕ Clear
-                    </button>
+                    <Button variant="secondary" size="xs" onClick={() => setImageUrl("")}>
+                      Clear
+                    </Button>
                   )}
                 </div>
               )}
 
-              {/* Upload Mode */}
               {imageMode === "upload" && (
                 <>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
-                    className={styles.fileInput}
+                    accept="image/*"
                     onChange={handleFileInputChange}
+                    style={{ display: "none" }}
                   />
                   <div
-                    className={`${styles.dropZone} ${isDragging ? styles.dropZoneActive : ""}`}
+                    className={styles.dropZone}
                     onClick={() => fileInputRef.current?.click()}
-                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={handleDrop}
                   >
-                    <div className={styles.dropZoneIcon}>
-                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                        <polyline points="17 8 12 3 7 8"/>
-                        <line x1="12" y1="3" x2="12" y2="15"/>
-                      </svg>
+                    <div style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--color-text)" }}>
+                      {imageUrl?.startsWith("data:") ? "Image loaded — click to replace" : "Click to browse image or drag and drop"}
                     </div>
-                    <div className={styles.dropZoneText}>{imageUrl?.startsWith("data:") ? "Image loaded — click to change" : "Click to browse or drag & drop"}</div>
-                    <div className={styles.dropZoneSubtext}>PNG, JPG, GIF, WebP · Max 5 MB</div>
+                    <div style={{ fontSize: "0.6875rem", color: "var(--color-muted)" }}>PNG, JPG, WebP · Max 5MB</div>
                   </div>
                   {imageUrl?.startsWith("data:") && (
-                    <button type="button" className="btn btn-ghost btn-sm inline" style={{ alignSelf: "flex-start" }} onClick={() => setImageUrl("")}>
-                      ✕ Remove image
-                    </button>
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      onClick={() => setImageUrl("")}
+                      style={{ alignSelf: "flex-start", marginTop: "0.35rem" }}
+                    >
+                      Remove Image
+                    </Button>
                   )}
                 </>
               )}
 
-              {/* Preview */}
               {imageUrl && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={imageUrl} alt="Question image preview" className={styles.imgPreview} />
+                <div style={{ marginTop: "0.75rem" }}>
+                  <img
+                    src={imageUrl}
+                    alt="Question Diagram"
+                    className={styles.qImage}
+                  />
+                </div>
               )}
             </div>
           </div>
-        </div>
 
-        {/* Right: Settings Sidebar */}
-        <aside className={styles.editorSidebar}>
-          <div className={styles.sidebarHeader}>Question Settings</div>
-          <form id="qEditorForm" onSubmit={onSubmitQuestion} className={styles.sidebarForm}>
-
-            {/* Type & Marks */}
-            <div className={styles.sidebarSection}>
-              <div className={styles.sidebarSectionTitle}>Type & Scoring</div>
-              <div className="field">
-                <label>Question Type</label>
-                <select className="select" value={questionType} onChange={(e) => setQuestionType(e.target.value)}>
+          {/* Right Parameters Sidebar */}
+          <aside className={styles.editorSidebar}>
+            <div className={styles.sidebarHeader}>Item Configuration</div>
+            <form onSubmit={onSubmitQuestion} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Question Type</label>
+                <select
+                  className={styles.formSelect}
+                  value={questionType}
+                  onChange={(e) => setQuestionType(e.target.value)}
+                >
                   <option value="objective">Multiple Choice (MCQ)</option>
                   <option value="true_false">True / False</option>
-                  <option value="essay">Essay / Written</option>
+                  <option value="essay">Essay / Free Response</option>
                 </select>
               </div>
-              <div className="field">
-                <label>Marks</label>
-                <input className="input" type="number" min={1} max={100} value={marks} onChange={(e) => setMarks(Number(e.target.value))} required />
-              </div>
-            </div>
 
-            {/* Options for MCQ */}
-            {questionType === "objective" && (
-              <div className={styles.sidebarSection}>
-                <div className={styles.sidebarSectionTitle}>Answer Options — click letter to mark correct</div>
-                <div className={styles.optionsList}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Score / Marks</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  className={styles.formInput}
+                  value={marks}
+                  onChange={(e) => setMarks(Number(e.target.value))}
+                  required
+                />
+              </div>
+
+              {/* MCQ Choices */}
+              {questionType === "objective" && (
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Answer Choices (Click Letter to Set Correct)</label>
                   {options.map((o, i) => (
                     <div key={i} className={styles.optionRow}>
                       <button
                         type="button"
-                        className={`${styles.optionSelectBtn} ${correctAnswer === i ? styles.optionSelectBtnActive : ""}`}
+                        className={`${styles.optionRadioBtn} ${correctAnswer === i ? styles.optionRadioBtnActive : ""}`}
                         onClick={() => setCorrectAnswer(i)}
-                        title="Mark as correct"
+                        title="Mark as correct answer"
                       >
                         {OPTION_LABELS[i]}
                       </button>
                       <input
-                        className="input"
+                        className={styles.formInput}
                         value={o}
-                        onChange={(e) => { const n = [...options]; n[i] = e.target.value; setOptions(n); }}
+                        onChange={(e) => {
+                          const n = [...options];
+                          n[i] = e.target.value;
+                          setOptions(n);
+                        }}
                         placeholder={`Option ${OPTION_LABELS[i]}`}
                         required
                       />
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* True/False */}
-            {questionType === "true_false" && (
-              <div className={styles.sidebarSection}>
-                <div className={styles.sidebarSectionTitle}>Correct Answer</div>
-                <div className={styles.tfGrid}>
-                  <button type="button" className={`btn ${correctAnswer === 0 ? "btn-primary" : "btn-ghost"}`} onClick={() => setCorrectAnswer(0)}>✓ True</button>
-                  <button type="button" className={`btn ${correctAnswer === 1 ? "btn-primary" : "btn-ghost"}`} onClick={() => setCorrectAnswer(1)}>✗ False</button>
+              {/* True / False */}
+              {questionType === "true_false" && (
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Correct Answer</label>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <Button
+                      type="button"
+                      variant={correctAnswer === 0 ? "primary" : "secondary"}
+                      size="sm"
+                      onClick={() => setCorrectAnswer(0)}
+                      style={{ flex: 1 }}
+                    >
+                      True
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={correctAnswer === 1 ? "primary" : "secondary"}
+                      size="sm"
+                      onClick={() => setCorrectAnswer(1)}
+                      style={{ flex: 1 }}
+                    >
+                      False
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Essay rubric & File Upload */}
-            {questionType === "essay" && (
-              <div className={styles.sidebarSection}>
-                <div className={styles.sidebarSectionTitle}>Model Answer / Marking Rubric</div>
-                <textarea className="input" value={teacherAnswer} onChange={(e) => setTeacherAnswer(e.target.value)} placeholder="Write the expected answer or marking guide…" rows={6} />
-                <div style={{ marginTop: "1rem" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: 500, cursor: "pointer" }}>
-                    <input type="checkbox" checked={isFileUpload} onChange={(e) => setIsFileUpload(e.target.checked)} style={{ width: "1.25rem", height: "1.25rem" }} />
-                    Student must upload a PDF/Document
+              {/* Essay Marking Rubric */}
+              {questionType === "essay" && (
+                <div className={styles.formGroup}>
+                  <label className={styles.formLabel}>Model Answer / Grading Rubric</label>
+                  <textarea
+                    rows={4}
+                    className={styles.formInput}
+                    value={teacherAnswer}
+                    onChange={(e) => setTeacherAnswer(e.target.value)}
+                    placeholder="Key concepts or rubrics expected in candidate answers…"
+                  />
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.75rem", marginTop: "0.35rem", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={isFileUpload}
+                      onChange={(e) => setIsFileUpload(e.target.checked)}
+                    />
+                    Require candidate document upload (PDF)
                   </label>
                 </div>
-              </div>
-            )}
-            
-            <div className={styles.sidebarSection}>
-              <div className={styles.sidebarSectionTitle}>Attach Resource PDF (Optional)</div>
-              <input type="file" ref={docInputRef} accept=".pdf,.doc,.docx" style={{ display: "none" }} onChange={handleDocFileSelect} />
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => docInputRef.current?.click()} disabled={saving}>
-                  <DocumentIcon width="14" height="14" /> {attachedFileUrl ? "Change Document" : "Upload Document"}
-                </button>
-                {attachedFileUrl && <span style={{ color: "var(--color-success)", fontSize: "0.85rem" }}>✓ Attached</span>}
-              </div>
-            </div>
+              )}
 
-            <div className={styles.sidebarFooter}>
-              <button type="submit" form="qEditorForm" className="btn btn-primary" disabled={saving}>
-                {saving ? "Saving…" : (editorMode === "edit" ? "Save Changes" : "Create Question")}
-              </button>
-              <button type="button" className="btn btn-ghost" onClick={() => { resetForm(); setEditorMode("list"); }}>
+              {/* Concept Explanation (Concise Key) */}
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Concept Explanation (Concise reason for correct answer)</label>
+                <textarea
+                  rows={2}
+                  className={styles.formInput}
+                  value={explanation}
+                  onChange={(e) => setExplanation(e.target.value)}
+                  placeholder="e.g. Photosynthesis converts light energy into chemical energy stored in glucose."
+                />
+              </div>
+
+              {/* Step-by-Step Worked Solution (For Learning Mode Reveals) */}
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Step-by-Step Worked Solution (For Learning Mode Reveals)</label>
+                <textarea
+                  rows={3}
+                  className={styles.formInput}
+                  value={solution}
+                  onChange={(e) => setSolution(e.target.value)}
+                  placeholder="Step 1: Identify given variables...&#10;Step 2: Apply formula...&#10;Step 3: Solve for unknown..."
+                />
+              </div>
+
+              {/* Supplementary Document */}
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Attach Reading PDF (Optional)</label>
+                <input
+                  type="file"
+                  ref={docInputRef}
+                  accept=".pdf,.doc,.docx"
+                  style={{ display: "none" }}
+                  onChange={handleDocFileSelect}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => docInputRef.current?.click()}
+                    disabled={saving}
+                  >
+                    <DocumentIcon width="13" height="13" />
+                    {attachedFileUrl ? "Change Document" : "Attach PDF"}
+                  </Button>
+                  {attachedFileUrl && (
+                    <span style={{ fontSize: "0.6875rem", color: "var(--color-text)", fontWeight: 600 }}>
+                      ✓ Attached
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
+                <Button type="submit" variant="primary" size="sm" loading={saving}>
+                  {editorMode === "edit" ? "Save Changes" : "Create Item"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    resetForm();
+                    setEditorMode("list");
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </aside>
+        </div>
+
+        {/* Delete Modal */}
+        <Modal open={Boolean(deleting)} onClose={() => setDeleting(null)} size="sm">
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div style={{ fontSize: "1rem", fontWeight: 600, color: "var(--color-text)" }}>Delete Question?</div>
+            <div style={{ fontSize: "0.8125rem", color: "var(--color-muted)" }}>
+              This question will be permanently removed from this subject's item pool.
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
+              <Button variant="secondary" size="sm" onClick={() => setDeleting(null)}>
                 Cancel
-              </button>
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => onDeleteQuestion(deleting)}>
+                Delete
+              </Button>
             </div>
-          </form>
-        </aside>
-
-        <Modal open={!!deleting} onClose={() => setDeleting(null)} size="sm">
-          <h2>Delete Question?</h2>
-          <p className="modal-desc">This question will be permanently removed and cannot be recovered.</p>
-          <div className="modal-actions">
-            <button className="btn btn-ghost" onClick={() => setDeleting(null)}>Cancel</button>
-            <button className="btn btn-danger" onClick={() => onDeleteQuestion(deleting)}>Delete</button>
           </div>
         </Modal>
       </div>
     );
   }
 
-  // ── LIST VIEW ──────────────────────────────────────────────────────────
+  // ── ITEM BANK LIST VIEW ─────────────────────────────────────────
   return (
-    <>
-      {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
+    <div className={styles.container}>
+      {toast && <div className={styles.toast}>{toast.text}</div>}
 
-      <div className="pageHeader">
-        <div>
-          <Link href="/teacher/dashboard" className={styles.backLink}>← Back to Dashboard</Link>
-          <h1 className="pageTitle" style={{ marginTop: "0.25rem" }}>{subject?.name ?? "Questions"}</h1>
-          {subject && (
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.4rem", flexWrap: "wrap" }}>
-              <code className={styles.code}>{subject.code}</code>
-              <code className={styles.code}>Term {subject.term}</code>
-              <span className={`badge ${subject.is_published ? "badge-success" : "badge-muted"}`}>
-                {subject.is_published ? "● Published" : "Draft"}
-              </span>
-            </div>
-          )}
-        </div>
-        <div className={styles.headerActions}>
-          <button className="btn btn-ghost btn-sm inline" onClick={openEditSubject} disabled={isLocked} title={isLocked ? "Unpublish to edit" : "Exam settings"}>
-            <SettingsIcon width="15" height="15" /> Settings
-          </button>
-          <button className="btn btn-ghost btn-sm inline" onClick={() => setBulkUploadOpen(true)} disabled={isLocked} style={{ border: "1px solid #e2e8f0", background: "#ffffff" }}>
-            <DocumentIcon width="15" height="15" /> Bulk Upload
-          </button>
-          {!isLocked && (
-            <button className="btn btn-success btn-sm inline" onClick={onPublishSubject}>
-               <CheckCircleIcon width="15" height="15" /> Done Setting Questions
-            </button>
-          )}
-          <button className="btn btn-primary btn-sm inline" onClick={openCreate} disabled={isLocked}>
-            <PlusIcon width="15" height="15" /> Add Question
-          </button>
-        </div>
-      </div>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Assessment Item Bank"
+        title={subject?.name ?? "Questions"}
+        subtitle={`Subject Code: ${subject?.code || "—"} · Term: ${subject?.term || "—"}`}
+        actions={
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<SettingsIcon width="13" height="13" />}
+              onClick={openEditSubject}
+              disabled={isLocked}
+            >
+              Exam Settings
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<DocumentIcon width="13" height="13" />}
+              onClick={() => setBulkUploadOpen(true)}
+              disabled={isLocked}
+            >
+              Bulk Import
+            </Button>
+            {!isLocked && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<CheckCircleIcon width="13" height="13" />}
+                onClick={onPublishSubject}
+              >
+                Publish Exam
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<PlusIcon width="13" height="13" />}
+              onClick={openCreate}
+              disabled={isLocked}
+            >
+              Add Question
+            </Button>
+          </div>
+        }
+      />
 
       {isLocked && (
         <div className={styles.lockedBanner}>
-          <LockIcon width="18" height="18" />
-          <div>
-            <strong>Subject is Published — Editing Locked</strong>
-            <span>Ask the Operator to unpublish this subject before making changes.</span>
-          </div>
+          <LockIcon width="16" height="16" />
+          <span>
+            <strong>Subject is Live / Published:</strong> Question editing is locked to preserve candidate integrity.
+          </span>
         </div>
       )}
 
-      {error && <div className={styles.errorBanner}>{error}</div>}
+      {error && (
+        <div style={{ padding: "0.875rem 1rem", background: "var(--color-surface-2)", border: "1px solid var(--color-border)", borderRadius: "8px", color: "var(--color-danger, #DC2626)", fontSize: "0.8125rem" }}>
+          {error}
+        </div>
+      )}
 
+      {/* ── Minimalist KPI Metrics Row ──────────────────────── */}
+      <section className={styles.statsGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Configured Items</span>
+            <div className={styles.statIcon} style={{ color: "#06B6D4" }}><BookIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{questions.length}</div>
+            <div className={styles.statFootnote}>Questions in pool</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Maximum Score</span>
+            <div className={styles.statIcon} style={{ color: "#10B981" }}><CheckCircleIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{totalScore}</div>
+            <div className={styles.statFootnote}>Cumulative points</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Assessment Duration</span>
+            <div className={styles.statIcon} style={{ color: "#F97316" }}><ClockIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{subject?.duration || 60}m</div>
+            <div className={styles.statFootnote}>Testing time limit</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Question List / Empty State ───────────────────────── */}
       {questionsReady && questions.length === 0 ? (
-        <div className={styles.emptyList}>
-          <DocumentIcon width="52" height="52" className={styles.emptyIcon} />
-          <h3>No Questions Yet</h3>
-          <p>Click "Add Question" to open the editor and build your exam.</p>
+        <div className={styles.emptyState}>
+          <DocumentIcon width="40" height="40" style={{ color: "var(--color-muted)" }} />
+          <div className={styles.emptyTitle}>No Questions Configured Yet</div>
+          <div className={styles.emptySubtitle}>
+            Build your assessment by creating single items or importing bulk spreadsheets.
+          </div>
           {!isLocked && (
-            <div style={{ display: "flex", gap: "1rem", marginTop: "0.75rem", flexWrap: "wrap", justifyContent: "center" }}>
-              <button className="btn btn-ghost" onClick={() => setBulkUploadOpen(true)} style={{ border: "1px solid #e2e8f0", background: "#ffffff" }}>
-                <DocumentIcon width="16" height="16" /> Bulk Upload
-              </button>
-              <button className="btn btn-primary" onClick={openCreate}>
-                <PlusIcon width="16" height="16" /> Create First Question
-              </button>
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+              <Button variant="secondary" size="sm" onClick={() => setBulkUploadOpen(true)}>
+                Bulk Upload
+              </Button>
+              <Button variant="primary" size="sm" onClick={openCreate}>
+                Create First Item
+              </Button>
             </div>
           )}
         </div>
       ) : (
-        <div className={styles.list}>
+        <div className={styles.questionList}>
           {questions.map((q: any, idx: number) => {
             const opts = parseOptions(q.options_json);
             return (
               <div key={q.id} className={styles.qCard}>
                 <div className={styles.qCardBody}>
-                  <div className={styles.qTop}>
-                    <span className={styles.qNum}>Q{idx + 1}</span>
-                    <div className={styles.qTopRight}>
-                      <span className={`badge ${q.question_type === "essay" ? "badge-info" : q.question_type === "true_false" ? "badge-warning" : "badge-success"}`}>
+                  <div className={styles.qHeader}>
+                    <span className={styles.qNumBadge}>Item {idx + 1}</span>
+                    <div className={styles.qMetaGroup}>
+                      <span className={styles.qTypeTag}>
                         {q.question_type === "essay" ? "Essay" : q.question_type === "true_false" ? "True/False" : "MCQ"}
                       </span>
-                      <span className={styles.qMarks}>{q.marks} {q.marks === 1 ? "mark" : "marks"}</span>
+                      <span className={styles.qMarksTag}>{q.marks} {q.marks === 1 ? "Mark" : "Marks"}</span>
                     </div>
                   </div>
 
                   {q.image_url && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={q.image_url} alt={`Q${idx + 1} image`} className={styles.listImg} />
+                    <img src={q.image_url} alt={`Diagram ${idx + 1}`} className={styles.qImage} />
                   )}
+
                   <p className={styles.qText}>{q.question_text}</p>
 
                   {q.question_type !== "essay" ? (
-                    <div className={styles.gridOptions}>
+                    <div className={styles.optionsGrid}>
                       {opts.slice(0, q.question_type === "true_false" ? 2 : 4).map((o, i) => (
-                        <div key={i} className={`${styles.gridOption} ${Number(q.correct_answer) === i ? styles.gridOptionCorrect : ""}`}>
-                          <span className={styles.gridOptionLabel}>{q.question_type === "true_false" ? (i === 0 ? "T" : "F") : OPTION_LABELS[i]}</span>
+                        <div
+                          key={i}
+                          className={`${styles.optionItem} ${Number(q.correct_answer) === i ? styles.optionItemCorrect : ""}`}
+                        >
+                          <span className={styles.optionKey}>
+                            {q.question_type === "true_false" ? (i === 0 ? "T" : "F") : OPTION_LABELS[i]}
+                          </span>
                           <span style={{ flex: 1 }}>{o || (q.question_type === "true_false" ? (i === 0 ? "True" : "False") : "")}</span>
-                          {Number(q.correct_answer) === i && <CheckCircleIcon width="15" height="15" className={styles.checkIcon} />}
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className={styles.rubricBlock}>
-                      <strong>Marking Rubric</strong>
-                      <span>{q.teacher_answer || "No rubric provided."}</span>
+                    <div className={styles.rubricBox}>
+                      <span style={{ fontWeight: 600, color: "var(--color-text)" }}>Model Answer / Rubric:</span>
+                      <span style={{ color: "var(--color-muted)" }}>{q.teacher_answer || "No specific rubric specified."}</span>
                     </div>
                   )}
                 </div>
 
-                <div className={styles.qActions}>
-                  <button className="btn btn-ghost btn-sm inline" onClick={() => openEdit(q)} disabled={isLocked}>
-                    <EditIcon width="13" height="13" /> Edit
+                <div className={styles.qFooter}>
+                  <button
+                    type="button"
+                    className={styles.actionBtnSecondary}
+                    onClick={() => openEdit(q)}
+                    disabled={isLocked}
+                  >
+                    Edit
                   </button>
                   <button
-                    className="btn btn-sm inline"
-                    style={{ background: isLocked ? "var(--color-surface-2)" : "var(--color-danger-bg)", color: isLocked ? "var(--color-muted)" : "var(--color-danger)", border: "1px solid transparent" }}
+                    type="button"
+                    className={styles.actionBtnDanger}
                     onClick={() => !isLocked && setDeleting(q)}
                     disabled={isLocked}
                   >
-                    <TrashIcon width="13" height="13" /> Delete
+                    Delete
                   </button>
                 </div>
               </div>
@@ -665,58 +950,148 @@ function QuestionsContent() {
         </div>
       )}
 
-      {/* Modals */}
-      <Modal open={!!deleting && editorMode === "list"} onClose={() => setDeleting(null)} size="sm">
-        <h2>Delete Question?</h2>
-        <p className="modal-desc">This question will be permanently removed.</p>
-        <div className="modal-actions">
-          <button className="btn btn-ghost" onClick={() => setDeleting(null)}>Cancel</button>
-          <button className="btn btn-danger" onClick={() => onDeleteQuestion(deleting)}>Delete</button>
+      {/* Delete Item Modal */}
+      <Modal open={Boolean(deleting)} onClose={() => setDeleting(null)} size="sm">
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ fontSize: "1rem", fontWeight: 600, color: "var(--color-text)" }}>Delete Question?</div>
+          <div style={{ fontSize: "0.8125rem", color: "var(--color-muted)" }}>
+            This question will be permanently removed.
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
+            <Button variant="secondary" size="sm" onClick={() => setDeleting(null)}>
+              Cancel
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => onDeleteQuestion(deleting)}>
+              Delete
+            </Button>
+          </div>
         </div>
       </Modal>
 
+      {/* Bulk Upload Modal */}
       {bulkUploadOpen && (
-        <BulkUploadModal 
-          subjectId={subjectId} 
-          onClose={() => setBulkUploadOpen(false)} 
-          onSuccess={() => { setBulkUploadOpen(false); showToast("success", "Questions uploaded successfully!"); loadQuestions(); }}
+        <BulkUploadModal
+          subjectId={subjectId}
+          onClose={() => setBulkUploadOpen(false)}
+          onSuccess={() => {
+            setBulkUploadOpen(false);
+            showToast("success", "Questions uploaded successfully!");
+            loadQuestions();
+          }}
         />
       )}
 
+      {/* Edit Subject Settings Modal */}
       <Modal open={editSubjectOpen} onClose={() => setEditSubjectOpen(false)} size="md">
-        <h2>Subject Settings & Instructions</h2>
-        <p className="modal-desc">Configure exam date/time, duration, and exam guidance.</p>
-        <form onSubmit={onSubmitSubject} className={styles.modalForm}>
-          <div className="field-group" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-            <div className="field">
-              <label>Exam Date & Time *</label>
-              <input className="input" type="datetime-local" value={subjDatetime} onChange={(e) => setSubjDatetime(e.target.value)} required />
-            </div>
-            <div className="field">
-              <label>Duration (minutes) *</label>
-              <input className="input" type="number" min="1" max="360" value={subjDuration} onChange={(e) => setSubjDuration(Number(e.target.value))} required />
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+          <div>
+            <div style={{ fontSize: "1rem", fontWeight: 600, color: "var(--color-text)" }}>Exam Schedule & Guidelines</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", marginTop: "0.15rem" }}>
+              Configure examination time limits, target dates, and instructions.
             </div>
           </div>
-          <div className="field" style={{ marginTop: "1rem" }}>
-            <label>Exam Instructions Guidance (Optional)</label>
-            <textarea
-              className="input"
-              style={{ minHeight: "150px", resize: "vertical" }}
-              placeholder="e.g. Provide guidelines for Multiple Choice, True/False, and Essay sections..."
-              value={subjInstructions}
-              onChange={(e) => setSubjInstructions(e.target.value)}
-            />
-          </div>
-          <div className="field" style={{ marginTop: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <input type="checkbox" checked={subjCanRetake} onChange={(e) => setSubjCanRetake(e.target.checked)} id="teacherCanRetakeToggle" style={{ width: "1.25rem", height: "1.25rem", cursor: "pointer" }} />
-            <label htmlFor="teacherCanRetakeToggle" style={{ textTransform: "none", fontWeight: 500, margin: 0, cursor: "pointer" }}>Allow Students to Retake Exam</label>
-          </div>
-          <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={() => setEditSubjectOpen(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
-          </div>
-        </form>
+
+          <form onSubmit={onSubmitSubject} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Exam Date & Time *</label>
+                <input
+                  className={styles.formInput}
+                  type="datetime-local"
+                  value={subjDatetime}
+                  onChange={(e) => setSubjDatetime(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Duration (Minutes) *</label>
+                <input
+                  className={styles.formInput}
+                  type="number"
+                  min={1}
+                  max={360}
+                  value={subjDuration}
+                  onChange={(e) => setSubjDuration(Number(e.target.value))}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Exam Guidelines & Candidate Instructions</label>
+              <textarea
+                rows={4}
+                className={styles.formInput}
+                placeholder="Guidelines for candidates taking this examination…"
+                value={subjInstructions}
+                onChange={(e) => setSubjInstructions(e.target.value)}
+              />
+            </div>
+
+            <div className={styles.formGroup}>
+              <label className={styles.formLabel}>Assessment Result Release Policy</label>
+              <select
+                className={styles.formInput}
+                value={subjResultPolicy}
+                onChange={(e) => setSubjResultPolicy(e.target.value)}
+              >
+                <option value="immediate">Immediate Release (Candidates & Guardians see score right away)</option>
+                <option value="scheduled">Scheduled Release (Withhold scores until scheduled date & time)</option>
+                <option value="manual">Manual Approval (Withhold scores until teacher/admin clicks 'Publish Results')</option>
+              </select>
+            </div>
+
+            {subjResultPolicy === "scheduled" && (
+              <div className={styles.formGroup}>
+                <label className={styles.formLabel}>Results Release Date & Time *</label>
+                <input
+                  type="datetime-local"
+                  className={styles.formInput}
+                  value={subjReleaseTime}
+                  onChange={(e) => setSubjReleaseTime(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <input
+                type="checkbox"
+                id="subjRetake"
+                checked={subjCanRetake}
+                onChange={(e) => setSubjCanRetake(e.target.checked)}
+              />
+              <label htmlFor="subjRetake" style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--color-text)", cursor: "pointer" }}>
+                Allow Candidates to Retake Exam
+              </label>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", paddingTop: "0.75rem", borderTop: "1px solid var(--color-border)" }}>
+              <Button type="button" variant="secondary" size="sm" onClick={() => setEditSubjectOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" loading={saving}>
+                Save Settings
+              </Button>
+            </div>
+          </form>
+        </div>
       </Modal>
-    </>
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        open={confirmState.open}
+        onClose={() => {
+          setConfirmState({ open: false, title: "", message: "", variant: "danger", loading: false });
+          confirmActionRef.current = null;
+        }}
+        onConfirm={() => confirmActionRef.current?.()}
+        title={confirmState.title}
+        message={confirmState.message}
+        variant={confirmState.variant}
+        loading={confirmState.loading}
+      />
+    </div>
   );
 }

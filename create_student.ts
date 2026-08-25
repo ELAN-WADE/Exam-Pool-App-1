@@ -1,18 +1,16 @@
 import { Database } from "bun:sqlite";
 import { hashPassword } from "./auth.ts";
 
-async function createStudent() {
+async function main() {
   const db = new Database("exampool.db");
-  const email = "student@exampool.ng";
-  const newPassword = "studentPassword123!";
-  const hash = await hashPassword(newPassword);
+  const hash = await hashPassword("studentPassword123!");
+  
+  db.prepare(`
+    INSERT OR REPLACE INTO users (id, name, email, reg_id, grade, role, password_hash, is_active)
+    VALUES (9999, 'Elan Wade', 'student@acad.ng', 'ACAD-STU-001', 'Grade 11 - Science', 'student', ?, 1)
+  `).run(hash);
 
-  const insertStmt = db.prepare("INSERT OR REPLACE INTO users (id, name, email, role, password_hash, is_active, grade) VALUES (999, 'Test Student', ?, 'student', ?, 1, 'SS3')");
-  insertStmt.run(email, hash);
-
-  console.log("Success! Created new student.");
-  console.log("Email:", email);
-  console.log("New Password:", newPassword);
+  console.log("Successfully created/updated student@acad.ng");
 }
 
-createStudent().catch(console.error);
+main().catch(console.error);

@@ -1,11 +1,12 @@
 {
-  "name": "ExamPool LAN CBT",
+  "name": "ExamPool - School Management Platform",
   "short_name": "ExamPool",
-  "description": "Offline-first LAN examination platform for Nigerian schools",
-  "start_url": "/student/practice",
+  "description": "Complete school management platform with CBT, grading, and guardian monitoring",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#0D9488",
+  "theme_color": "#4F7cff",
+  "orientation": "any",
   "icons": [
     {
       "src": "/icons/icon-192x192.svg",
@@ -17,5 +18,99 @@
       "sizes": "512x512",
       "type": "image/svg+xml"
     }
-  ]
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/student-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Student Dashboard"
+    },
+    {
+      "src": "/screenshots/teacher-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Teacher Dashboard"
+    },
+    {
+      "src": "/screenshots/guardian-mobile.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Guardian Dashboard"
+    },
+    {
+      "src": "/screenshots/guardian-mobile-wards.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Guardian Ward Management"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Student Portal",
+      "short_name": "Student",
+      "description": "Access student dashboard",
+      "url": "/student/dashboard",
+      "icons": [
+        {
+          "src": "/icons/shortcut-student.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Teacher Portal",
+      "short_name": "Teacher",
+      "description": "Access teacher dashboard",
+      "url": "/teacher/dashboard",
+      "icons": [
+        {
+          "src": "/icons/shortcut-teacher.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Guardian Portal",
+      "short_name": "Guardian",
+      "description": "Monitor ward progress",
+      "url": "/guardian/dashboard",
+      "icons": [
+        {
+          "src": "/icons/shortcut-guardian.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "My Wards",
+      "short_name": "Wards",
+      "description": "View your linked students",
+      "url": "/guardian/wards",
+      "icons": [
+        {
+          "src": "/icons/shortcut-wards.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Ward Results",
+      "short_name": "Results",
+      "description": "View exam results for your wards",
+      "url": "/guardian/wards/results",
+      "icons": [
+        {
+          "src": "/icons/shortcut-results.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
 }

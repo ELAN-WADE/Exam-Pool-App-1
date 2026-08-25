@@ -3,10 +3,11 @@ import { existsSync } from "fs";
 import fs from "fs";
 import crypto, { timingSafeEqual } from "node:crypto";
 import db, { EXAMPOOL_DB_PATH, initializeDatabase, queries, bootstrap_v5_migration } from "./db";
-import { buildSessionCookie, generateToken, hashPassword, verifyPassword, verifyToken } from "./auth";
+import { buildSessionCookie, generateToken, hashPassword, verifyPassword, verifySimpleToken } from "./auth";
 import os from "os";
 import path from "path";
-import { validateMLF, deriveEpkgKey } from "./crypto_utils";
+import dgram from "node:dgram";
+import { validateMLF, deriveEpkgKey, getSystemHardwareFingerprint } from "./crypto_utils";
 import DNS from "dns2";
 // [SECURITY] require() calls hoisted to module level to avoid per-request module lookups
 const nodePath = path; // already imported above
@@ -25,24 +26,31 @@ import {
   normalizeEmail,
   trimStr,
 } from "./validation";
+import { createAuthorizationService } from "./src/services/authorization.service";
+import { cacheService, CacheKeys } from "./src/services/cache.service";
+
+const authz = createAuthorizationService(db, queries);
 
 /** Next `distDir: "../dist"` → `exampool/dist`; some layouts use `exampool/frontend/dist`. */
 function resolveStaticDistDir(): string {
   const siblingDist = path.join(import.meta.dir, "dist");
-  const siblingOut = path.join(import.meta.dir, "out");
   const nestedFrontendDist = path.join(import.meta.dir, "frontend", "dist");
+  const siblingOut = path.join(import.meta.dir, "out");
   const nestedFrontendOut = path.join(import.meta.dir, "frontend", "out");
   
-  if (existsSync(path.join(siblingOut, "index.html"))) return siblingOut;
   if (existsSync(path.join(siblingDist, "index.html"))) return siblingDist;
-  if (existsSync(path.join(nestedFrontendOut, "index.html"))) return nestedFrontendOut;
   if (existsSync(path.join(nestedFrontendDist, "index.html"))) return nestedFrontendDist;
+  if (existsSync(path.join(siblingOut, "index.html"))) return siblingOut;
+  if (existsSync(path.join(nestedFrontendOut, "index.html"))) return nestedFrontendOut;
   
-  return siblingOut;
+  return siblingDist;
 }
 
-const distDir = resolveStaticDistDir();
-const indexFile = Bun.file(path.join(distDir, "index.html"));
+let distDir = resolveStaticDistDir();
+function getIndexFile() {
+  const currentDist = resolveStaticDistDir();
+  return Bun.file(path.join(currentDist, "index.html"));
+}
 
 /** INTEGER / COUNT may be bigint; `0n === 0` and `1n !== 1` break setup mode and ownership checks. */
 function sqlInt(value: unknown): number {
@@ -283,7 +291,7 @@ function parseCookies(req: Request): Record<string, string> {
   return out;
 }
 
-function requireAuth(req: Request): { userId: number; role: string; token: string } {
+function requireAuth(req: Request): { userId: number; role: string; token: string; jti: string } {
   const cookies = parseCookies(req);
   const cookieToken = cookies.__exampool_session;
   const authHeader = req.headers.get("authorization");
@@ -291,12 +299,15 @@ function requireAuth(req: Request): { userId: number; role: string; token: strin
   const token = cookieToken || headerToken;
   if (!token) throw new HttpError(401, "Not authenticated");
   
-  if (queries.isTokenBlacklisted.get(token)) {
+  const decoded = verifySimpleToken(token);
+  if (!decoded) throw new HttpError(401, "Not authenticated");
+
+  // [FIX] isTokenBlacklisted queries `WHERE token = ? OR jti = ?` — it requires BOTH
+  // parameters. Previously only the token was passed, so every authenticated request
+  // threw "SQLite query expected 2 values, received 1" → 500.
+  if (queries.isTokenBlacklisted.get(token, decoded.jti)) {
     throw new HttpError(401, "Session invalidated (Logged out)");
   }
-  
-  const decoded = verifyToken(token);
-  if (!decoded) throw new HttpError(401, "Not authenticated");
 
   // Perform stateful DB check to instantly invalidate suspended sessions
   const user = queries.getUserById.get(decoded.userId) as any;
@@ -304,7 +315,7 @@ function requireAuth(req: Request): { userId: number; role: string; token: strin
     throw new HttpError(401, "Session invalidated or user suspended");
   }
 
-  return { ...decoded, token };
+  return { ...decoded, token, name: user.name, email: user.email };
 }
 
 function requireRole(role: string, allowed: string[]) {
@@ -312,11 +323,22 @@ function requireRole(role: string, allowed: string[]) {
 }
 
 async function licenseValidator(requiredTiers: string[]) {
-  // In v4.1, license check parses the machine license file (MLF)
+  // License validation parses Master License File (MLF) and enforces hardware binding
+  const currentHW = getSystemHardwareFingerprint();
   try {
     const mlfFile = Bun.file("license.json");
     if (!(await mlfFile.exists())) {
-      if (requiredTiers.includes("core")) return true; // fallback for unactivated core mode if needed
+      if (requiredTiers.includes("core")) {
+        return {
+          tier: "core",
+          sub: "ExamPool Default Institution",
+          hw_fp: currentHW,
+          max_devices: 50,
+          status: "unactivated",
+          iat: Math.floor(Date.now() / 1000),
+          exp: null
+        };
+      }
       throw new Error("No license file found");
     }
     const fileContent = await mlfFile.text();
@@ -325,9 +347,9 @@ async function licenseValidator(requiredTiers: string[]) {
       const parsed = JSON.parse(fileContent);
       if (parsed.jwt) jwtStr = parsed.jwt;
     } catch {}
-    // Hardware fingerprint would be retrieved natively, mocking for implementation structure
-    const payload = await validateMLF(jwtStr, "mock-hw-fingerprint");
-    if (!requiredTiers.includes(payload.tier)) {
+    // Validate signature, expiry, and hardware binding against the physical host machine
+    const payload = await validateMLF(jwtStr, currentHW);
+    if (!requiredTiers.includes(payload.tier) && !requiredTiers.includes("core")) {
       throw new HttpError(403, "License tier insufficient for this feature");
     }
     return payload;
@@ -385,11 +407,15 @@ function stripCorrectAnswer(questions: any[], role: string): any[] {
 }
 
 function getCurrentTerm(): string {
-  return (queries.getSetting.get("CURRENT_TERM") as { value?: string } | undefined)?.value || "2026-T1";
+  return cacheService.wrapSync(CacheKeys.currentTerm(), 60, () => {
+    return (queries.getSetting.get("CURRENT_TERM") as { value?: string } | undefined)?.value || "2026-T1";
+  });
 }
 
 function getRegistrationOpen(): boolean {
-  return ((queries.getSetting.get("REGISTRATION_OPEN") as { value?: string } | undefined)?.value || "true") === "true";
+  return cacheService.wrapSync(CacheKeys.registrationOpen(), 60, () => {
+    return ((queries.getSetting.get("REGISTRATION_OPEN") as { value?: string } | undefined)?.value || "true") === "true";
+  });
 }
 
 function getMimeType(filePath: string): string {
@@ -426,7 +452,7 @@ function getCacheControl(filePath: string): string {
 }
 
 /** Normalize URL path for static lookup (supports Next `trailingSlash: true` → `/setup/` → `setup/index.html`). */
-async function serveStatic(urlPath: string): Promise<Response> {
+async function serveStatic(urlPath: string, req?: Request): Promise<Response> {
   const pathname = urlPath.split("?")[0] ?? urlPath;
   
   // UX Fix: Auto-correct common casing mistakes for main portals
@@ -437,8 +463,9 @@ async function serveStatic(urlPath: string): Promise<Response> {
   if (lowerPath.startsWith("/admin") && !pathname.startsWith("/ADMIN")) {
     return new Response(null, { status: 301, headers: { Location: "/ADMIN" + urlPath.slice(6) } });
   }
-  if (lowerPath.startsWith("/operator") && pathname !== lowerPath) {
-    return new Response(null, { status: 301, headers: { Location: lowerPath + urlPath.slice(pathname.length) } });
+  if (lowerPath.startsWith("/operator")) {
+    const sub = urlPath.slice(9) || "/dashboard";
+    return new Response(null, { status: 301, headers: { Location: "/ADMIN" + sub } });
   }
   if (lowerPath.startsWith("/student") && pathname !== lowerPath) {
     return new Response(null, { status: 301, headers: { Location: lowerPath + urlPath.slice(pathname.length) } });
@@ -447,18 +474,22 @@ async function serveStatic(urlPath: string): Promise<Response> {
   const rel = pathname.replace(/^\/+/, "").replace(/\/+$/, "");
   const candidates: string[] = [];
 
+  const currentDistDir = resolveStaticDistDir();
+  distDir = currentDistDir;
+  const currentIdxFile = Bun.file(path.join(currentDistDir, "index.html"));
+
   if (!rel) {
-    candidates.push(path.join(distDir, "index.html"));
+    candidates.push(path.join(currentDistDir, "index.html"));
   } else if (path.extname(rel) !== "") {
-    candidates.push(path.join(distDir, rel));
+    candidates.push(path.join(currentDistDir, rel));
   } else {
-    candidates.push(path.join(distDir, rel, "index.html"));
-    candidates.push(path.join(distDir, `${rel}.html`));
-    candidates.push(path.join(distDir, rel));
+    candidates.push(path.join(currentDistDir, rel, "index.html"));
+    candidates.push(path.join(currentDistDir, `${rel}.html`));
+    candidates.push(path.join(currentDistDir, rel));
   }
 
   // Normalize distDir for comparison (resolve symlinks/dotdots)
-  const resolvedDistDir = path.resolve(distDir);
+  const resolvedDistDir = path.resolve(currentDistDir);
 
   for (const filePath of candidates) {
     // Path traversal guard: ensure resolved path stays inside distDir
@@ -480,18 +511,39 @@ async function serveStatic(urlPath: string): Promise<Response> {
       });
     }
   }
+
+  // Development Fallback: Proxy to Next.js dev server on port 3000 if active
+  try {
+    const devUrl = new URL(urlPath, "http://127.0.0.1:3000");
+    const devHeaders = new Headers(req?.headers);
+    devHeaders.delete("host");
+    const devRes = await fetch(devUrl.toString(), {
+      method: req?.method || "GET",
+      headers: devHeaders,
+    });
+    if (devRes.status === 200 || devRes.status === 304 || devRes.status === 302 || devRes.status === 307) {
+      const resHeaders = new Headers(devRes.headers);
+      Object.entries(corsHeaders).forEach(([k, v]) => resHeaders.set(k, v));
+      return new Response(devRes.body, {
+        status: devRes.status,
+        headers: resHeaders,
+      });
+    }
+  } catch {}
+
   // Fallback SPA shell — also no-cache
-  if (!(await indexFile.exists())) {
-    return apiError(404, "Not found");
+  if (await currentIdxFile.exists()) {
+    return new Response(currentIdxFile, {
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+      },
+    });
   }
-  return new Response(indexFile, {
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store, no-cache, must-revalidate",
-      "Pragma": "no-cache",
-    },
-  });
+
+  return apiError(404, "Not found");
 }
 
 function isApiExemptWhileSetup(pathname: string, method: string): boolean {
@@ -617,6 +669,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (method === "GET" && pathname === "/api/server-info") {
+    // [SECURITY FIX VULN-14] Enforce operator auth — this endpoint exposes the
+    // server's internal IP, port, and version string. The route was previously
+    // only excluded from the setup exemption list, but never actually guarded.
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator"]);
     const interfaces = os.networkInterfaces();
     const ips: string[] = [];
     for (const addresses of Object.values(interfaces)) {
@@ -754,8 +811,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (role === "operator" && (!auth || auth.role !== "operator")) return apiError(403, "operator cannot self-register");
     if (role !== "student" && role !== "teacher" && role !== "operator") return apiError(403, "Invalid role");
     if (role === "student" && !gradeLevelId) return apiError(400, "Grade Level ID is required for student accounts");
-    if (role === "student" && !dob) return apiError(400, "Date of Birth is required for student accounts");
-    if (role === "teacher" && !phone) return apiError(400, "Phone number is required for teacher accounts");
+    // MVP gap fix: allow operator to create student/teacher without DOB/phone by providing safe defaults (password-reset still works via admin reset)
+    let effectiveDob = dob;
+    let effectivePhone = phone;
+    if (auth?.role === "operator") {
+      if (role === "student" && !effectiveDob) effectiveDob = "2005-01-01";
+      if (role === "teacher" && !effectivePhone) effectivePhone = "08000000000";
+    }
+    if (role === "student" && !effectiveDob) return apiError(400, "Date of Birth is required for student accounts");
+    if (role === "teacher" && !effectivePhone) return apiError(400, "Phone number is required for teacher accounts");
     
     const prefix = role === "teacher" ? "TCH" : "REG";
     const regId = `${prefix}-${Date.now().toString(36).toUpperCase()}`;
@@ -775,7 +839,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     let result: { lastInsertRowid: number | bigint };
     try {
-      result = queries.createUser.run(name, email, role, hash, resolvedGradeString, regId, null, null, null, role === "teacher" ? phone : null, role === "student" ? dob : null, role === "student" ? gradeLevelId : null) as {
+      result = queries.createUser.run(name, email, role, hash, resolvedGradeString, regId, null, null, null, role === "teacher" ? effectivePhone : null, role === "student" ? effectiveDob : null, role === "student" ? gradeLevelId : null) as {
         lastInsertRowid: number | bigint;
       };
     } catch (e) {
@@ -830,9 +894,164 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ user: { ...stripPassword(user), is_class_teacher, assigned_class_id, assigned_class_name } });
   }
 
+  // ── Student Telemetry (Streak, Today's Goal, Cohort Rank) ───────────────────
+  if (method === "GET" && pathname === "/api/student/telemetry") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["student"]);
+
+    // 1. Calculate real activity dates
+    const dateRows = queries.getStudentDailyActivityDates.all(auth.userId, auth.userId, auth.userId) as Array<{ activity_date: string }>;
+    const activeDates = new Set(dateRows.map(r => r.activity_date).filter(Boolean));
+
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000);
+    const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+    // Current Streak calculation
+    let currentStreak = 0;
+    const startStr = activeDates.has(todayStr) ? todayStr : activeDates.has(yesterdayStr) ? yesterdayStr : null;
+    
+    if (startStr) {
+      let d = new Date(startStr);
+      while (true) {
+        const dStr = d.toISOString().slice(0, 10);
+        if (activeDates.has(dStr)) {
+          currentStreak++;
+          d.setDate(d.getDate() - 1);
+        } else {
+          break;
+        }
+      }
+    }
+
+    // Best streak calculation across all time
+    let bestStreak = 0;
+    let tempStreak = 0;
+    const sortedDates = Array.from(activeDates).filter((d): d is string => Boolean(d)).sort();
+    for (let i = 0; i < sortedDates.length; i++) {
+      if (i === 0) {
+        tempStreak = 1;
+      } else {
+        const prevStr = sortedDates[i - 1];
+        const currStr = sortedDates[i];
+        if (!prevStr || !currStr) continue;
+        const prev = new Date(prevStr);
+        const curr = new Date(currStr);
+        const diffDays = Math.round((curr.getTime() - prev.getTime()) / (1000 * 3600 * 24));
+        if (diffDays === 1) {
+          tempStreak++;
+        } else {
+          tempStreak = 1;
+        }
+      }
+      if (tempStreak > bestStreak) bestStreak = tempStreak;
+    }
+    if (currentStreak > bestStreak) bestStreak = currentStreak;
+
+    // 2. Today's question count
+    const todayCountRow = queries.getStudentTodayQuestionCount.get(auth.userId, auth.userId) as any;
+    const todayQuestions = Number(todayCountRow?.count || 0);
+    const dailyGoal = 10;
+    const practicePercent = Math.min(100, Math.round((todayQuestions / dailyGoal) * 100));
+
+    // 3. Cohort Rank calculation
+    const user = queries.getUserById.get(auth.userId) as any;
+    const cohortRow = queries.getStudentCohortStats.get(auth.userId) as any;
+    const cohortTotal = Math.max(1, Number(cohortRow?.cohort_size || 1));
+    
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = activeSession?.id ?? null;
+    const targetTermId = activeTerm?.id ?? null;
+
+    let cohortRank = 1;
+    if (user?.grade || user?.grade_level_id) {
+      try {
+        const rankRow = db.prepare(`
+          WITH student_points AS (
+            SELECT 
+              u.id as student_id,
+              COALESCE((
+                SELECT SUM(e.score) 
+                FROM exams e 
+                WHERE e.student_id = u.id 
+                  AND e.status = 'completed'
+                  AND (e.session_id = ? OR ? IS NULL)
+                  AND (e.term_id = ? OR ? IS NULL)
+              ), 0) + 
+              COALESCE((
+                SELECT COUNT(*) * 2 
+                FROM practice_logs.practice_logs pl 
+                WHERE pl.student_id = u.id
+              ), 0) as total_pts
+            FROM users u
+            WHERE u.role = 'student' AND u.is_active = 1
+              AND (
+                (u.grade_level_id IS NOT NULL AND u.grade_level_id = ?)
+                OR (u.grade IS NOT NULL AND u.grade = ?)
+              )
+          )
+          SELECT 
+            (SELECT COUNT(*) FROM student_points WHERE total_pts > (SELECT total_pts FROM student_points WHERE student_id = ?)) + 1 as rank
+        `).get(targetSessionId, targetSessionId, targetTermId, targetTermId, user.grade_level_id, user.grade, auth.userId) as any;
+
+        if (rankRow?.rank) {
+          cohortRank = Number(rankRow.rank);
+        }
+      } catch (e) {
+        console.error("[Telemetry] Rank calculation error:", e);
+      }
+    }
+
+    return apiSuccess({
+      streak: currentStreak,
+      bestStreak: Math.max(bestStreak, currentStreak),
+      todayQuestions,
+      dailyGoal,
+      practicePercent,
+      rank: cohortRank,
+      cohortTotal,
+      cohortName: cohortRow?.grade_name || user?.grade || "Class"
+    });
+  }
+
+  // ── Student / User Profile Detail ──────────────────────────────────────────
+  if (method === "GET" && pathname === "/api/users/me/profile") {
+    const auth = requireAuth(req);
+    const user = queries.getUserById.get(auth.userId) as any;
+    if (!user || sqlInt(user.is_active) !== 1) return apiError(401, "Not authenticated");
+
+    const enrolledSubjects = queries.getStudentEnrolledSubjects.all(auth.userId) as any[];
+    const stats = queries.getStudentExamStats.get(auth.userId) as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+
+    let practiceCount = 0;
+    try {
+      const practiceCountRow = db.prepare("SELECT COUNT(*) as count FROM practice_logs.practice_logs WHERE student_id = ?").get(auth.userId) as any;
+      practiceCount = Number(practiceCountRow?.count || 0);
+    } catch {}
+
+    return apiSuccess({
+      user: stripPassword(user),
+      enrolledSubjects: enrolledSubjects || [],
+      stats: {
+        total_exams: Number(stats?.total_exams || 0),
+        completed: Number(stats?.completed || 0),
+        avg_pct: Number(stats?.avg_pct || 0),
+        practice_questions_completed: practiceCount
+      },
+      activeSession: activeSession || null,
+      activeTerm: activeTerm || null
+    });
+  }
+
   if (method === "POST" && pathname === "/api/auth/logout") {
     const auth = requireAuth(req);
-    queries.insertTokenBlacklist.run(auth.token);
+    // [FIX] insertTokenBlacklist takes (token, jti, reason) — passing only the token
+    // previously threw "expected 3 values, received 1" and broke logout.
+    queries.insertTokenBlacklist.run(auth.token, auth.jti, "logout");
     auditLog(auth.userId, "LOGOUT", "user", auth.userId, "{}");
     return apiMessage("Logged out", 200, { "Set-Cookie": "__exampool_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
   }
@@ -891,15 +1110,19 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiMessage("Password reset successfully");
   }
 
-  const resetPasswordMatch = pathname.match(/^\/api\/users\/(\d+)\/reset-password$/);
-  if (resetPasswordMatch && method === "POST") {
+  const resetPasswordMatch = pathname.match(/^\/api\/users\/(\d+)\/(reset-password|password)$/);
+  if (resetPasswordMatch && (method === "POST" || method === "PUT")) {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
     const userId = Number(resetPasswordMatch[1]);
     const body = await readJson(req);
-    const newPassword = body?.new_password;
+    const rawPassword = body?.new_password || body?.password || body?.newPassword;
+    const newPassword = trimStr(rawPassword);
+    
     if (!isPositiveIntId(userId)) return apiError(400, "Invalid user ID");
-    if (!isValidPassword(newPassword)) return apiError(400, `Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    if (!newPassword || newPassword.length < 4) {
+      return apiError(400, "Password must be at least 4 characters");
+    }
     
     const user = queries.getUserById.get(userId) as any;
     if (!user) return apiError(404, "User not found");
@@ -907,8 +1130,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const hash = await hashPassword(newPassword);
     queries.updateUserPassword.run(hash, userId);
     
-    auditLog(auth.userId, "USER_UPDATE", "user", userId, JSON.stringify({ action: "reset_password" }));
-    return apiMessage("Password reset successfully");
+    try {
+      // Invalidate active session tokens for the target user so they log in with the new password
+      queries.revokeAllUserTokens.run(userId);
+    } catch {}
+
+    auditLog(auth.userId, "USER_UPDATE", "user", userId, JSON.stringify({ action: "admin_reset_password", target_email: user.email }));
+    return apiSuccess({ message: "Password reset successfully", user_id: userId, email: user.email });
   }
 
   const studentExamsMatch = pathname.match(/^\/api\/users\/(\d+)\/exams$/);
@@ -921,12 +1149,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     // [SECURITY FIX] Filter out exams for subjects that the teacher does not own, UNLESS they are the student's Class Teacher.
     if (auth.role === "teacher") {
-      let isClassTeacherForStudent = false;
-      const teacherClass = queries.getClassForTeacher.get(auth.userId) as any;
-      if (teacherClass) {
-        const isEnrolled = db.prepare("SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.id = ? AND COALESCE(gl.name, u.grade) = ? LIMIT 1").get(studentId, teacherClass.name);
-        if (isEnrolled) isClassTeacherForStudent = true;
-      }
+      const isClassTeacherForStudent = authz.isClassTeacherForStudent(auth, studentId);
       if (!isClassTeacherForStudent) {
         exams = exams.filter((e) => sameUserId(e.teacher_id, auth.userId));
       }
@@ -938,20 +1161,24 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   const reportCardMatch = pathname.match(/^\/api\/users\/(\d+)\/report-card-results$/);
   if (reportCardMatch && method === "GET") {
     const auth = requireAuth(req);
-    requireRole(auth.role, ["teacher", "operator"]);
+    requireRole(auth.role, ["teacher", "operator", "student", "guardian"]);
+    // Students may only fetch their own report card; guardians must be linked
+    if (auth.role === "student" && auth.userId !== Number(reportCardMatch[1])) return apiError(403, "You can only view your own report card");
+    if (auth.role === "guardian") {
+      const sid = Number(reportCardMatch[1]);
+      const link = db.prepare("SELECT 1 FROM guardian_student_links WHERE guardian_id = ? AND student_id = ? AND status='approved' LIMIT 1").get(auth.userId, sid) as any;
+      if (!link) return apiError(403, "Not linked to this student");
+    }
     const studentId = Number(reportCardMatch[1]);
     const qSessionId = Number(url.searchParams.get("sessionId") || 0);
     const qTermId = Number(url.searchParams.get("termId") || 0);
+    const singleTerm = url.searchParams.get("singleTerm") === "true" || url.searchParams.get("single_term") === "true";
     
     let results = queries.getStudentTermResultsForReportCard.all(studentId) as any[];
     
     // [SECURITY FIX] Allow Class Teachers to see all results for their class
     if (auth.role === "teacher") {
-      let isClassTeacherForStudent = false;
-      const isEnrolled = db.prepare(
-        "SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id JOIN classes c ON c.name = COALESCE(gl.name, u.grade) WHERE u.id = ? AND c.class_teacher_id = ? LIMIT 1"
-      ).get(studentId, auth.userId);
-      if (isEnrolled) isClassTeacherForStudent = true;
+      const isClassTeacherForStudent = authz.isClassTeacherForStudent(auth, studentId);
       if (!isClassTeacherForStudent) {
         results = results.filter((r) => sameUserId(r.teacher_id, auth.userId));
       }
@@ -961,7 +1188,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       results = results.filter((r) => Number(r.session_id) === qSessionId);
     }
     if (qTermId) {
-      results = results.filter((r) => Number(r.term_id) === qTermId);
+      if (singleTerm) {
+        results = results.filter((r) => Number(r.term_id) === qTermId);
+      } else {
+        // For report card / cumulative evaluation within a session, include terms up to and including target term
+        results = results.filter((r) => Number(r.term_id) <= qTermId);
+      }
     }
     
     return apiSuccess(results);
@@ -994,7 +1226,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     notifyOperators({
       type: "remark_added",
       message: `Teacher added a remark for ${subjectRow?.code || 'an exam'}`,
-      link: `/operator/report-card`
+      link: `/ADMIN/report-card`
     });
 
     return apiSuccess({ exam_id: examId, teacher_remark: remark || null });
@@ -1123,12 +1355,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         "SELECT tr.id FROM term_results tr JOIN grading_subjects gs ON gs.id = tr.grading_subject_id WHERE tr.student_id = ? AND gs.teacher_id = ? AND tr.session_id = ? AND tr.term_id = ? LIMIT 1"
       ).get(studentId, auth.userId, targetSessionId, targetTermId);
       
-      let isClassTeacher = false;
-      const teacherClass = queries.getClassForTeacher.get(auth.userId) as any;
-      if (teacherClass) {
-        const isEnrolled = db.prepare("SELECT 1 FROM users u LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE u.id = ? AND COALESCE(gl.name, u.grade) = ? LIMIT 1").get(studentId, teacherClass.name);
-        if (isEnrolled) isClassTeacher = true;
-      }
+      const isClassTeacher = authz.isClassTeacherForStudent(auth, studentId);
       
       if (!linked && !linkedGrading && !isClassTeacher) return apiError(403, "Student is not enrolled in your subjects or class for this term");
     }
@@ -1153,7 +1380,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       notifyOperators({
         type: "remark_added",
         message: `${teacherRow?.name || 'Teacher'} added a report-card remark for ${studentRow?.name || 'a student'} (${term})`,
-        link: `/operator/report-card`
+        link: `/ADMIN/report-card`
       });
     } else if (auth.role === "operator") {
       const studentRow = queries.getUserById.get(studentId) as any;
@@ -1184,7 +1411,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   if (method === "GET" && pathname === "/api/academic/sessions") {
     const auth = requireAuth(req);
-    requireRole(auth.role, ["operator", "teacher"]);
+    // Allow all authenticated roles to read academic structure (needed for student/guardian academic switch)
     const sessions = queries.getAllAcademicSessions.all() as any[];
     const terms = queries.getAllAcademicTerms.all() as any[];
     return apiSuccess({ sessions, terms });
@@ -1215,7 +1442,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       return apiError(400, "Valid sessionId and term/semester name required");
     }
     try {
-      queries.createAcademicTerm.run(sessionId, name, body?.startDate || null, body?.endDate || null, 0, "active");
+      const res = queries.createAcademicTerm.run(sessionId, name, body?.startDate || null, body?.endDate || null, 0, "active") as any;
+      const termId = Number(res?.lastInsertRowid);
+      if (termId) {
+        const session = queries.getAcademicSessionById.get(sessionId) as any;
+        db.prepare("INSERT OR IGNORE INTO terms (id, session, name, start_date, end_date, is_active, registration_open) VALUES (?, ?, ?, ?, ?, 0, 1)")
+          .run(termId, session?.name || "Default", name, body?.startDate || "2020-01-01", body?.endDate || "2030-12-31");
+      }
       return apiSuccess({ success: true, message: `${name} created for session` });
     } catch (err: any) {
       return apiError(400, err.message || "Failed to create term");
@@ -1228,8 +1461,21 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const body = await readJson(req);
     const sessionId = Number(body?.sessionId);
     if (!isPositiveIntId(sessionId)) return apiError(400, "Invalid sessionId");
-    queries.deactivateAllAcademicSessions.run();
-    queries.activateAcademicSession.run(sessionId);
+    
+    db.transaction(() => {
+      queries.deactivateAllAcademicSessions.run();
+      queries.activateAcademicSession.run(sessionId);
+      
+      const activeTerm = queries.getActiveAcademicTerm.get() as any;
+      if (!activeTerm || activeTerm.session_id !== sessionId) {
+        queries.deactivateAllAcademicTerms.run();
+        const firstTerm = db.prepare("SELECT id FROM academic_terms WHERE session_id = ? ORDER BY id ASC LIMIT 1").get(sessionId) as any;
+        if (firstTerm) {
+          queries.activateAcademicTerm.run(firstTerm.id);
+        }
+      }
+    })();
+    
     return apiSuccess({ success: true, message: "Academic session activated" });
   }
 
@@ -1239,17 +1485,33 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const body = await readJson(req);
     const termId = Number(body?.termId);
     if (!isPositiveIntId(termId)) return apiError(400, "Invalid termId");
-    queries.deactivateAllAcademicTerms.run();
-    queries.activateAcademicTerm.run(termId);
+    
+    const term = queries.getAcademicTermById.get(termId) as any;
+    if (!term) return apiError(404, "Academic term not found");
+    
+    db.transaction(() => {
+      queries.deactivateAllAcademicSessions.run();
+      queries.activateAcademicSession.run(term.session_id);
+      queries.deactivateAllAcademicTerms.run();
+      queries.activateAcademicTerm.run(termId);
+    })();
+    
     return apiSuccess({ success: true, message: "Academic term activated" });
   }
 
   if (method === "POST" && pathname === "/api/academic/end-term") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
+    const body = await readJson(req);
+    const termId = Number(body?.termId) || (queries.getActiveAcademicTerm.get() as any)?.id;
     
-    // Deactivate the current active term
-    queries.deactivateAllAcademicTerms.run();
+    db.transaction(() => {
+      if (termId) {
+        queries.archiveAcademicTerm.run(termId);
+        queries.lockExamsForTerm.run(termId);
+      }
+      queries.deactivateAllAcademicTerms.run();
+    })();
     
     return apiSuccess({ success: true, message: "Active term ended successfully. Awaiting new term activation." });
   }
@@ -1354,6 +1616,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   if (method === "GET" && pathname === "/api/grading/subjects") {
     const auth = requireAuth(req);
+    // [SECURITY FIX] Previously any logged-in user (including students) fell through
+    // to the operator branch and received ALL grading subjects + score aggregates for
+    // the term. Grading data must be restricted to teachers and operators.
+    requireRole(auth.role, ["teacher", "operator"]);
     const qSessionId = Number(url.searchParams.get("sessionId") || 0);
     const qTermId    = Number(url.searchParams.get("termId")    || 0);
     const activeTerm    = queries.getActiveAcademicTerm.get()    as any;
@@ -1476,6 +1742,20 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
   }
 
+  // ── GET single grading subject (teacher/operator) ───────────────────────────
+  const gradingSubjectIdMatch = pathname.match(/^\/api\/grading\/subjects\/(\d+)$/);
+  if (gradingSubjectIdMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const gsId = Number(gradingSubjectIdMatch[1]);
+    if (!isPositiveIntId(gsId)) return apiError(400, "Invalid grading subject id");
+    const gs = queries.getGradingSubjectById.get(gsId) as any;
+    if (!gs) return apiError(404, "Grading subject not found");
+    if (auth.role === "teacher" && !sameUserId(gs.teacher_id, auth.userId)) return apiError(403, "You do not own this grading subject");
+    const approved = db.prepare("SELECT is_approved FROM term_results WHERE grading_subject_id = ? AND is_approved = 1 LIMIT 1").get(gsId);
+    return apiSuccess({ ...gs, is_approved: !!approved });
+  }
+
   if (method === "POST" && pathname === "/api/grading/subjects") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]); // Teachers no longer create manually — auto-created on submission
@@ -1512,6 +1792,158 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
   }
 
+  // ── Class Teacher Grading Center ──────────────────────────────────────────
+  if (method === "GET" && pathname === "/api/grading/class-center") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qClassId = Number(url.searchParams.get("classId") || 0);
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const termId = qTermId || activeTerm?.id;
+    const sessionId = qSessionId || activeSession?.id;
+
+    let cls = null;
+    if (auth.role === "operator" && isPositiveIntId(qClassId)) {
+      cls = queries.getClassById.get(qClassId) as any;
+    } else {
+      cls = queries.getClassForTeacher.get(auth.userId) as any;
+    }
+    if (!cls) return apiSuccess({ class: null, students: [], grading_subjects: [] });
+    if (!termId || !sessionId) return apiSuccess({ class: { id: cls.id, name: cls.name, section: cls.section || null }, students: [], grading_subjects: [] });
+
+    const classId = Number(cls.id);
+    const roster = queries.getClassRoster.all(classId, termId) as any[];
+    const termResults = queries.getClassTermResultsByClass.all(classId, termId, sessionId) as any[];
+    const gradingSubjects = queries.getClassSubjectsForTerm.all(classId, termId, sessionId) as any[];
+
+    const resultsByStudent = new Map<number, any[]>();
+    for (const tr of termResults) {
+      const sid = sqlInt(tr.student_id);
+      const arr = resultsByStudent.get(sid) ?? [];
+      arr.push({
+        grading_subject_id: sqlInt(tr.grading_subject_id),
+        grading_subject_code: tr.subject_code,
+        grading_subject_name: tr.subject_name,
+        ca_score: sqlInt(tr.ca_score),
+        exam_score: sqlInt(tr.exam_score),
+        total_score: sqlInt(tr.total_score),
+        grade: tr.grade,
+        is_approved: sqlInt(tr.is_approved),
+      });
+      resultsByStudent.set(sid, arr);
+    }
+
+    const students = roster.map((st) => {
+      const subs = resultsByStudent.get(sqlInt(st.id)) ?? [];
+      const total = subs.reduce((sum, s) => sum + s.total_score, 0);
+      const subjectCount = subs.length;
+      const averageScore = subjectCount > 0 ? Number((total / subjectCount).toFixed(1)) : 0;
+      return {
+        student: {
+          id: sqlInt(st.id),
+          name: st.name,
+          email: st.email,
+          grade: st.grade || null,
+          reg_id: st.reg_id || null,
+        },
+        subjects: subs,
+        total_score: total,
+        subject_count: subjectCount,
+        average_score: averageScore,
+      };
+    });
+
+    return apiSuccess({
+      class: { id: cls.id, name: cls.name, section: cls.section || null },
+      students,
+      grading_subjects: gradingSubjects.map((gs: any) => ({
+        id: sqlInt(gs.id),
+        name: gs.name,
+        code: gs.code,
+        teacher_id: gs.teacher_id != null ? sqlInt(gs.teacher_id) : null,
+        teacher_name: gs.teacher_name || null,
+      })),
+    });
+  }
+
+  // ── Report Card endpoint under /api/grading/report-card/:studentId ─────────
+  const gradingReportCardRemarksMatch = pathname.match(/^\/api\/grading\/report-card\/(\d+)\/remarks$/);
+  if (gradingReportCardRemarksMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const studentId = Number(gradingReportCardRemarksMatch[1]);
+    if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student ID");
+
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const sessionId = qSessionId || activeSession?.id;
+    const termId = qTermId || activeTerm?.id;
+
+    const body = await readJson(req);
+    const teacherRemark = typeof body?.teacher_remark === "string" ? body.teacher_remark.trim() : null;
+    const principalRemark = typeof body?.principal_remark === "string" ? body.principal_remark.trim() : null;
+
+    queries.upsertStudentTermRemarks.run(studentId, sessionId, termId, teacherRemark, principalRemark);
+    auditLog(auth.userId, "REPORT_CARD_REMARK", "user", studentId, JSON.stringify({ sessionId, termId }));
+
+    return apiSuccess({ success: true, message: "Remarks saved successfully" });
+  }
+
+  const gradingReportCardMatch = pathname.match(/^\/api\/grading\/report-card\/(\d+)$/);
+  if (gradingReportCardMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator", "student", "guardian"]);
+    const studentId = Number(gradingReportCardMatch[1]);
+    if (!isPositiveIntId(studentId)) return apiError(400, "Invalid student ID");
+
+    if (auth.role === "student" && auth.userId !== studentId) return apiError(403, "You can only view your own report card");
+    if (auth.role === "guardian") {
+      const link = db.prepare("SELECT 1 FROM guardian_student_links WHERE guardian_id = ? AND student_id = ? AND status='approved' LIMIT 1").get(auth.userId, studentId) as any;
+      if (!link) return apiError(403, "Not linked to this student");
+    }
+
+    const student = queries.getUserById.get(studentId) as any;
+    if (!student) return apiError(404, "Student not found");
+
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const sessionId = qSessionId || activeSession?.id;
+    const termId = qTermId || activeTerm?.id;
+
+    let results = queries.getStudentTermResultsForReportCard.all(studentId) as any[];
+    if (sessionId) {
+      results = results.filter((r) => Number(r.session_id) === sessionId);
+    }
+    if (termId) {
+      results = results.filter((r) => Number(r.term_id) <= termId);
+    }
+
+    const remarks = queries.getStudentTermRemarks.get(studentId, sessionId, termId) as any;
+
+    return apiSuccess({
+      student: {
+        id: student.id,
+        name: student.name,
+        email: student.email,
+        reg_id: student.reg_id,
+        grade: student.grade,
+      },
+      results,
+      remarks: {
+        teacher_remark: remarks?.teacher_remark || null,
+        principal_remark: remarks?.principal_remark || null,
+      },
+      session: activeSession,
+      term: activeTerm,
+    });
+  }
+
   const gradingPolicyMatch = pathname.match(/^\/api\/grading\/policies\/(\d+)$/);
   if (gradingPolicyMatch) {
     const subjectId = Number(gradingPolicyMatch[1]);
@@ -1538,16 +1970,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       let caTotal = 0;
       let examTotal = 0;
       for (const p of policyList) {
-        if (p.is_exam) examTotal += Number(p.max_marks);
-        else caTotal += Number(p.max_marks);
+        if (p.is_exam) examTotal += Number(p.max_marks || 0);
+        else caTotal += Number(p.max_marks || 0);
       }
-      
-      const gradingCfg = getGradingConfig();
-      const expectedCa = gradingCfg.ca_max ?? 40;
-      const expectedExam = gradingCfg.exam_max ?? 60;
 
-      if (caTotal !== expectedCa) return apiError(400, `Continuous Assessment total must be exactly ${expectedCa} marks. Currently: ${caTotal}`);
-      if (examTotal !== expectedExam) return apiError(400, `Examination total must be exactly ${expectedExam} marks. Currently: ${examTotal}`);
+      if (caTotal < 0 || examTotal < 0 || (caTotal + examTotal) <= 0) {
+        return apiError(400, "Total marks for CA and Exam combined must be greater than 0");
+      }
+
       
       const termResultsCheck = queries.getTermResultsBySubject.all(subjectId) as any[];
       if (termResultsCheck.some((r: any) => r.is_approved === 1)) return apiError(403, "Results are already approved and locked");
@@ -1606,6 +2036,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     if (method === "GET") {
       const auth = requireAuth(req);
+      requireRole(auth.role, ["teacher", "operator"]);
+      if (auth.role === "teacher" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this grading subject");
 
       const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
 
@@ -1674,6 +2106,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         }
         
         const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
+        const totalMax = policies.reduce((sum: number, p: any) => sum + Number(p.max_marks || 0), 0) || 100;
         const schoolCfg = getGradingConfig();
         function getGradeScale(total: number) {
           if (subject.pass_mark != null && Number(subject.pass_mark) > 0) {
@@ -1681,7 +2114,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
             if (total >= pm) return { grade: "PASS", remark: "Pass" };
             return { grade: "FAIL", remark: "Fail" };
           }
-          return applyGradeScale(total, schoolCfg.grade_scale);
+          const pct = totalMax > 0 ? (total / totalMax) * 100 : total;
+          return applyGradeScale(pct, schoolCfg.grade_scale);
         }
 
         for (const st of students) {
@@ -1716,7 +2150,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   if (gradingApproveMatch && method === "POST") {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator", "teacher"]);
-    
+
     const subjectId = Number(gradingApproveMatch[1]);
     const subject = queries.getGradingSubjectById.get(subjectId) as any;
     if (!subject) return apiError(404, "Grading Subject not found");
@@ -1753,6 +2187,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     
     const students = queries.getGradingStudentsBySubject.all(subjectId, subjectId, subjectId, subjectId) as any[];
     
+    const totalMax = policies.reduce((sum: number, p: any) => sum + Number(p.max_marks || 0), 0) || 100;
     const schoolCfg = getGradingConfig();
     function getGradeScale(total: number) {
       if (subject.pass_mark != null && Number(subject.pass_mark) > 0) {
@@ -1760,7 +2195,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         if (total >= pm) return { grade: "PASS", remark: "Pass" };
         return { grade: "FAIL", remark: "Fail" };
       }
-      return applyGradeScale(total, schoolCfg.grade_scale);
+      const pct = totalMax > 0 ? (total / totalMax) * 100 : total;
+      return applyGradeScale(pct, schoolCfg.grade_scale);
     }
     
     db.transaction(() => {
@@ -1873,6 +2309,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
           
           if (nextGrade) {
             db.prepare("UPDATE users SET grade_level_id = ? WHERE id = ?").run(nextGrade.id, studentId);
+            // Also enroll into next class's active term if class exists
+            try {
+              const nextGradeName = db.prepare("SELECT name FROM grade_levels WHERE id = ?").get(nextGrade.id) as any;
+              const nextClass = nextGradeName ? db.prepare("SELECT id FROM classes WHERE name = ? LIMIT 1").get(nextGradeName.name) as any : null;
+              const activeTermForEnroll = queries.getActiveAcademicTerm.get() as any;
+              if (nextClass && activeTermForEnroll) {
+                db.prepare("INSERT OR IGNORE INTO class_enrollments (student_id, class_id, term_id) VALUES (?, ?, ?)").run(studentId, nextClass.id, activeTermForEnroll.id);
+              }
+            } catch {}
           }
         }
       }
@@ -2368,6 +2813,38 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ snapshots });
   }
 
+  if (method === "GET" && pathname === "/api/subjects/with-question-counts") {
+    // Used by the teacher dashboard to render subject cards with question counts
+    // in a single request (avoids N+1 question-count lookups on the client).
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+
+    let query = `
+      SELECT s.*,
+        (SELECT COUNT(*) FROM questions q WHERE q.subject_id = s.id) as question_count
+      FROM subjects s
+    `;
+    const params: any[] = [];
+    const where: string[] = [];
+    if (auth.role === "teacher") {
+      where.push("s.teacher_id = ?");
+      params.push(auth.userId);
+    }
+    if (targetSessionId && targetTermId) {
+      where.push("(s.session_id = ? AND s.term_id = ? OR s.session_id IS NULL)");
+      params.push(targetSessionId, targetTermId);
+    }
+    if (where.length) query += " WHERE " + where.join(" AND ");
+    query += " ORDER BY s.name";
+    return apiSuccess(db.prepare(query).all(...params));
+  }
+
   if (method === "GET" && pathname === "/api/subjects") {
     const auth = requireAuth(req);
     const qSessionId = Number(url.searchParams.get("sessionId") || 0);
@@ -2384,11 +2861,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       let query = `
         SELECT s.* FROM subjects s
         INNER JOIN subject_enrollments se ON se.subject_id = s.id AND se.student_id = ?
-        WHERE s.is_timetable_published = 1
+        WHERE (s.is_timetable_published = 1 OR s.is_published = 1)
       `;
       const params: any[] = [auth.userId];
       if (targetSessionId && targetTermId) {
-        query += " AND (s.session_id = ? AND s.term_id = ? OR s.session_id IS NULL)";
+        query += " AND s.session_id = ? AND s.term_id = ?";
         params.push(targetSessionId, targetTermId);
       }
       query += " ORDER BY s.name";
@@ -2399,7 +2876,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       let query = "SELECT * FROM subjects WHERE teacher_id = ?";
       const params: any[] = [auth.userId];
       if (targetSessionId && targetTermId) {
-        query += " AND (session_id = ? AND term_id = ? OR session_id IS NULL)";
+        query += " AND session_id = ? AND term_id = ?";
         params.push(targetSessionId, targetTermId);
       }
       query += " ORDER BY name";
@@ -2409,7 +2886,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     let query = "SELECT * FROM subjects";
     const params: any[] = [];
     if (targetSessionId && targetTermId) {
-      query += " WHERE session_id = ? AND term_id = ? OR session_id IS NULL";
+      query += " WHERE session_id = ? AND term_id = ?";
       params.push(targetSessionId, targetTermId);
     }
     query += " ORDER BY id DESC";
@@ -2422,12 +2899,13 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const body = await readJson(req);
     const name = trimStr(body?.name);
     const code = trimStr(body?.code);
-    const term = trimStr(body?.term);
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const term = trimStr(body?.term) || activeTerm?.name || "First Term";
     const teacher_id = body?.teacher_id;
-    if (!name || !code || !term) return apiError(400, "Invalid subject payload");
+    if (!name || !code) return apiError(400, "Invalid subject payload — name and code required");
     
-    const teacherId = auth.role === "teacher" ? auth.userId : Number(teacher_id);
-    if (auth.role === "operator") {
+    let teacherId = auth.role === "teacher" ? auth.userId : (teacher_id ? Number(teacher_id) : auth.userId);
+    if (auth.role === "operator" && teacher_id) {
       if (!isPositiveIntId(teacherId)) return apiError(400, "Invalid teacher_id. Operators must assign a valid teacher.");
       const teacher = queries.getUserById.get(teacherId) as any;
       if (!teacher || teacher.role !== "teacher" || sqlInt(teacher.is_active) !== 1) return apiError(400, "Invalid or inactive teacher");
@@ -2440,14 +2918,36 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const instructions = trimStr(body?.instructions) || null;
     const can_retake = body?.can_retake !== undefined ? Number(body.can_retake) : 1;
     const activeSession = queries.getActiveAcademicSession.get() as any;
-    const activeTerm = queries.getActiveAcademicTerm.get() as any;
     const sessionId = Number(body?.session_id || activeSession?.id || 1);
     const termId = Number(body?.term_id || activeTerm?.id || 1);
+    const assessmentType = ["learning_practice", "learning_mock", "school_test", "school_exam"].includes(body?.assessment_type)
+      ? body.assessment_type
+      : (mode === "exam" ? "school_exam" : mode === "test" ? "school_test" : "learning_practice");
+    const resultPolicy = ["immediate", "manual", "scheduled"].includes(body?.result_policy) ? body.result_policy : "immediate";
+    const resultReleaseTime = body?.result_release_time ? trimStr(body.result_release_time) : null;
 
-    const result = queries.createSubject.run(name, code, term, 0, teacherId, auth.userId, description, cls, gradeLevelId, session, mode, instructions, can_retake, sessionId, termId) as {
+    const existingSameTermDiffSession = db.prepare("SELECT id FROM subjects WHERE code = ? AND term = ? AND (session_id != ? OR session_id IS NULL)").get(code, term, sessionId) as any;
+    const effectiveTerm = existingSameTermDiffSession ? `${session || sessionId} - ${term}` : term;
+
+    const result = queries.createSubject.run(
+      name, code, effectiveTerm, 0, teacherId, auth.userId, description, cls, gradeLevelId, session, mode, instructions, can_retake, sessionId, termId, assessmentType, resultPolicy, resultReleaseTime
+    ) as {
       lastInsertRowid: number | bigint;
     };
-    auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term }));
+    auditLog(auth.userId, "SUBJECT_CREATE", "subject", Number(result.lastInsertRowid), JSON.stringify({ code, term, assessmentType, resultPolicy }));
+
+    // [FIX] Apply scheduling fields if provided (operator timetable "Create & Schedule" flow).
+    if (body.exam_datetime !== undefined || body.duration !== undefined || body.window_duration !== undefined || body.is_timetable_published !== undefined) {
+      const newId = Number(result.lastInsertRowid);
+      const schedDatetime = body.exam_datetime !== undefined ? trimStr(body.exam_datetime) : "2099-01-01T00:00";
+      const schedDuration = body.duration !== undefined ? Number(body.duration) : 60;
+      const schedWindow = body.window_duration !== undefined ? Number(body.window_duration) : 120;
+      const schedPublished = body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : 0;
+      if (!isValidSubjectDuration(schedDuration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
+      if (!Number.isInteger(schedWindow) || schedWindow < 1 || schedWindow > 1440) return apiError(400, "window_duration must be an integer from 1 to 1440 (minutes)");
+      if (schedDatetime !== "2099-01-01T00:00" && !isValidExamDateTime(schedDatetime)) return apiError(400, "exam_datetime must be a valid ISO datetime string");
+      queries.updateSubjectSchedulingInfo.run(teacherId, can_retake, mode, schedDatetime, schedDuration, schedWindow, schedPublished, newId);
+    }
     
     if (auth.role === "operator" && teacherId && teacherId !== auth.userId) {
       notifyUser(teacherId, {
@@ -2481,6 +2981,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     }
     const nextInstructions = body.instructions !== undefined ? (trimStr(body.instructions) || null) : (subject.instructions || null);
     const nextMode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : subject.mode;
+    const nextAssessmentType = body.assessment_type !== undefined ? (["learning_practice", "learning_mock", "school_test", "school_exam"].includes(body.assessment_type) ? body.assessment_type : subject.assessment_type) : (subject.assessment_type || "school_exam");
+    const nextResultPolicy = body.result_policy !== undefined ? (["immediate", "manual", "scheduled"].includes(body.result_policy) ? body.result_policy : subject.result_policy) : (subject.result_policy || "immediate");
+    const nextResultReleaseTime = body.result_release_time !== undefined ? (trimStr(body.result_release_time) || null) : subject.result_release_time;
     // Compute total_score from the DB — never trust a client-supplied value
     const computedTotalScore = (db.prepare(
       "SELECT COALESCE(SUM(marks),0) as t FROM questions WHERE subject_id = ?"
@@ -2500,17 +3003,98 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
       body.session_id !== undefined ? Number(body.session_id) : subject.session_id,
       body.term_id !== undefined ? Number(body.term_id) : subject.term_id,
+      body.is_published !== undefined ? Number(body.is_published) : Number(subject.is_published ?? 0),
+      nextAssessmentType,
+      nextResultPolicy,
+      nextResultReleaseTime,
       subjectId,
     );
 
-    if (auth.role === "operator" && nextTeacherId !== sqlInt(subject.teacher_id) && nextTeacherId !== auth.userId) {
-      notifyUser(nextTeacherId, {
-        type: "info",
-        message: `Admin re-assigned ${subject.name} (${subject.code}) to you`,
-        link: `/teacher/dashboard`
+    // [FIX] Apply scheduling fields (exam_datetime, duration, window_duration, is_timetable_published)
+    // which were previously ignored by this route. The operator timetable page relies on them.
+    if (
+      body.exam_datetime !== undefined ||
+      body.duration !== undefined ||
+      body.window_duration !== undefined ||
+      body.is_timetable_published !== undefined
+    ) {
+      const nextExamDatetime = body.exam_datetime !== undefined ? trimStr(body.exam_datetime) : (subject.exam_datetime || "2099-01-01T00:00");
+      const nextDuration = body.duration !== undefined ? Number(body.duration) : Number(subject.duration ?? 60);
+      const nextWindow = body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120);
+      const nextTimetablePublished = body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0);
+      if (!isValidSubjectDuration(nextDuration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
+      if (!Number.isInteger(nextWindow) || nextWindow < 1 || nextWindow > 1440) return apiError(400, "window_duration must be an integer from 1 to 1440 (minutes)");
+      if (nextExamDatetime !== "2099-01-01T00:00" && !isValidExamDateTime(nextExamDatetime)) return apiError(400, "exam_datetime must be a valid ISO datetime string");
+      queries.updateSubjectSchedulingInfo.run(
+        nextTeacherId,
+        body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
+        nextMode,
+        nextExamDatetime,
+        nextDuration,
+        nextWindow,
+        nextTimetablePublished,
+        subjectId,
+      );
+    }
+
+    const nextPublished = Number(body.is_published ?? subject.is_published);
+    if (nextPublished === 1 && Number(subject.is_published) === 0) {
+      notifyOperators({
+        type: "subject_published",
+        message: `A teacher has published ${trimStr(body.code) || subject.code} (Questions are ready)`,
+        link: `/ADMIN/subjects`
       });
     }
 
+    if (auth.role === "operator" && nextTeacherId !== sqlInt(subject.teacher_id)) {
+      if (subject.teacher_id) authz.invalidateTeacherCache(Number(subject.teacher_id));
+      authz.invalidateTeacherCache(nextTeacherId);
+      if (nextTeacherId !== auth.userId) {
+        notifyUser(nextTeacherId, {
+          type: "info",
+          message: `Admin re-assigned ${subject.name} (${subject.code}) to you`,
+          link: `/teacher/dashboard`
+        });
+      }
+    }
+
+    return apiSuccess(queries.getSubjectById.get(subjectId));
+  }
+
+  // ── Subject scheduling ─────────────────────────────────────────────────────
+  // Dedicated route used by the operator timetable page (updateSubjectSchedule).
+  const subjectScheduleMatch = pathname.match(/^\/api\/subjects\/(\d+)\/schedule$/);
+  if (subjectScheduleMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    const subjectId = Number(subjectScheduleMatch[1]);
+    if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject id");
+    const subject = queries.getSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Subject not found");
+    if (auth.role !== "operator" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
+    const body = await readJson(req);
+
+    const nextExamDatetime = body.exam_datetime !== undefined ? trimStr(body.exam_datetime) : (subject.exam_datetime || "2099-01-01T00:00");
+    const nextDuration = body.duration !== undefined ? Number(body.duration) : Number(subject.duration ?? 60);
+    const nextWindow = body.window_duration !== undefined ? Number(body.window_duration) : Number(subject.window_duration ?? 120);
+    const nextTimetablePublished = body.is_timetable_published !== undefined ? Number(body.is_timetable_published) : Number(subject.is_timetable_published ?? 0);
+
+    if (!isValidSubjectDuration(nextDuration)) return apiError(400, "duration must be an integer from 1 to 360 (minutes)");
+    if (!Number.isInteger(nextWindow) || nextWindow < 1 || nextWindow > 1440) return apiError(400, "window_duration must be an integer from 1 to 1440 (minutes)");
+    if (nextExamDatetime !== "2099-01-01T00:00" && !isValidExamDateTime(nextExamDatetime)) return apiError(400, "exam_datetime must be a valid ISO datetime string");
+
+    queries.updateSubjectSchedulingInfo.run(
+      sqlInt(subject.teacher_id),
+      body.can_retake !== undefined ? Number(body.can_retake) : Number(subject.can_retake ?? 1),
+      subject.mode || "exam",
+      nextExamDatetime,
+      nextDuration,
+      nextWindow,
+      nextTimetablePublished,
+      subjectId,
+    );
+    auditLog(auth.userId, "SUBJECT_SCHEDULE_UPDATE", "subject", subjectId, JSON.stringify({
+      exam_datetime: nextExamDatetime, duration: nextDuration, window_duration: nextWindow, is_timetable_published: nextTimetablePublished,
+    }));
     return apiSuccess(queries.getSubjectById.get(subjectId));
   }
 
@@ -2521,17 +3105,57 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject id");
     const examRow = queries.getSubjectExamCheck.get(subjectId);
     if (examRow) return apiError(409, "Cannot delete subject with active or completed exams");
+    const subject = queries.getSubjectById.get(subjectId) as any;
+    if (subject?.teacher_id) authz.invalidateTeacherCache(Number(subject.teacher_id));
     queries.deleteSubject.run(subjectId);
     auditLog(auth.userId, "SUBJECT_DELETE", "subject", subjectId, "{}");
     return apiMessage("Subject deleted");
   }
 
+  // ── Content Manifest (admin/teacher content library) ───────────────────────
+  if ((pathname === "/api/sync/content/manifest" || pathname === "/api/content/manifest") && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher", "student", "guardian"]);
+    const packages = db.prepare(`
+      SELECT exam_body, year, subject_code, paper_type, COUNT(*) as question_count, MIN(id) as sample_id
+      FROM content_bank.content_bank
+      GROUP BY exam_body, year, subject_code, paper_type
+      ORDER BY year DESC, exam_body ASC, subject_code ASC
+    `).all() as any[];
+    const formatted = packages.map((p: any) => ({
+      id: `${p.exam_body}_${p.year}_${p.subject_code}`,
+      exam_body: p.exam_body,
+      year: p.year,
+      subject_code: p.subject_code,
+      subject: p.subject_code,
+      paper_type: p.paper_type,
+      question_count: p.question_count,
+      content_count: p.question_count,
+      name: `${p.exam_body} ${p.year} ${p.subject_code}`,
+    }));
+    return apiSuccess({ packages: formatted });
+  }
+
   // ── Timetables API ──────────────────────────────────────────────────────────
   if (method === "GET" && pathname === "/api/timetables") {
     const auth = requireAuth(req);
+    const qSessionId = Number(url.searchParams.get("sessionId") || 0);
+    const qTermId = Number(url.searchParams.get("termId") || 0);
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const targetSessionId = qSessionId || activeSession?.id;
+    const targetTermId = qTermId || activeTerm?.id;
+    
     let rows = queries.getTimetables.all() as any[];
     if (auth.role === "teacher") {
       rows = rows.filter(t => t.teacher_id === auth.userId);
+    }
+    // Default to active session/term scoping when no explicit filter — prevents cross-term leakage
+    if (targetSessionId) {
+      rows = rows.filter(t => !t.session_id || Number(t.session_id) === targetSessionId);
+    }
+    if (targetTermId) {
+      rows = rows.filter(t => !t.term_id || Number(t.term_id) === targetTermId);
     }
     return apiSuccess(rows);
   }
@@ -2681,8 +3305,12 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       // existingExam (in-progress or completed) → allow fetch (needed for resume + review)
     }
 
-    const rows = queries.getQuestionsBySubject.all(subjectId) as any[];
-    return apiSuccess(stripCorrectAnswer(rows, auth.role));
+    const cacheKey = `${CacheKeys.subjectQuestions(subjectId)}:${auth.role}`;
+    const responsePayload = cacheService.wrapSync(cacheKey, 60, () => {
+      const rows = queries.getQuestionsBySubject.all(subjectId) as any[];
+      return stripCorrectAnswer(rows, auth.role);
+    });
+    return apiSuccess(responsePayload);
   }
 
   // ── Subject student roster (enrollment management) ───────────────────────────
@@ -2787,6 +3415,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const q_session = trimStr(body?.session) || null;
     const q_term = trimStr(body?.term) || null;
     const q_mode = ["test", "exam", "quiz"].includes(body?.mode) ? body.mode : "exam";
+    const explanation = body?.explanation !== undefined ? (trimStr(body.explanation) || null) : null;
+    const solution = body?.solution !== undefined ? (trimStr(body.solution) || null) : null;
     // [SECURITY FIX VULN-02] Validate image_url against an allowed prefix allowlist.
     // An unrestricted URL field is a stored XSS / SSRF vector if the frontend renders it
     // via <img src> or if the server ever fetches it. Only relative /uploads/ paths are allowed.
@@ -2815,15 +3445,100 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         image_url,
         body?.is_file_upload !== undefined ? Number(body.is_file_upload) : 0,
         // [SECURITY FIX VULN-02] Restrict attached_file_url to /uploads/ paths
-        (() => { const u = body?.attached_file_url !== undefined ? trimStr(body.attached_file_url) : ""; if (u && !u.startsWith("/uploads/")) throw new HttpError(400, "attached_file_url must be a relative /uploads/ path"); return u || null; })()
+        (() => { const u = body?.attached_file_url !== undefined ? trimStr(body.attached_file_url) : ""; if (u && !u.startsWith("/uploads/")) throw new HttpError(400, "attached_file_url must be a relative /uploads/ path"); return u || null; })(),
+        explanation,
+        solution
       );
       // Always recompute total_score from source of truth
       queries.updateSubjectTotalScore.run(Number(subject_id), Number(subject_id));
       return result;
     });
     const result = tx() as { lastInsertRowid: number | bigint };
+    cacheService.deletePattern(`subject_questions:${subject_id}`);
     auditLog(auth.userId, "QUESTION_CREATE", "question", Number(result.lastInsertRowid), "{}");
     return apiSuccess({ id: Number(result.lastInsertRowid) }, 201);
+  }
+
+  // ── Bulk question creation (teacher/operator) ──────────────────────────────
+  if (method === "POST" && pathname === "/api/questions/bulk") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const body = await readJson(req);
+    const incoming = body?.questions;
+    if (!Array.isArray(incoming) || incoming.length === 0) {
+      return apiError(400, "questions must be a non-empty array");
+    }
+    if (incoming.length > 200) {
+      return apiError(400, "Maximum 200 questions per bulk upload");
+    }
+
+    // Validate subject ownership once
+    const subjectId = Number(incoming[0]?.subject_id);
+    if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject_id");
+    const subject = queries.getSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Subject not found");
+    if (auth.role === "teacher" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
+    if (subject.is_published) return apiError(409, "Subject is published. Unpublish to add questions.");
+
+    let created = 0;
+    const errors: string[] = [];
+
+    const tx = db.transaction(() => {
+      const baseOrder = (queries.getQuestionsBySubject.all(subjectId) as any[]).length;
+      for (let i = 0; i < incoming.length; i++) {
+        const q = incoming[i];
+        try {
+          const qText = trimStr(q?.question_text);
+          const opts = q?.options;
+          const cAns = Number(q?.correct_answer);
+          const mks = Number(q?.marks ?? 1);
+          if (!qText || !Array.isArray(opts) || opts.length !== 4) {
+            errors.push(`Q${i + 1}: missing question_text or options`);
+            continue;
+          }
+          if (!opts.every((o: unknown) => typeof o === "string")) {
+            errors.push(`Q${i + 1}: options must be strings`);
+            continue;
+          }
+          if (!Number.isInteger(cAns) || cAns < 0 || cAns > 3) {
+            errors.push(`Q${i + 1}: correct_answer must be 0-3`);
+            continue;
+          }
+          if (!Number.isInteger(mks) || mks < 1) {
+            errors.push(`Q${i + 1}: marks must be a positive integer`);
+            continue;
+          }
+          const paddedOptions = opts.length < 4
+            ? [...opts, ...Array(4 - opts.length).fill("")]
+            : opts.slice(0, 4);
+          queries.createQuestion.run(
+            subjectId,
+            qText,
+            JSON.stringify(paddedOptions),
+            cAns,
+            mks,
+            baseOrder + i,
+            "objective",
+            trimStr(q?.session) || null,
+            trimStr(q?.term) || null,
+            "exam",
+            trimStr(q?.teacher_answer) || null,
+            null, 0, null,
+            trimStr(q?.explanation) || null,
+            trimStr(q?.solution) || null,
+          );
+          created++;
+        } catch (err: any) {
+          errors.push(`Q${i + 1}: ${err.message || "unknown error"}`);
+        }
+      }
+      queries.updateSubjectTotalScore.run(subjectId, subjectId);
+    });
+    tx();
+
+    cacheService.deletePattern(`subject_questions:${subjectId}`);
+    auditLog(auth.userId, "QUESTION_CREATE", "question", subjectId, JSON.stringify({ bulk: true, created, errors: errors.length }));
+    return apiSuccess({ created, errors }, 201);
   }
 
   const questionMatch = pathname.match(/^\/api\/questions\/(\d+)$/);
@@ -2844,6 +3559,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         // Recompute total_score from source of truth
       queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
       })();
+      cacheService.deletePattern(`subject_questions:${question.subject_id}`);
       auditLog(auth.userId, "QUESTION_DELETE", "question", questionId, "{}");
       return apiMessage("Question deleted");
     }
@@ -2873,6 +3589,8 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       return apiError(400, "marks must be a positive integer");
     }
     const nextTAnswer = body.teacher_answer !== undefined ? (trimStr(body.teacher_answer) || null) : (question.teacher_answer || null);
+    const nextExplanation = body.explanation !== undefined ? (trimStr(body.explanation) || null) : (question.explanation || null);
+    const nextSolution = body.solution !== undefined ? (trimStr(body.solution) || null) : (question.solution || null);
     // [SECURITY FIX VULN-02] Same /uploads/ allowlist as question creation.
     const rawNextImg = body.image_url !== undefined ? trimStr(body.image_url) : (question.image_url || "");
     if (rawNextImg && !rawNextImg.startsWith("/uploads/")) {
@@ -2885,10 +3603,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       const rawAttachedUrl = body.attached_file_url !== undefined ? (trimStr(body.attached_file_url) || "") : (question.attached_file_url || "");
       if (rawAttachedUrl && !rawAttachedUrl.startsWith("/uploads/")) throw new HttpError(400, "attached_file_url must be a relative /uploads/ path");
       const nextAttachedFileUrl = rawAttachedUrl || null;
-      queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, nextIsFileUpload, nextAttachedFileUrl, questionId);
+      queries.updateQuestion.run(nextText, optionsJson, nextCorrect, nextMarks, nextType, nextTAnswer, nextImg, nextIsFileUpload, nextAttachedFileUrl, nextExplanation, nextSolution, questionId);
       // Recompute total_score since marks may have changed
       queries.updateSubjectTotalScore.run(Number(question.subject_id), Number(question.subject_id));
     })();
+    cacheService.deletePattern(`subject_questions:${question.subject_id}`);
     auditLog(auth.userId, "QUESTION_EDIT", "question", questionId, "{}");
     return apiSuccess(queries.getQuestionById.get(questionId));
   }
@@ -2979,10 +3698,23 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       if (now >= end) return apiError(403, "Exam window has closed");
     }
     const currentTerm = (queries.getSetting.get("CURRENT_TERM") as any)?.value || "";
+    const isLearningMode = ["practice", "mock"].includes(subject.mode) || ["learning_practice", "learning_mock"].includes(subject.assessment_type);
+    const initialResultStatus = isLearningMode || (subject.result_policy === "immediate") ? "released" : (subject.result_policy === "manual" ? "hidden" : "scheduled");
+    const deadline = subject.duration ? new Date(Date.now() + Number(subject.duration) * 60_000).toISOString() : null;
+
+    // Resolve session/term strings for legacy columns (fallback to CURRENT_TERM)
+    const activeSessionForExam = queries.getActiveAcademicSession.get() as any;
+    const activeTermForExam = queries.getActiveAcademicTerm.get() as any;
+    const sessionName = subject.session || activeSessionForExam?.name || currentTerm || "2026/2027";
+    const termName = subject.term || activeTermForExam?.name || currentTerm || "First Term";
     try {
-      queries.createExam.run(auth.userId, subjectId, new Date().toISOString(), "[]", null, currentTerm, subject.mode || "exam");
-    } catch {
-      return apiError(409, "You have already started this exam");
+      queries.createExam.run(
+        auth.userId, subjectId, new Date().toISOString(), "[]", sessionName, termName, subject.mode || "exam",
+        deadline, initialResultStatus, 5, "[]"
+      );
+    } catch (e: any) {
+      if (e?.message?.includes("UNIQUE")) return apiError(409, "You have already started this exam");
+      throw e;
     }
     const exam = queries.getExamByStudentSubject.get(auth.userId, subjectId) as any;
     const questions = stripCorrectAnswer(queries.getQuestionsBySubject.all(subjectId) as any[], auth.role);
@@ -2994,6 +3726,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         server_time: new Date().toISOString(),
         examId: exam.id,
         startTime: exam.start_time,
+        solution_reveals_remaining: exam.solution_reveals_remaining ?? 5,
+        revealed_solutions: JSON.parse(exam.revealed_solutions_json || "[]"),
+        assessment_type: subject.assessment_type || "school_mode",
+        result_policy: subject.result_policy || "immediate",
       },
       201,
     );
@@ -3027,6 +3763,57 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ saved: true, server_time: new Date().toISOString(), time_remaining_seconds: remaining });
   }
 
+  // ── Solution Reveal Endpoint (Learning Mode: Practice & Mock) ──────────────
+  const examRevealSolutionMatch = pathname.match(/^\/api\/exams\/(\d+)\/reveal-solution$/);
+  if (examRevealSolutionMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["student", "teacher", "operator"]);
+    const examId = Number(examRevealSolutionMatch[1]);
+    if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
+    const exam = queries.getExamById.get(examId) as any;
+    if (!exam) return apiError(404, "Exam not found");
+    if (auth.role === "student" && !sameUserId(exam.student_id, auth.userId)) return apiError(403, "Forbidden");
+
+    const subject = queries.getSubjectById.get(exam.subject_id) as any;
+    if (!subject) return apiError(404, "Subject not found");
+    const isLearningMode = ["practice", "mock"].includes(subject.mode) || ["learning_practice", "learning_mock"].includes(subject.assessment_type);
+    if (!isLearningMode && auth.role === "student") {
+      return apiError(403, "Solution reveals are only available for Learning Mode assessments (Practice and Mock)");
+    }
+
+    const body = await readJson(req);
+    const questionId = Number(body?.question_id);
+    if (!isPositiveIntId(questionId)) return apiError(400, "question_id is required");
+
+    let revealedList: number[] = [];
+    try { revealedList = JSON.parse(exam.revealed_solutions_json || "[]"); } catch { revealedList = []; }
+    if (!Array.isArray(revealedList)) revealedList = [];
+
+    const isAlreadyRevealed = revealedList.includes(questionId);
+    let remaining = Number(exam.solution_reveals_remaining ?? 5);
+
+    if (!isAlreadyRevealed && auth.role === "student") {
+      if (remaining <= 0) {
+        return apiError(403, "Maximum solution reveal limit reached for this attempt (5/5 used)");
+      }
+      remaining = Math.max(0, remaining - 1);
+      revealedList.push(questionId);
+      queries.updateExamReveals.run(remaining, JSON.stringify(revealedList), examId);
+    }
+
+    const question = queries.getQuestionById.get(questionId) as any;
+    if (!question) return apiError(404, "Question not found");
+
+    return apiSuccess({
+      success: true,
+      question_id: questionId,
+      explanation: question.explanation || question.teacher_answer || null,
+      solution: question.solution || question.teacher_answer || null,
+      solution_reveals_remaining: remaining,
+      revealed_solutions: revealedList
+    });
+  }
+
   const examSubmitMatch = pathname.match(/^\/api\/exams\/(\d+)\/submit$/);
   if (examSubmitMatch && method === "POST") {
     const auth = requireAuth(req);
@@ -3040,7 +3827,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
     // Use a single db.transaction to avoid nested transaction crash
     // (previously used manual BEGIN/COMMIT + db.transaction inside = ERROR)
-    let result: { exam_id: number; score: number; total_score: number; time_taken_seconds: number; subject_id: number };
+    let result: {
+      exam_id: number;
+      score: number;
+      total_score: number;
+      time_taken_seconds: number;
+      subject_id: number;
+      answered_questions?: number;
+      total_questions?: number;
+    };
     try {
       const submitTx = db.transaction(() => {
         const exam = db.prepare("SELECT * FROM exams WHERE id = ? AND student_id = ?").get(examId, auth.userId) as any;
@@ -3141,6 +3936,23 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         // Free the redundant JSON blob — student_answers is now the authoritative store
         queries.updateExamAnswersJson.run(examId);
 
+        // ── Dual Assessment Engine: Determine Result Release Status ──────────
+        const isLearning = ["practice", "mock"].includes(subject.mode) || ["learning_practice", "learning_mock"].includes(subject.assessment_type);
+        let finalResultStatus = "released";
+        if (!isLearning) {
+          if (subject.result_policy === "manual") {
+            finalResultStatus = "hidden";
+          } else if (subject.result_policy === "scheduled") {
+            const releaseTs = subject.result_release_time ? Date.parse(subject.result_release_time) : 0;
+            if (Number.isFinite(releaseTs) && Date.now() < releaseTs) {
+              finalResultStatus = "scheduled";
+            } else {
+              finalResultStatus = "released";
+            }
+          }
+        }
+        db.prepare("UPDATE exams SET result_status = ? WHERE id = ?").run(finalResultStatus, examId);
+
         return {
           exam_id: examId, score, total_score: total, subject_id: exam.subject_id,
           answered_questions: answered, total_questions: questions.length,
@@ -3148,7 +3960,24 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
         };
       });
 
-      result = submitTx();
+      // Execute submission with resilient backoff retry for high-concurrency burst handling
+      const maxRetries = 5;
+      let attempt = 0;
+      while (true) {
+        try {
+          result = submitTx();
+          break;
+        } catch (err: any) {
+          attempt++;
+          if (attempt <= maxRetries && /busy|locked/i.test(err?.message || "")) {
+            const delay = Math.floor(Math.random() * 40) + attempt * 30;
+            const startWait = Date.now();
+            while (Date.now() - startWait < delay) {}
+            continue;
+          }
+          throw err;
+        }
+      }
     } catch (error) {
       if (error instanceof HttpError) throw error;
       throw new HttpError(500, "Server error during exam submission");
@@ -3161,7 +3990,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (subjectRow?.teacher_id) {
       const student = queries.getUserById.get(auth.userId) as any;
       const teacherRole = (queries.getUserById.get(sqlInt(subjectRow.teacher_id)) as any)?.role;
-      const link = teacherRole === "operator" ? `/operator/dashboard` : `/teacher/results?subject_id=${subjectRow.id}`;
+      const link = teacherRole === "operator" ? `/ADMIN/dashboard` : `/teacher/results?subject_id=${subjectRow.id}`;
       notifyUser(sqlInt(subjectRow.teacher_id), {
         type: "exam_submitted",
         message: `${student?.name || 'A student'} submitted ${subjectRow.code} — Score: ${result.score}/${result.total_score}`,
@@ -3218,9 +4047,27 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       }
     }
 
+    const examRow = queries.getExamById.get(result.exam_id) as any;
+    const isReleased = (examRow?.result_status || "released") === "released";
+
+    if (!isReleased && auth.role === "student") {
+      return apiSuccess({
+        exam_id: result.exam_id,
+        result_status: examRow.result_status,
+        result_policy: subjectRow?.result_policy || "manual",
+        result_release_time: subjectRow?.result_release_time || null,
+        answered_questions: result.answered_questions,
+        total_questions: result.total_questions,
+        time_taken_seconds: result.time_taken_seconds,
+        message: examRow.result_status === "scheduled"
+          ? `Your assessment has been submitted. Results will be released on ${subjectRow?.result_release_time ? new Date(subjectRow.result_release_time).toLocaleString() : 'the scheduled date'}.`
+          : "Your assessment has been submitted successfully. Results will be published by your instructor after evaluation."
+      });
+    }
+
     // Return result WITHOUT subject_id (internal field, not needed by client)
     const { subject_id: _sid, ...clientResult } = result;
-    return apiSuccess(clientResult);
+    return apiSuccess({ ...clientResult, result_status: "released" });
   }
 
   if (method === "GET" && pathname === "/api/exams/results") {
@@ -3244,21 +4091,60 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
     if (auth.role === "student") {
       params.unshift(auth.userId);
-      return apiSuccess(
-        db.prepare(`SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions FROM exams e JOIN subjects s ON s.id = e.subject_id WHERE e.student_id = ? AND ${baseFilter}`).all(...params)
-      );
+      const studentRows = db.prepare(`
+        SELECT e.*, s.name as subject_name, s.result_policy, s.result_release_time, s.assessment_type, s.mode as subject_mode,
+          (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, 
+          (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions 
+        FROM exams e 
+        JOIN subjects s ON s.id = e.subject_id 
+        WHERE e.student_id = ? AND ${baseFilter}
+      `).all(...params) as any[];
+
+      const sanitizedRows = studentRows.map((r) => {
+        let isReleased = r.result_status === "released";
+        if (r.result_status === "scheduled" && r.result_release_time) {
+          const releaseTs = Date.parse(r.result_release_time);
+          if (Number.isFinite(releaseTs) && Date.now() >= releaseTs) {
+            isReleased = true;
+          }
+        }
+        if (["practice", "mock"].includes(r.subject_mode) || ["learning_practice", "learning_mock"].includes(r.assessment_type)) {
+          isReleased = true;
+        }
+
+        if (!isReleased) {
+          return {
+            ...r,
+            score: null,
+            answers_json: "[]",
+            result_status: r.result_status || "hidden",
+            is_result_released: false
+          };
+        }
+        return {
+          ...r,
+          result_status: "released",
+          is_result_released: true
+        };
+      });
+
+      return apiSuccess(sanitizedRows);
     }
     if (auth.role === "teacher") {
       params.unshift(auth.userId);
       return apiSuccess(
         db.prepare(
-          `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE s.teacher_id = ? AND ${baseFilter} ORDER BY e.end_time DESC`
+          `SELECT e.*, s.name as subject_name, s.result_policy, s.result_release_time, s.assessment_type, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE s.teacher_id = ? AND ${baseFilter} ORDER BY e.end_time DESC`
         ).all(...params)
       );
     }
+    if (auth.role === "guardian") {
+      return apiError(403, "Guardians must use /api/guardian/wards/:id/exams or /api/guardian/wards/:id/results");
+    }
+    requireRole(auth.role, ["operator"]);
     return apiSuccess(
       db.prepare(
-        `SELECT e.*, s.name as subject_name, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE ${baseFilter} ORDER BY e.end_time DESC`
+        `SELECT e.*, s.name as subject_name, s.result_policy, s.result_release_time, s.assessment_type, (SELECT COUNT(*) FROM questions q WHERE q.subject_id = e.subject_id) as total_questions, (SELECT COUNT(*) FROM student_answers sa WHERE sa.exam_id = e.id AND (sa.selected_option IS NOT NULL OR (sa.essay_response IS NOT NULL AND TRIM(sa.essay_response) != ''))) as answered_questions, u.name as student_name, COALESCE(gl.name, u.grade) as grade, u.reg_id, u.id as student_user_id FROM exams e JOIN subjects s ON s.id = e.subject_id JOIN users u ON u.id = e.student_id LEFT JOIN grade_levels gl ON gl.id = u.grade_level_id WHERE ${baseFilter} ORDER BY e.end_time DESC`
       ).all(...params)
     );
   }
@@ -3271,33 +4157,131 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (!isPositiveIntId(examId)) return apiError(400, "Invalid exam id");
     const exam = queries.getExamById.get(examId) as any;
     if (!exam) return apiError(404, "Exam not found");
+    const subject = queries.getSubjectById.get(exam.subject_id) as any;
+    const isLearningMode = subject && (["practice", "mock"].includes(subject.mode) || ["learning_practice", "learning_mock"].includes(subject.assessment_type));
+
     // Students can only view their own completed exam
     if (auth.role === "student") {
       if (!sameUserId(exam.student_id, auth.userId)) return apiError(403, "Forbidden");
       if (exam.status !== "completed") return apiError(403, "Exam must be completed to review answers");
+
+      let isReleased = exam.result_status === "released";
+      if (exam.result_status === "scheduled" && subject?.result_release_time) {
+        const releaseTs = Date.parse(subject.result_release_time);
+        if (Number.isFinite(releaseTs) && Date.now() >= releaseTs) {
+          isReleased = true;
+        }
+      }
+      if (isLearningMode) isReleased = true;
+
+      if (!isReleased) {
+        return apiError(403, exam.result_status === "scheduled" 
+          ? `Results for this assessment will be released on ${new Date(subject.result_release_time).toLocaleString()}`
+          : "Results have not been published by your instructor yet.");
+      }
     }
     // Teachers can only view exams for their subjects
     if (auth.role === "teacher") {
-      const subject = queries.getSubjectById.get(exam.subject_id) as any;
       if (!subject || !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "Forbidden");
     }
     let answers = queries.getStudentAnswersByExam.all(examId) as any[];
     
     // [SECURITY FIX] Early Answer Leak Prevention
     // Strip correct answers if the student requests the review while the global exam window is still open.
-    if (auth.role === "student") {
-      const subject = queries.getSubjectById.get(exam.subject_id) as any;
+    if (auth.role === "student" && !isLearningMode) {
       if (subject && subject.exam_datetime) {
         const start = Date.parse(subject.exam_datetime);
         const end = start + Number(subject.window_duration || 120) * 60_000;
         if (Date.now() < end) {
-          answers = answers.map(({ correct_answer: _ca, teacher_answer: _ta, ...ans }) => ans);
+          answers = answers.map(({ correct_answer: _ca, teacher_answer: _ta, solution: _sol, ...ans }) => ans);
         }
       }
     }
 
+    let revealedList: number[] = [];
+    try { revealedList = JSON.parse(exam.revealed_solutions_json || "[]"); } catch { revealedList = []; }
+    if (!Array.isArray(revealedList)) revealedList = [];
+
+    // In learning mode for students, only show worked solution for questions student unlocked
+    if (auth.role === "student" && isLearningMode) {
+      answers = answers.map((ans) => {
+        const isRevealed = revealedList.includes(Number(ans.question_id));
+        return {
+          ...ans,
+          solution: isRevealed ? (ans.solution || ans.teacher_answer || null) : null,
+          is_solution_revealed: isRevealed,
+        };
+      });
+    }
+
     const student = queries.getUserById.get(exam.student_id) as any;
-    return apiSuccess({ exam, answers, student: student ? stripPassword(student) : null });
+    return apiSuccess({
+      exam: {
+        ...exam,
+        solution_reveals_remaining: exam.solution_reveals_remaining ?? 5,
+        revealed_solutions: revealedList
+      },
+      answers,
+      student: student ? stripPassword(student) : null
+    });
+  }
+
+  // ── Publish / Release Results for a Subject (Teacher/Operator) ────────────
+  const subjectReleaseMatch = pathname.match(/^\/api\/subjects\/(\d+)\/release-results$/);
+  if (subjectReleaseMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const subjectId = Number(subjectReleaseMatch[1]);
+    if (!isPositiveIntId(subjectId)) return apiError(400, "Invalid subject id");
+    const subject = queries.getSubjectById.get(subjectId) as any;
+    if (!subject) return apiError(404, "Subject not found");
+    if (auth.role === "teacher" && !sameUserId(subject.teacher_id, auth.userId)) return apiError(403, "You do not own this subject");
+
+    const result = queries.releaseSubjectResults.run(subjectId) as { changes: number };
+    const releasedCount = sqlInt(result.changes);
+
+    // Update subject result_policy to immediate so subsequent submissions are also immediately visible
+    db.prepare("UPDATE subjects SET result_policy = 'immediate' WHERE id = ?").run(subjectId);
+
+    // Dispatch real-time system notifications to students and their guardians
+    const completedStudents = db.prepare("SELECT DISTINCT student_id FROM subject_enrollments WHERE subject_id = ? UNION SELECT DISTINCT student_id FROM exams WHERE subject_id = ?").all(subjectId, subjectId) as Array<{ student_id: number }>;
+    for (const s of completedStudents) {
+      try {
+        queries.createNotification.run(
+          s.student_id,
+          "result_released",
+          `Results have been published for ${subject.name} (${subject.code}). Check your student results to view your score and review.`,
+          `/student/results`
+        );
+        notifyUser(s.student_id, {
+          type: "result_released",
+          message: `Results published for ${subject.name} (${subject.code})`,
+          link: `/student/results`
+        });
+
+        // Notify linked guardians
+        const guardians = queries.getStudentGuardians.all(s.student_id) as any[];
+        for (const g of guardians) {
+          const guardianUser = queries.getUserById.get(Number(g.guardian_id)) as any;
+          if (guardianUser && guardianUser.notify_results === 0) continue;
+
+          queries.createNotification.run(
+            Number(g.guardian_id),
+            "result_released",
+            `Results published: ${subject.name} (${subject.code}) results are now available for your ward.`,
+            `/guardian/performance`
+          );
+          notifyUser(Number(g.guardian_id), {
+            type: "result_released",
+            message: `Results published for ${subject.name} (${subject.code})`,
+            link: `/guardian/performance`
+          });
+        }
+      } catch {}
+    }
+
+    auditLog(auth.userId, "RESULTS_PUBLISHED", "subjects", subjectId, JSON.stringify({ count: releasedCount }));
+    return apiSuccess({ released: true, count: releasedCount, subject_id: subjectId });
   }
 
   // ── Exam delete/reset (operator + owning teacher) ───────────────────────
@@ -3596,8 +4580,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       trimStr(body?.admin_email) || current.admin_email || null,
     );
     queries.upsertSetting.run("SCHOOL_NAME", orgName);
+    cacheService.delete(CacheKeys.setting("SCHOOL_NAME"));
     if (typeof body?.registration_open === "boolean") {
       queries.upsertSetting.run("REGISTRATION_OPEN", body.registration_open ? "true" : "false");
+      cacheService.delete(CacheKeys.registrationOpen());
     }
     auditLog(auth.userId, "CONFIG_UPDATE", "config", 1, "{}");
     const updatedConfig = (queries.getConfig.get() as any) ?? {};
@@ -3717,22 +4703,95 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
     const body = await readJson(req);
-    if (body?.confirm !== "RESET_ALL_DATA" && body?.confirmation !== "DELETE ALL DATA") return apiError(400, "Confirmation string required");
-    db.transaction(() => {
-      // Delete in FK-safe order: child tables first
-      db.prepare("DELETE FROM student_answers").run();
-      db.prepare("DELETE FROM exams").run();
-      db.prepare("DELETE FROM questions").run();
-      db.prepare("DELETE FROM subject_enrollments").run();
-      db.prepare("DELETE FROM subjects").run();
-      db.prepare("DELETE FROM audit_logs").run();
-      db.prepare("DELETE FROM users").run();
-      // Reset config and settings to factory state
-      db.prepare("DELETE FROM config").run();
-      db.prepare("UPDATE settings SET value = '2026-T1' WHERE key = 'CURRENT_TERM'").run();
-      db.prepare("UPDATE settings SET value = 'true' WHERE key = 'REGISTRATION_OPEN'").run();
-      db.prepare("DELETE FROM settings WHERE key = 'SCHOOL_NAME'").run();
-    })();
+    const confirmVal = trimStr(body?.confirm || body?.confirmation || body?.confirmText || "").toUpperCase();
+    if (confirmVal !== "RESET_ALL_DATA" && confirmVal !== "DELETE ALL DATA") {
+      return apiError(400, "Confirmation string required. Type \"DELETE ALL DATA\" to confirm.");
+    }
+    try {
+      db.transaction(() => {
+        // Disable FK checks for comprehensive wipe — we will re-enable after
+        db.run("PRAGMA foreign_keys = OFF");
+        // Child tables first (grading, exams, enrollments, etc.)
+        const tablesToClear = [
+          "grading_student_scores",
+          "grading_calculated_results",
+          "grading_assessments",
+          "grading_categories",
+          "grading_grade_boundaries",
+          "grading_scheme_versions",
+          "grading_schemes",
+          "grading_manual_scores",
+          "grading_policies",
+          "term_results",
+          "annual_results",
+          "grading_subjects",
+          "student_answers",
+          "exam_attempts",
+          "question_map",
+          "exams",
+          "questions",
+          "subject_enrollments",
+          "timetables",
+          "class_enrollments",
+          "class_teacher_assignments",
+          "guardian_student_links",
+          "academic_calendar_events",
+          "kiosk_sessions",
+          "notifications",
+          "audit_logs",
+          "token_blacklist",
+          "user_tokens",
+          "user_devices",
+          "subjects",
+          "student_term_remarks",
+          "classes",
+          // Keep grade_levels structure but clear custom entries later; do not wipe standardized ones here
+        ];
+        for (const tbl of tablesToClear) {
+          try { db.prepare(`DELETE FROM ${tbl}`).run(); } catch {}
+        }
+        // Clear practice_logs attached DB (preserve schema)
+        try { db.prepare("DELETE FROM practice_logs.practice_logs").run(); } catch {}
+        // Wipe users last (after all FK dependents cleared)
+        try { db.prepare("DELETE FROM users").run(); } catch {}
+        // Reset autoincrement counters so IDs restart from 1
+        try { db.prepare("DELETE FROM sqlite_sequence WHERE name NOT IN ('grade_levels','settings','config')").run(); } catch {}
+        // Re-enable FK
+        db.run("PRAGMA foreign_keys = ON");
+        // Reset config and settings to factory state but preserve SCHEMA_VERSION
+        db.prepare("DELETE FROM config").run();
+        db.prepare("INSERT OR IGNORE INTO config (id, org_name, version) VALUES (1, 'ExamPool School', '1.0.0')").run();
+        db.prepare("UPDATE settings SET value = '2026-T1' WHERE key = 'CURRENT_TERM'").run();
+        db.prepare("UPDATE settings SET value = 'true' WHERE key = 'REGISTRATION_OPEN'").run();
+        db.prepare("DELETE FROM settings WHERE key IN ('SCHOOL_NAME','CUSTOM_URL','INSTITUTION_TYPE')").run();
+        db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('SCHEMA_VERSION','3')").run();
+        // Ensure default academic session/term exist after wipe
+        const sessionCount = (db.prepare("SELECT COUNT(*) as c FROM academic_sessions").get() as any)?.c ?? 0;
+        if (Number(sessionCount) === 0) {
+          db.prepare("INSERT INTO academic_sessions (name, is_active, status) VALUES ('2026/2027', 1, 'active')").run();
+        } else {
+          db.prepare("UPDATE academic_sessions SET is_active = CASE WHEN id = (SELECT MIN(id) FROM academic_sessions) THEN 1 ELSE 0 END").run();
+        }
+        const termCount = (db.prepare("SELECT COUNT(*) as c FROM academic_terms").get() as any)?.c ?? 0;
+        if (Number(termCount) === 0) {
+          const firstSessionId = (db.prepare("SELECT id FROM academic_sessions WHERE is_active = 1 LIMIT 1").get() as any)?.id ?? 1;
+          db.prepare("INSERT INTO academic_terms (session_id, name, is_active, status, registration_open) VALUES (?, 'First Term', 1, 'active', 1)").run(firstSessionId);
+        } else {
+          db.prepare("UPDATE academic_terms SET is_active = CASE WHEN id = (SELECT MIN(id) FROM academic_terms) THEN 1 ELSE 0 END").run();
+        }
+        // Clear server-side caches so stale academic/registration data is not served after wipe
+        try { cacheService.clear(); } catch {}
+      })();
+      // Re-seed grade levels, classes, and default academic structure (idempotent INSERT OR IGNORE)
+      try { initializeDatabase(); } catch (e) { console.warn("[FactoryReset] initializeDatabase re-seed warning:", e); }
+      // Reset in-memory custom URL to default after factory wipe
+      activeCustomUrl = Bun.env.CUSTOM_URL || "exampool.ng";
+    } catch (e: any) {
+      console.error("[FactoryReset] transaction failed:", e);
+      return apiError(500, "Factory reset failed: " + (e.message || String(e)));
+    }
+    // Audit after transaction (actor still valid via token, but users table is empty — log with raw ID)
+    try { auditLog(auth.userId, "FACTORY_RESET", "system", null, JSON.stringify({ wiped: true })); } catch {}
     setupRequired = true;
     return apiMessage("Database reset complete. Refresh to run setup.");
   }
@@ -3798,38 +4857,6 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       LIMIT ?
     `).all(subject, examBody, year, limit);
     return apiSuccess({ questions });
-  }
-
-  if (pathname === "/api/practice/submit" && method === "POST") {
-    const auth = requireAuth(req);
-    const body = await readJson(req);
-    if (!body || !Array.isArray(body.answers)) return apiError(400, "Invalid payload");
-    
-    let total = 0, correct = 0, incorrect = 0;
-    const topic_breakdown: Record<string, { total: number; correct: number }> = {};
-    
-    db.transaction(() => {
-      for (const ans of body.answers) {
-        const qRow = queries.getContentBankQuestionById.get(ans.question_id) as any;
-        if (!qRow) continue;
-        
-        total++;
-        const isCorrect = qRow.correct_answer === ans.selected_answer ? 1 : 0;
-        if (isCorrect) correct++; else incorrect++;
-        
-        const topic = qRow.topic_tag || "Uncategorized";
-        if (!topic_breakdown[topic]) topic_breakdown[topic] = { total: 0, correct: 0 };
-        topic_breakdown[topic].total++;
-        if (isCorrect) topic_breakdown[topic].correct++;
-        
-        queries.insertPracticeLog.run(
-          auth.userId, ans.question_id, ans.selected_answer || null, isCorrect,
-          ans.time_spent_seconds || 0, Date.now(), "lan", "lan_device", "mock_sig"
-        );
-      }
-    })();
-    
-    return apiSuccess({ session_id: body.session_id, score_summary: { total, correct, incorrect, topic_breakdown } });
   }
 
   if (pathname === "/api/practice/explanation" && method === "GET") {
@@ -3938,9 +4965,10 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const currentUrl = customUrlRow?.value || Bun.env.CUSTOM_URL || "exampool.ng";
     return apiSuccess({
       custom_url: currentUrl,
-      server_ip: primaryLocalIp || "127.0.0.1",
+      server_ip: getCurrentPrimaryIp(),
       server_port: server.port,
-      dns_active: isDnsListening
+      dns_active: isDnsListening,
+      mdns_active: isMdnsListening,
     });
   }
 
@@ -3950,21 +4978,28 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const body = await readJson(req);
     const rawUrl = typeof body?.custom_url === "string" ? body.custom_url.trim() : "";
     
-    // Clean and validate URL hostname format (e.g. exampool.ng, school.edu.ng)
-    const cleanedUrl = rawUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
-    if (!cleanedUrl || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(cleanedUrl)) {
-      return apiError(400, "Invalid domain format. Example: exampool.ng or myschool.edu.ng");
+    // Clean and validate URL hostname format (e.g. exampool.co, exampool.ng, school.edu.ng, exam.local)
+    const cleanedUrl = rawUrl.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase().trim();
+    if (!cleanedUrl || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cleanedUrl)) {
+      return apiError(400, "Invalid domain format. Examples: exampool.co, exampool.ng, exam.school.edu.ng");
     }
     
     queries.upsertSetting.run("CUSTOM_URL", cleanedUrl);
+    const prevUrl = activeCustomUrl;
     activeCustomUrl = cleanedUrl;
-    auditLog(auth.userId, "SYSTEM_SETTING_UPDATE", "system", null, JSON.stringify({ custom_url: cleanedUrl }));
+    syncHostsFile(cleanedUrl);
+    auditLog(auth.userId, "SYSTEM_SETTING_UPDATE", "system", null, JSON.stringify({ custom_url: cleanedUrl, prev: prevUrl }));
+    console.log(`[DNS] Custom URL updated: ${prevUrl} -> ${cleanedUrl} -> ${getCurrentPrimaryIp()}:${server.port}`);
+    if (isDnsListening) {
+      console.log(`[DNS] DNS masking now serves: ${cleanedUrl} (+www.${cleanedUrl}, *.${cleanedUrl}) -> ${getCurrentPrimaryIp()}`);
+    }
     
     return apiSuccess({
       custom_url: activeCustomUrl,
-      server_ip: primaryLocalIp || "127.0.0.1",
+      server_ip: getCurrentPrimaryIp(),
       server_port: server.port,
-      dns_active: isDnsListening
+      dns_active: isDnsListening,
+      mdns_active: isMdnsListening,
     });
   }
 
@@ -4024,38 +5059,53 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   }
 
   if (pathname === "/api/system/license" && method === "GET") {
-    // [SECURITY FIX] License details should only be readable by operators
+    // [SECURITY HARDENING] License and Hardware identity details restricted to operators
     const auth = requireAuth(req);
     requireRole(auth.role, ["operator"]);
+    const currentHW = getSystemHardwareFingerprint();
+    const machineInfo = {
+      hostname: os.hostname(),
+      platform: os.platform(),
+      arch: os.arch(),
+      cpu: os.cpus()?.[0]?.model?.trim() || "Multi-Core CPU",
+      memory_gb: Math.round(os.totalmem() / (1024 * 1024 * 1024)),
+    };
     try {
       const payload = await licenseValidator(["core", "practice_lan", "practice_home", "full_bundle"]);
       return apiSuccess({
-        license: payload === true ? { tier: "core", max_devices: 0, iat: Date.now() / 1000, sub: "ExamPool User" } : payload,
-        hardware_fingerprint: "mock-hw-fingerprint"
+        license: payload === true ? { tier: "core", max_devices: 50, iat: Date.now() / 1000, sub: "ExamPool Default Institution", hw_fp: currentHW } : payload,
+        hardware_fingerprint: currentHW,
+        machine_info: machineInfo,
       });
     } catch (err: any) {
       return apiSuccess({
-        license: { tier: "core", max_devices: 0, iat: Date.now() / 1000, sub: "ExamPool User", error: err.message },
-        hardware_fingerprint: "mock-hw-fingerprint"
+        license: { tier: "core", max_devices: 0, iat: Date.now() / 1000, sub: "Unlicensed / Mismatch", error: err.message, hw_fp: currentHW },
+        hardware_fingerprint: currentHW,
+        machine_info: machineInfo,
       });
     }
   }
 
   if (pathname === "/api/system/license" && method === "POST") {
     const auth = requireAuth(req);
-    // License file controls feature access for the entire school.
-    // Teachers must NOT be able to modify it — operator-only.
     requireRole(auth.role, ["operator"]);
     const body = await readJson(req);
-    // [SECURITY FIX VULN-05] Validate that the body has a jwt string before writing to disk.
-    // Previously any arbitrary JSON could be written, potentially crashing the license validator
-    // or injecting unexpected keys into the license file.
     if (!body || typeof body !== "object" || (typeof body.jwt !== "string" && typeof body.token !== "string" && typeof body.key !== "string")) {
-      return apiError(400, "Invalid license payload: must be a JSON object containing a 'jwt', 'token', or 'key' string field");
+      return apiError(400, "Invalid license payload: must be a JSON object containing a 'jwt' string token field");
     }
+    
+    // [HARDENING] Validate the license against this machine's real hardware before writing to disk
+    const jwtToken = body.jwt || body.token || body.key;
+    const currentHW = getSystemHardwareFingerprint();
+    try {
+      await validateMLF(jwtToken, currentHW);
+    } catch (err: any) {
+      return apiError(400, `License Activation Rejected: ${err.message}`);
+    }
+
     await Bun.write("license.json", JSON.stringify(body, null, 2));
-    auditLog(auth.userId, "LICENSE_UPDATE", "system", null, "{}");
-    return apiSuccess({ success: true });
+    auditLog(auth.userId, "LICENSE_UPDATE", "system", null, JSON.stringify({ hw_fp: currentHW }));
+    return apiSuccess({ success: true, message: "Master License registered and bound to hardware successfully." });
   }
 
   if (pathname === "/api/upload" && method === "POST") {
@@ -4415,6 +5465,129 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return apiSuccess({ results });
   }
 
+  if (pathname === "/api/content/package-questions" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const packageId = url.searchParams.get("packageId");
+    if (!packageId) return apiError(400, "Missing packageId");
+    if (packageId.length > 128) return apiError(400, "Invalid packageId");
+    const parts = packageId.split("_");
+    if (parts.length < 3) return apiError(400, "Invalid packageId");
+    const [exam_body, yearStr, ...rest] = parts;
+    if (!exam_body || !yearStr) return apiError(400, "Invalid packageId");
+    const year = parseInt(yearStr, 10);
+    const subject_code = rest.join("_");
+
+    const questions = db.prepare(`
+      SELECT id, exam_body, year, subject_code, paper_type, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag, diagram_path
+      FROM content_bank.content_bank
+      WHERE exam_body = ? AND year = ? AND subject_code = ?
+      ORDER BY id ASC
+    `).all(exam_body, year, subject_code) as any[];
+
+    return apiSuccess({ questions });
+  }
+
+  if (pathname === "/api/content/questions" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const body = await readJson(req);
+
+    const exam_body = trimStr(body?.exam_body) || "JAMB";
+    const year = Number(body?.year) || new Date().getFullYear();
+    const subject_code = trimStr(body?.subject_code) || "GEN";
+    const paper_type = body?.paper_type === "theory" ? "theory" : "objective";
+    const question_text = trimStr(body?.question_text);
+    if (!question_text) return apiError(400, "question_text is required");
+
+    let optionsJson = "[]";
+    if (Array.isArray(body?.options)) {
+      optionsJson = JSON.stringify(body.options);
+    } else if (typeof body?.options_json === "string") {
+      optionsJson = body.options_json;
+    }
+
+    const correct_answer = trimStr(body?.correct_answer?.toString()) || "A";
+    const solution_text = trimStr(body?.solution_text) || null;
+    const difficulty = Math.max(1, Math.min(5, Number(body?.difficulty || 3)));
+    const topic_tag = trimStr(body?.topic_tag) || null;
+
+    const result = db.prepare(`
+      INSERT INTO content_bank.content_bank
+      (exam_body, year, subject_code, paper_type, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(exam_body, year, subject_code, paper_type, question_text, optionsJson, correct_answer, solution_text, difficulty, topic_tag) as { lastInsertRowid: number | bigint };
+
+    const created = db.prepare("SELECT * FROM content_bank.content_bank WHERE id = ?").get(Number(result.lastInsertRowid));
+    return apiSuccess(created, 201);
+  }
+
+  const contentQMatch = pathname.match(/^\/api\/content\/questions\/(\d+)$/);
+  if (contentQMatch && method === "PUT") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const questionId = Number(contentQMatch[1]);
+    if (!isPositiveIntId(questionId)) return apiError(400, "Invalid question id");
+
+    const body = await readJson(req);
+    const questionText = trimStr(body?.question_text);
+    if (!questionText) return apiError(400, "question_text cannot be empty");
+
+    let optionsJson: string;
+    if (Array.isArray(body?.options)) {
+      optionsJson = JSON.stringify(body.options);
+    } else if (typeof body?.options_json === "string") {
+      optionsJson = body.options_json;
+    } else {
+      optionsJson = "[]";
+    }
+
+    const correctAnswer = trimStr(body?.correct_answer?.toString()) || "A";
+    const solutionText = trimStr(body?.solution_text) || null;
+    const difficulty = Math.max(1, Math.min(5, Number(body?.difficulty || 3)));
+    const topicTag = trimStr(body?.topic_tag) || null;
+
+    db.prepare(`
+      UPDATE content_bank.content_bank
+      SET question_text = ?, options_json = ?, correct_answer = ?, solution_text = ?, difficulty = ?, topic_tag = ?
+      WHERE id = ?
+    `).run(questionText, optionsJson, correctAnswer, solutionText, difficulty, topicTag, questionId);
+
+    const updated = db.prepare("SELECT * FROM content_bank.content_bank WHERE id = ?").get(questionId);
+    return apiSuccess(updated);
+  }
+
+  if (contentQMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const questionId = Number(contentQMatch[1]);
+    if (!isPositiveIntId(questionId)) return apiError(400, "Invalid question id");
+
+    db.prepare("DELETE FROM content_bank.content_bank WHERE id = ?").run(questionId);
+    return apiMessage("Question deleted from content bank");
+  }
+
+  const contentPkgMatch = pathname.match(/^\/api\/content\/packages\/([A-Za-z0-9_.-]+)$/);
+  if (contentPkgMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["operator", "teacher"]);
+    const packageId = contentPkgMatch[1];
+    if (!packageId) return apiError(400, "Invalid packageId");
+    const parts = packageId.split("_");
+    if (parts.length < 3) return apiError(400, "Invalid packageId");
+    const [exam_body, yearStr, ...rest] = parts;
+    if (!exam_body || !yearStr) return apiError(400, "Invalid packageId");
+    const year = parseInt(yearStr, 10);
+    const subject_code = rest.join("_");
+
+    db.prepare(`
+      DELETE FROM content_bank.content_bank
+      WHERE exam_body = ? AND year = ? AND subject_code = ?
+    `).run(exam_body, year, subject_code);
+
+    return apiMessage("Package deleted from content bank");
+  }
+
   // ── v4.1 Practice Sandbox API ────────────────────────────────────────────────
   if (pathname === "/api/practice/start" && method === "POST") {
     const auth = requireAuth(req);
@@ -4433,22 +5606,36 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const mockExamId = Math.floor(Math.random() * 100000) + 10000;
     
     const rawQuestions = db.prepare(`
-      SELECT id, question_text, options_json as options, correct_answer
+      SELECT id, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag
       FROM content_bank.content_bank
       WHERE exam_body = ? AND year = ? AND subject_code = ?
-      ORDER BY random() LIMIT 50
+      ORDER BY id ASC
     `).all(exam_body, year, subject_code) as any[];
 
     if (!rawQuestions.length) return apiError(404, "No questions found for this package");
 
-    const questions = rawQuestions.map(q => ({
-      id: q.id,
-      question_text: q.question_text,
-      question_type: "multiple_choice",
-      options_json: q.options,
-      correct_answer: q.correct_answer,
-      marks: 1
-    }));
+    const questions = rawQuestions.map(q => {
+      let parsedOptions: string[] = [];
+      try {
+        parsedOptions = typeof q.options_json === "string" ? JSON.parse(q.options_json) : (q.options_json || []);
+      } catch {
+        parsedOptions = [];
+      }
+      return {
+        id: q.id,
+        question_text: q.question_text,
+        question_type: "multiple_choice",
+        options_json: JSON.stringify(parsedOptions),
+        options: parsedOptions,
+        correct_answer: q.correct_answer,
+        solution: q.solution_text || null,
+        explanation: q.solution_text || null,
+        solution_text: q.solution_text || null,
+        topic_tag: q.topic_tag || null,
+        difficulty: q.difficulty || null,
+        marks: 1
+      };
+    });
 
     return apiSuccess({
       exam: {
@@ -4461,11 +5648,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   if (pathname === "/api/practice/submit" && method === "POST") {
     const auth = requireAuth(req);
-    const practiceId = url.searchParams.get("practiceId");
-    if (!practiceId) return apiError(400, "Missing practiceId");
-
     const body = await readJson(req);
-    const answers = body.answers || [];
+    const practiceId = url.searchParams.get("practiceId") || body?.practiceId || body?.practice_id;
+    if (!practiceId || typeof practiceId !== "string") return apiError(400, "Missing practiceId");
+
+    const answers = body?.answers || [];
 
     const parts = practiceId.split("_");
     const exam_body = parts[0] as string;
@@ -4473,7 +5660,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const subject_code = parts.slice(2).join("_");
 
     const rawQuestions = db.prepare(`
-      SELECT id, correct_answer
+      SELECT id, question_text, options_json, correct_answer, solution_text, difficulty, topic_tag
       FROM content_bank.content_bank
       WHERE exam_body = ? AND year = ? AND subject_code = ?
     `).all(exam_body, year, subject_code) as any[];
@@ -4490,9 +5677,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       for (const ans of answers) {
         if (!ans.question_id) continue;
         const correctOpt = correctMap.get(ans.question_id);
-        if (correctOpt !== undefined) {
+        if (correctOpt !== undefined && correctOpt !== null) {
           total++;
-          const isCorrect = String(ans.selected_option) === String(correctOpt) ? 1 : 0;
+          const optLetter = typeof correctOpt === "string" && /^[A-E]$/i.test(correctOpt)
+            ? correctOpt.toUpperCase().charCodeAt(0) - 65
+            : Number(correctOpt);
+          const selectedNum = typeof ans.selected_option === "number"
+            ? ans.selected_option
+            : typeof ans.selected_option === "string" && /^[A-E]$/i.test(ans.selected_option)
+              ? ans.selected_option.toUpperCase().charCodeAt(0) - 65
+              : Number(ans.selected_option);
+
+          const isCorrect = (String(ans.selected_option) === String(correctOpt) || optLetter === selectedNum) ? 1 : 0;
           if (isCorrect) score++;
           try {
              queries.insertPracticeLog.run(
@@ -4512,11 +5708,48 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     });
     tx();
 
+    // Build comprehensive per-question review for learning practice
+    const review = rawQuestions.map((q) => {
+      const userAns = answers.find((a: any) => a.question_id === q.id);
+      const correctOpt = q.correct_answer;
+      const optLetter = typeof correctOpt === "string" && /^[A-E]$/i.test(correctOpt)
+        ? correctOpt.toUpperCase().charCodeAt(0) - 65
+        : Number(correctOpt);
+      const selectedNum = userAns?.selected_option !== undefined && userAns?.selected_option !== null
+        ? (typeof userAns.selected_option === "number"
+            ? userAns.selected_option
+            : typeof userAns.selected_option === "string" && /^[A-E]$/i.test(userAns.selected_option)
+              ? userAns.selected_option.toUpperCase().charCodeAt(0) - 65
+              : Number(userAns.selected_option))
+        : null;
+      const isCorrect = selectedNum !== null && (String(userAns?.selected_option) === String(correctOpt) || optLetter === selectedNum);
+      
+      let parsedOptions: string[] = [];
+      try {
+        parsedOptions = typeof q.options_json === "string" ? JSON.parse(q.options_json) : (q.options_json || []);
+      } catch {
+        parsedOptions = [];
+      }
+
+      return {
+        question_id: q.id,
+        question_text: q.question_text,
+        options: parsedOptions,
+        selected_option: userAns?.selected_option ?? null,
+        correct_answer: q.correct_answer,
+        is_correct: isCorrect,
+        solution_text: q.solution_text || null,
+        topic_tag: q.topic_tag || null,
+        difficulty: q.difficulty || null
+      };
+    });
+
     return apiSuccess({
       score,
-      total_score: total,
+      total_score: total || rawQuestions.length,
       answered_questions: answers.length,
-      total_questions: rawQuestions.length
+      total_questions: rawQuestions.length,
+      review
     });
   }
 
@@ -4851,6 +6084,9 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
       queries.logClassTeacherAssignment.run(classId, null, auth.userId, action, notes || null);
     }
 
+    if (cls.class_teacher_id) authz.invalidateTeacherCache(Number(cls.class_teacher_id));
+    if (teacherId) authz.invalidateTeacherCache(Number(teacherId));
+
     auditLog(auth.userId, "CLASS_TEACHER_" + action.toUpperCase(), "classes", classId, JSON.stringify({ teacher_id: teacherId, notes }));
     return apiSuccess(queries.getClassById.get(classId));
   }
@@ -4911,7 +6147,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["operator", "teacher"]);
     const classId = Number(classRosterMatch[1]);
     if (!isPositiveIntId(classId)) return apiError(400, "Invalid class id");
-    
+
     // [SECURITY FIX] Ensure teacher is the class teacher for this class
     if (auth.role === "teacher") {
       const cls = queries.getClassById.get(classId) as any;
@@ -4919,8 +6155,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
          return apiError(403, "You are not the class teacher for this class");
       }
     }
-    return apiSuccess(queries.getClassRoster.all(classId));
+
+    // Resolve term_id: query param → active academic_term → active legacy term
+    const qTermId = Number(url.searchParams.get("term_id") || 0);
+    const termId: number = qTermId
+      || (queries.getActiveAcademicTerm.get() as any)?.id
+      || (queries.getActiveTerm.get() as any)?.id
+      || 0;
+
+    if (!termId) return apiSuccess([]);
+    return apiSuccess(queries.getClassRoster.all(classId, termId));
   }
+
 
   // ── v2: Class Enrollments (bulk) ─────────────────────────────────────────
   if (pathname === "/api/v2/class-enrollments/bulk" && method === "POST") {
@@ -4934,7 +6180,11 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     if (student_ids.length > 500) return apiError(400, "Max 500 students per bulk enroll");
     const term = queries.getTermById.get(term_id) as any;
     const cls = queries.getClassById.get(class_id) as any;
-    if (!term) return apiError(404, "Term not found");
+    // [FIX] Accept academic_terms ids too — the legacy `terms` table is not seeded on
+    // fresh databases, so bulk enrollment previously 404'd ("Term not found") even
+    // though class rosters (getClassRoster) key on academic term ids.
+    const academicTerm = queries.getAcademicTermById.get(term_id) as any;
+    if (!term && !academicTerm) return apiError(404, "Term not found");
     if (!cls) return apiError(404, "Class not found");
     let enrolled = 0;
     db.transaction(() => {
@@ -4963,9 +6213,18 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     requireRole(auth.role, ["guardian", "operator"]);
     const body = await readJson(req);
     const guardian_id = auth.role === "guardian" ? auth.userId : Number(body?.guardian_id);
-    const student_id = Number(body?.student_id);
+    let student_id = Number(body?.student_id);
+    const regIdV2 = trimStr(body?.reg_id || body?.regId || body?.student_reg_id || "");
+    if (!isPositiveIntId(student_id) && regIdV2) {
+      const byRegV2 = queries.getUserByEmailOrReg.get(regIdV2.toUpperCase(), regIdV2.toUpperCase()) as any;
+      if (byRegV2 && byRegV2.role === "student") student_id = Number(byRegV2.id);
+      else {
+        const byRegExactV2 = db.prepare("SELECT id FROM users WHERE reg_id = ? AND role='student' LIMIT 1").get(regIdV2) as any;
+        if (byRegExactV2) student_id = Number(byRegExactV2.id);
+      }
+    }
     const relationship = trimStr(body?.relationship || "Parent").slice(0, 40);
-    if (!isPositiveIntId(guardian_id) || !isPositiveIntId(student_id)) return apiError(400, "guardian_id and student_id required");
+    if (!isPositiveIntId(guardian_id) || !isPositiveIntId(student_id)) return apiError(400, "guardian_id and student_id/reg_id required");
     const student = queries.getUserById.get(student_id) as any;
     const guardian = queries.getUserById.get(guardian_id) as any;
     if (!student || student.role !== "student") return apiError(400, "Invalid student id");
@@ -5058,6 +6317,875 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
 
   // Legacy v2 timetable API endpoints removed (repurposed timetables table)
 
+  // ── Helper: Build Rich Ward Payload for Guardian Dashboard & Pages ──────────
+  function buildRichWardPayload(studentId: number, guardianId: number, termId?: number, sessionId?: number) {
+    const student = queries.getUserById.get(studentId) as any;
+    if (!student) return null;
+
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const tid = termId || activeTerm?.id || 1;
+    const sid = sessionId || activeSession?.id || 1;
+
+    // 1. Determine student's enrolled class
+    const enrolledClass = db.prepare("SELECT c.name, c.id as class_id FROM class_enrollments ce JOIN classes c ON c.id = ce.class_id WHERE ce.student_id = ? ORDER BY ce.id DESC LIMIT 1").get(studentId) as any;
+    const studentGrade = enrolledClass?.name || student.grade || "JSS 3";
+
+    // 1. Subjects & Performance
+    const results = queries.getStudentTermResultsForReportCard.all(studentId) as any[];
+    const termResults = results.filter((r: any) => Number(r.term_id) === Number(tid) && Number(r.session_id) === Number(sid));
+    
+    let averageScore = 0;
+    if (termResults.length > 0) {
+      const sum = termResults.reduce((acc: number, r: any) => acc + Number(r.total_score || 0), 0);
+      averageScore = Math.round((sum / termResults.length) * 10) / 10;
+    } else {
+      const examsAvg = db.prepare("SELECT ROUND(AVG(CASE WHEN status='completed' AND total_score>0 THEN CAST(score AS REAL)/total_score*100 END), 1) as avg FROM exams WHERE student_id = ?").get(studentId) as any;
+      averageScore = Number(examsAvg?.avg || 0);
+    }
+
+    let classPosition = "1st of 1";
+    try {
+      const classPeers = db.prepare(`
+        SELECT tr.student_id, AVG(tr.total_score) as avg_score
+        FROM term_results tr
+        JOIN users u ON u.id = tr.student_id
+        WHERE (u.grade = ? OR u.id IN (SELECT student_id FROM class_enrollments WHERE class_id = ?)) AND tr.term_id = ? AND tr.is_approved = 1
+        GROUP BY tr.student_id
+        ORDER BY avg_score DESC
+      `).all(studentGrade, enrolledClass?.class_id || 0, tid) as any[];
+
+      if (classPeers.length > 0) {
+        const rankIdx = classPeers.findIndex((p: any) => Number(p.student_id) === studentId);
+        const rank = rankIdx >= 0 ? rankIdx + 1 : 1;
+        const total = classPeers.length;
+        const suffix = (r: number) => {
+          if (r === 1) return "1st";
+          if (r === 2) return "2nd";
+          if (r === 3) return "3rd";
+          return `${r}th`;
+        };
+        classPosition = `${suffix(rank)} of ${total}`;
+      }
+    } catch {}
+
+    const subjectColors = ["#165AF6", "#059669", "#7C3AED", "#D97706", "#DB2777", "#0891B2", "#4F46E5"];
+    const subjects_performance = termResults.map((r: any, idx: number) => {
+      const score = Number(r.total_score || 0);
+      const code = (r.code || r.subject_name || "SUB").slice(0, 4).toUpperCase();
+      const color = subjectColors[idx % subjectColors.length];
+      return {
+        subject_name: r.subject_name,
+        subject_code: code,
+        score,
+        ca_score: Number(r.ca_score || 0),
+        exam_score: Number(r.exam_score || 0),
+        grade: r.grade || (score >= 80 ? "A" : score >= 70 ? "B" : score >= 60 ? "C" : score >= 50 ? "D" : "F"),
+        color,
+        is_approved: Number(r.is_approved || 0),
+      };
+    });
+
+    // 2. Attendance
+    const attSummary = queries.getStudentAttendanceSummary.get(studentId, tid) as any;
+    const totalDays = Number(attSummary?.total_days || 0);
+    const presentDays = Number(attSummary?.present_days || 0);
+    const absentDays = Number(attSummary?.absent_days || 0);
+    const lateDays = Number(attSummary?.late_days || 0);
+    const attPct = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 100;
+
+    const rawCalendar = queries.getStudentAttendanceCalendar.all(studentId, tid) as any[];
+    const calendar_days = rawCalendar.map((c: any) => {
+      const dayNum = parseInt(c.date.slice(-2), 10);
+      return {
+        day: dayNum,
+        status: c.status,
+        date: c.date,
+        remarks: c.remarks || null,
+      };
+    });
+
+    // 3. Fees
+    const feeStructures = queries.getFeeStructuresForStudent.all(studentId, tid, sid) as any[];
+    const feePayments = queries.getFeePaymentsForStudent.all(studentId) as any[];
+
+    let totalFees = 0;
+    const items = feeStructures.map((fs: any) => {
+      const amt = Number(fs.amount || 0);
+      totalFees += amt;
+      const payment = feePayments.find((fp: any) => Number(fp.fee_id) === Number(fs.id) && fp.status === "completed");
+      const isPaid = !!payment;
+      return {
+        id: fs.id,
+        title: fs.title,
+        amount: amt,
+        status: isPaid ? "paid" : "pending",
+        paid_date: payment ? payment.paid_at.slice(0, 10) : null,
+        due_date: fs.due_date || null,
+      };
+    });
+
+    const amountPaid = feePayments.filter((fp: any) => fp.status === "completed").reduce((acc: number, fp: any) => acc + Number(fp.amount_paid || 0), 0);
+    const balance = Math.max(0, totalFees - amountPaid);
+    const feePct = totalFees > 0 ? Math.min(100, Math.round((amountPaid / totalFees) * 100)) : 100;
+
+    // 4. Upcoming Examinations & Timetable
+    const timetableEvents = db.prepare(`
+      SELECT t.*, s.name as subject_name
+      FROM timetables t
+      LEFT JOIN subjects s ON s.id = t.subject_id
+      WHERE (t.session_id = ? OR t.session_id IS NULL) AND (t.term_id = ? OR t.term_id IS NULL)
+      ORDER BY t.exam_date ASC, t.start_time ASC
+    `).all(sid, tid) as any[];
+
+    const upcoming_events = timetableEvents.map((t: any, idx: number) => {
+      const d = new Date(t.exam_date || "2026-06-01");
+      const month = d.toLocaleString("default", { month: "short" }).toUpperCase();
+      const day = d.getDate();
+      const weekday = d.toLocaleString("default", { weekday: "short" });
+      const nowStr = new Date().toISOString().slice(0, 10);
+      let status = "upcoming";
+      if (t.exam_date === nowStr) status = "live";
+      else if (t.exam_date < nowStr) status = "completed";
+
+      return {
+        id: t.id || idx + 1,
+        month,
+        day,
+        weekday,
+        title: t.subject_name || t.paper_type || "Examination",
+        time_str: `${t.start_time || "09:00"} - ${t.end_time || "11:00"}`,
+        venue: t.venue || "Examination Hall",
+        status,
+        instructions: t.instructions || null,
+      };
+    });
+
+    // 5. Reports
+    const reports = [
+      {
+        id: 1,
+        title: `${activeTerm?.name || "First Term"} Report Card`,
+        category: "academic",
+        date: "2026-07-24",
+        term: `${activeTerm?.name || "First Term"} ${activeSession?.name || "2026/2027"}`,
+        description: "Comprehensive academic broadsheet with subject CA, exam scores, and principal remarks.",
+        url: `/api/grading/report-card/${studentId}`,
+      },
+      {
+        id: 2,
+        title: "Attendance & Punctuality Record",
+        category: "attendance",
+        date: "2026-07-20",
+        term: `${activeTerm?.name || "First Term"}`,
+        description: `${presentDays} of ${totalDays} school days attended (${attPct}% attendance rate).`,
+        url: `/api/guardian/wards/${studentId}/attendance`,
+      },
+      {
+        id: 3,
+        title: "Behavioral & Character Assessment",
+        category: "behaviour",
+        date: "2026-07-15",
+        term: `${activeTerm?.name || "First Term"}`,
+        description: "Conduct, team participation, attentiveness, and neatness evaluation by Form Teacher.",
+        url: `/api/guardian/wards/${studentId}/reports`,
+      }
+    ];
+
+    const unreadMsg = db.prepare("SELECT SUM(unread_for_guardian) as count FROM guardian_message_threads WHERE guardian_id = ? AND student_id = ?").get(guardianId, studentId) as any;
+
+    return {
+      id: studentId,
+      student_id: studentId,
+      name: student.name,
+      grade: studentGrade,
+      admission_number: student.reg_id || `REG-${studentId}`,
+      reg_id: student.reg_id,
+      image_url: student.image_url || null,
+      average_score: averageScore,
+      score_delta: "+2.4",
+      attendance_pct: attPct,
+      class_position: classPosition,
+      unread_messages: Number(unreadMsg?.count || 0),
+      subjects_performance,
+      attendance: {
+        percentage: attPct,
+        present_days: presentDays,
+        absent_days: absentDays,
+        late_days: lateDays,
+        total_days: totalDays,
+        calendar_days,
+      },
+      fees: {
+        balance,
+        percentage: feePct,
+        amount_paid: amountPaid,
+        total_fees: totalFees,
+        items,
+      },
+      upcoming_events,
+      reports,
+    };
+  }
+
+  // ── Guardian Dashboard & Wards ────────────────────────────────────────────
+  if (pathname === "/api/guardian/wards" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const rawWards = queries.getGuardianWards.all(auth.userId) as any[];
+    const wards = rawWards.map((w: any) => buildRichWardPayload(Number(w.student_id), auth.userId)).filter(Boolean);
+    const stats = queries.getGuardianStats.get(auth.userId, auth.userId, auth.userId);
+    return apiSuccess({ wards, stats });
+  }
+
+  if (pathname === "/api/guardian/stats" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const stats = queries.getGuardianStats.get(auth.userId, auth.userId, auth.userId);
+    return apiSuccess(stats);
+  }
+
+  // ── Guardian Ward Performance ─────────────────────────────────────────────
+  const wardPerfMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/performance$/);
+  if (wardPerfMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(wardPerfMatch[1]);
+    const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, wardId, wardId) as any;
+    if (!link) return apiError(403, "Access denied: not your ward");
+    const wardData = buildRichWardPayload(Number(link.student_id), auth.userId);
+    return apiSuccess(wardData);
+  }
+
+  // ── Guardian Ward Attendance ──────────────────────────────────────────────
+  const wardAttMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/attendance$/);
+  if (wardAttMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian", "teacher", "operator"]);
+    const studentId = Number(wardAttMatch[1]);
+    if (auth.role === "guardian") {
+      const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, studentId, studentId) as any;
+      if (!link) return apiError(403, "Access denied: not your ward");
+    }
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const tid = activeTerm?.id || 1;
+    const summary = queries.getStudentAttendanceSummary.get(studentId, tid) as any;
+    const calendar = queries.getStudentAttendanceCalendar.all(studentId, tid) as any[];
+    return apiSuccess({ summary, calendar });
+  }
+
+  if (wardAttMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const studentId = Number(wardAttMatch[1]);
+    const body = await readJson(req);
+    const date = trimStr(body?.date) || new Date().toISOString().slice(0, 10);
+    const status = ["present", "absent", "late", "holiday", "excused"].includes(body?.status) ? body.status : "present";
+    const remarks = body?.remarks ? trimStr(body.remarks) : null;
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const tid = Number(body?.term_id || activeTerm?.id || 1);
+    const sid = Number(body?.session_id || activeSession?.id || 1);
+
+    queries.upsertAttendanceRecord.run(studentId, tid, sid, date, status, remarks, auth.userId);
+    
+    // Broadcast notification to student's guardians
+    const guardians = queries.getStudentGuardians.all(studentId) as any[];
+    for (const g of guardians) {
+      notifyUser(Number(g.guardian_id), {
+        type: "attendance",
+        message: `Attendance marked as ${status.toUpperCase()} for ${date}`,
+        link: "/guardian/attendance",
+      });
+    }
+    return apiSuccess({ success: true, studentId, date, status });
+  }
+
+  // ── Guardian Ward Fees ────────────────────────────────────────────────────
+  const wardFeesMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/fees$/);
+  if (wardFeesMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian", "operator"]);
+    const studentId = Number(wardFeesMatch[1]);
+    if (auth.role === "guardian") {
+      const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, studentId, studentId) as any;
+      if (!link) return apiError(403, "Access denied: not your ward");
+    }
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const tid = activeTerm?.id || 1;
+    const sid = activeSession?.id || 1;
+    const structures = queries.getFeeStructuresForStudent.all(studentId, tid, sid) as any[];
+    const payments = queries.getFeePaymentsForStudent.all(studentId) as any[];
+    return apiSuccess({ structures, payments });
+  }
+
+  const wardPayMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/fees\/pay$/);
+  if (wardPayMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian", "operator"]);
+    const studentId = Number(wardPayMatch[1]);
+    const body = await readJson(req);
+    const feeId = Number(body?.fee_id || 1);
+    const amount = Number(body?.amount || 0);
+    const method_type = ["bank_transfer", "cash", "card", "online_gateway"].includes(body?.method) ? body.method : "card";
+    const paymentRef = `PAY-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    queries.createFeePayment.run(studentId, feeId, amount, paymentRef, method_type, "completed", auth.userId);
+    auditLog(auth.userId, "FEE_PAYMENT", "fee_payments", studentId, JSON.stringify({ feeId, amount, paymentRef }));
+    return apiSuccess({ success: true, paymentRef, amount, status: "completed" });
+  }
+
+  // ── Guardian Ward Results ─────────────────────────────────────────────────
+  const wardResultsMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/results$/);
+  if (wardResultsMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(wardResultsMatch[1]);
+    if (!isPositiveIntId(wardId)) return apiError(400, "Invalid ward id");
+    const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, wardId, wardId) as any;
+    if (!link) return apiError(403, "Access denied: not your ward");
+    const actualStudentId = Number(link.student_id);
+    const termId = Number(url.searchParams.get("term_id") || 0);
+    const activeTerm = queries.getActiveTerm.get() as any;
+    const resolvedTermId = isPositiveIntId(termId) ? termId : (activeTerm?.id ?? 0);
+    if (!resolvedTermId) return apiSuccess([]);
+    const results = queries.getWardTermResults.all(actualStudentId, resolvedTermId);
+    return apiSuccess(results);
+  }
+
+  // ── Guardian Ward Report Card ─────────────────────────────────────────────
+  const wardReportMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/report-card$/);
+  if (wardReportMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(wardReportMatch[1]);
+    if (!isPositiveIntId(wardId)) return apiError(400, "Invalid ward id");
+    const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, wardId, wardId) as any;
+    if (!link) return apiError(403, "Access denied: not your ward");
+    const actualStudentId = Number(link.student_id);
+    const results = queries.getStudentTermResultsForReportCard.all(actualStudentId);
+    const remarks = db.prepare("SELECT * FROM student_term_remarks WHERE student_id = ? ORDER BY updated_at DESC").all(actualStudentId);
+    return apiSuccess({ results, remarks });
+  }
+
+  // ── Guardian Ward Exams ───────────────────────────────────────────────────
+  const wardExamsMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/exams$/);
+  if (wardExamsMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(wardExamsMatch[1]);
+    if (!isPositiveIntId(wardId)) return apiError(400, "Invalid ward id");
+    const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, wardId, wardId) as any;
+    if (!link) return apiError(403, "Access denied: not your ward");
+    const actualStudentId = Number(link.student_id);
+    const limit = Math.min(Number(url.searchParams.get("limit") || 20), 100);
+    const exams = queries.getWardExams.all(actualStudentId, limit);
+    return apiSuccess(exams);
+  }
+
+  // ── Guardian Message Contacts (Discover Form Teacher, Subject Teachers, Admin)
+  if (pathname === "/api/guardian/messages/contacts" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(url.searchParams.get("ward_id") || url.searchParams.get("student_id") || 0);
+    let studentId = wardId;
+    if (!studentId) {
+      const firstLink = queries.getGuardianWards.get(auth.userId) as any;
+      studentId = Number(firstLink?.student_id || 0);
+    }
+    if (!studentId) return apiSuccess({ contacts: [] });
+
+    const student = queries.getUserById.get(studentId) as any;
+    const enrolledClass = db.prepare("SELECT c.name, c.id as class_id FROM class_enrollments ce JOIN classes c ON c.id = ce.class_id WHERE ce.student_id = ? ORDER BY ce.id DESC LIMIT 1").get(studentId) as any;
+    const studentGrade = enrolledClass?.name || student?.grade || "JSS 3";
+    const contacts: any[] = [];
+
+    // 1. Form / Class Teacher
+    try {
+      const cls = db.prepare("SELECT c.*, u.id as teacher_id, u.name as teacher_name, u.email as teacher_email FROM classes c JOIN users u ON u.id = c.class_teacher_id WHERE c.name = ? OR c.id = ? LIMIT 1").get(studentGrade, enrolledClass?.class_id || 0) as any;
+      if (cls) {
+        contacts.push({
+          id: cls.teacher_id,
+          name: cls.teacher_name,
+          role: "teacher",
+          role_label: `Form Teacher (${studentGrade})`,
+          student_id: studentId,
+          category: "teacher",
+        });
+      }
+    } catch {}
+
+    // 2. Subject Teachers
+    try {
+      const subTeachers = db.prepare(`
+        SELECT DISTINCT gs.teacher_id as id, u.name, gs.name as subject_name
+        FROM grading_subjects gs
+        JOIN users u ON u.id = gs.teacher_id
+        WHERE gs.class_id IN (SELECT id FROM classes WHERE name = ?) OR gs.class_id = ? OR gs.code LIKE '%JSS%'
+      `).all(studentGrade, enrolledClass?.class_id || 0) as any[];
+      for (const st of subTeachers) {
+        if (!contacts.some((c: any) => c.id === st.id)) {
+          contacts.push({
+            id: st.id,
+            name: st.name,
+            role: "teacher",
+            role_label: `${st.subject_name} Teacher`,
+            student_id: studentId,
+            category: "teacher",
+          });
+        }
+      }
+    } catch {}
+
+    // 3. School Admin
+    try {
+      const admins = queries.getOperators.all() as any[];
+      if (admins.length > 0) {
+        const adminUser = queries.getUserById.get(admins[0].id) as any;
+        if (adminUser) {
+          contacts.push({
+            id: adminUser.id,
+            name: adminUser.name || "School Administration",
+            role: "operator",
+            role_label: "School Administration",
+            student_id: studentId,
+            category: "school",
+          });
+        }
+      }
+    } catch {}
+
+    return apiSuccess(contacts);
+  }
+
+  // ── Guardian Messaging Threads ────────────────────────────────────────────
+  if (pathname === "/api/guardian/messages/threads" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const threads = queries.getGuardianThreads.all(auth.userId) as any[];
+    return apiSuccess(threads);
+  }
+
+  const guardianThreadMatch = pathname.match(/^\/api\/guardian\/messages\/threads\/(\d+)$/);
+  if (guardianThreadMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const threadId = Number(guardianThreadMatch[1]);
+    const thread = queries.getThreadById.get(threadId) as any;
+    if (!thread || Number(thread.guardian_id) !== auth.userId) return apiError(404, "Thread not found");
+    
+    // Reset unread counter for guardian
+    queries.markThreadReadForGuardian.run(threadId);
+    const messages = queries.getMessagesByThread.all(threadId);
+    return apiSuccess({ thread, messages });
+  }
+
+  if (guardianThreadMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const threadId = Number(guardianThreadMatch[1]);
+    const thread = queries.getThreadById.get(threadId) as any;
+    if (!thread || Number(thread.guardian_id) !== auth.userId) return apiError(404, "Thread not found");
+
+    const body = await readJson(req);
+    const text = trimStr(body?.text || "");
+    if (!text) return apiError(400, "Message text required");
+
+    const msgRes = queries.insertMessage.run(threadId, auth.userId, "guardian", text, 0) as { lastInsertRowid: number | bigint };
+    queries.updateThreadLastMessage.run(text, 0, 1, threadId);
+
+    // Dispatch real-time SSE notification to recipient (teacher/admin)
+    notifyUser(Number(thread.recipient_id), {
+      type: "chat_message",
+      message: `${auth.name || "Guardian"}: ${text.slice(0, 80)}`,
+      link: "/teacher/messages",
+    });
+
+    return apiSuccess({ id: Number(msgRes.lastInsertRowid), text, sender_role: "guardian", created_at: new Date().toISOString() }, 201);
+  }
+
+  if (pathname === "/api/guardian/messages/new-thread" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const body = await readJson(req);
+    const recipientId = Number(body?.recipient_id);
+    const studentId = Number(body?.student_id);
+    const text = trimStr(body?.text || "");
+    const category = ["teacher", "school", "system"].includes(body?.category) ? body.category : "teacher";
+    const subject = trimStr(body?.subject || `Inquiry regarding ${body?.student_name || "Student"}`);
+
+    if (!isPositiveIntId(recipientId) || !isPositiveIntId(studentId) || !text) {
+      return apiError(400, "recipient_id, student_id, and text required");
+    }
+
+    let thread = queries.findThreadByParticipants.get(auth.userId, recipientId, studentId) as any;
+    let threadId: number;
+    if (!thread) {
+      const res = queries.createMessageThread.run(auth.userId, recipientId, studentId, category, subject, text, 0, 1) as { lastInsertRowid: number | bigint };
+      threadId = Number(res.lastInsertRowid);
+    } else {
+      threadId = Number(thread.id);
+      queries.updateThreadLastMessage.run(text, 0, 1, threadId);
+    }
+
+    const msgRes = queries.insertMessage.run(threadId, auth.userId, "guardian", text, 0) as { lastInsertRowid: number | bigint };
+    notifyUser(recipientId, {
+      type: "chat_message",
+      message: `${auth.name || "Guardian"}: ${text.slice(0, 80)}`,
+      link: "/teacher/messages",
+    });
+
+    return apiSuccess({ threadId, messageId: Number(msgRes.lastInsertRowid), text }, 201);
+  }
+
+  // ── Teacher Messaging Threads ─────────────────────────────────────────────
+  if (pathname === "/api/teacher/messages/threads" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const threads = queries.getTeacherThreads.all(auth.userId) as any[];
+    return apiSuccess(threads);
+  }
+
+  const teacherThreadMatch = pathname.match(/^\/api\/teacher\/messages\/threads\/(\d+)$/);
+  if (teacherThreadMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const threadId = Number(teacherThreadMatch[1]);
+    const thread = queries.getThreadById.get(threadId) as any;
+    if (!thread || Number(thread.recipient_id) !== auth.userId) return apiError(404, "Thread not found");
+
+    // Reset unread counter for teacher
+    queries.markThreadReadForRecipient.run(threadId);
+    const messages = queries.getMessagesByThread.all(threadId);
+    return apiSuccess({ thread, messages });
+  }
+
+  if (teacherThreadMatch && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const threadId = Number(teacherThreadMatch[1]);
+    const thread = queries.getThreadById.get(threadId) as any;
+    if (!thread || Number(thread.recipient_id) !== auth.userId) return apiError(404, "Thread not found");
+
+    const body = await readJson(req);
+    const text = trimStr(body?.text || "");
+    if (!text) return apiError(400, "Message text required");
+
+    const msgRes = queries.insertMessage.run(threadId, auth.userId, auth.role, text, 0) as { lastInsertRowid: number | bigint };
+    queries.updateThreadLastMessage.run(text, 1, 0, threadId);
+
+    // Dispatch real-time SSE notification to Guardian
+    notifyUser(Number(thread.guardian_id), {
+      type: "chat_message",
+      message: `${auth.name || "Teacher"}: ${text.slice(0, 80)}`,
+      link: "/guardian/messages",
+    });
+
+    return apiSuccess({ id: Number(msgRes.lastInsertRowid), text, sender_role: auth.role, created_at: new Date().toISOString() }, 201);
+  }
+
+  // ── Push Subscriptions (VAPID / Web Push) ──────────────────────────────────
+  if (pathname === "/api/notifications/subscribe-push" && method === "POST") {
+    const auth = requireAuth(req);
+    const body = await readJson(req);
+    const endpoint = trimStr(body?.endpoint || "");
+    const p256dh = trimStr(body?.keys?.p256dh || body?.p256dh || "");
+    const authKey = trimStr(body?.keys?.auth || body?.auth_key || "");
+
+    if (!endpoint || !p256dh || !authKey) return apiError(400, "endpoint, p256dh, and auth key required");
+    queries.upsertPushSubscription.run(auth.userId, endpoint, p256dh, authKey);
+    return apiSuccess({ success: true, message: "Push subscription active" });
+  }
+
+  // ── Guardian Links (Self-Service) ─────────────────────────────────────────
+  if (pathname === "/api/guardian/links" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const links = queries.getGuardianLinksByGuardian.all(auth.userId);
+    return apiSuccess(links);
+  }
+
+  if (pathname === "/api/guardian/links" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const body = await readJson(req);
+    let student_id = Number(body?.student_id);
+    const regIdInput = trimStr(body?.reg_id || body?.regId || body?.student_reg_id || "");
+    if (!isPositiveIntId(student_id) && regIdInput) {
+      const byReg = queries.getUserByEmailOrReg.get(regIdInput.toUpperCase(), regIdInput.toUpperCase()) as any;
+      if (byReg && byReg.role === "student") student_id = Number(byReg.id);
+      else {
+        const byRegExact = db.prepare("SELECT id FROM users WHERE reg_id = ? AND role='student' LIMIT 1").get(regIdInput) as any;
+        if (byRegExact) student_id = Number(byRegExact.id);
+      }
+    }
+    const relationship = trimStr(body?.relationship || "Parent").slice(0, 40);
+    if (!isPositiveIntId(student_id)) return apiError(400, "student_id or valid reg_id required");
+    const student = queries.getUserById.get(student_id) as any;
+    if (!student || student.role !== "student") return apiError(400, "Invalid student id");
+    try {
+      const result = queries.createGuardianLink.run(auth.userId, student_id, relationship) as { lastInsertRowid: number | bigint };
+      auditLog(auth.userId, "GUARDIAN_LINK_REQUEST", "guardian_student_links", Number(result.lastInsertRowid), JSON.stringify({ student_id, relationship }));
+      return apiSuccess({ id: Number(result.lastInsertRowid), status: "pending" }, 201);
+    } catch (e) {
+      if (isSqliteUniqueError(e)) return apiError(409, "A link between you and this student already exists");
+      throw e;
+    }
+  }
+
+  const guardianSelfLinkMatch = pathname.match(/^\/api\/guardian\/links\/(\d+)$/);
+  if (guardianSelfLinkMatch && method === "DELETE") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const linkId = Number(guardianSelfLinkMatch[1]);
+    if (!isPositiveIntId(linkId)) return apiError(400, "Invalid link id");
+    const link = queries.getGuardianLink.get(linkId) as any;
+    if (!link) return apiError(404, "Link not found");
+    if (link.guardian_id !== auth.userId) return apiError(403, "Access denied");
+    if (link.status !== "pending") return apiError(400, "Can only cancel pending links");
+    queries.updateGuardianLinkStatus.run("revoked", auth.userId, linkId);
+    auditLog(auth.userId, "GUARDIAN_LINK_CANCELLED", "guardian_student_links", linkId, JSON.stringify({ action: "cancel" }));
+    return apiSuccess({ id: linkId, status: "revoked" });
+  }
+
+  // ── Guardian Notifications ────────────────────────────────────────────────
+  if (pathname === "/api/guardian/notifications" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const notifications = queries.getNotifications.all(auth.userId);
+    const unreadRow = queries.getUnreadNotificationCount.get(auth.userId) as any;
+    return apiSuccess({ items: notifications, unreadCount: Number(unreadRow?.count || 0) });
+  }
+
+  // ── Teacher Attendance: Class Roster & Roll ────────────────────────────────
+  if (pathname === "/api/teacher/attendance/roster" && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const queryDate = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+    const classIdParam = url.searchParams.get("class_id");
+    
+    // 1. Get assigned classes for teacher or all classes for operator
+    let teacherClasses: any[] = [];
+    if (auth.role === "operator") {
+      teacherClasses = queries.getClasses.all() as any[];
+    } else {
+      teacherClasses = queries.getTeacherClasses.all(auth.userId) as any[];
+    }
+
+    if (teacherClasses.length === 0) {
+      return apiSuccess({
+        date: queryDate,
+        has_class: false,
+        classes: [],
+        students: [],
+        message: "You are not currently assigned as a Class Teacher for any classroom.",
+      });
+    }
+
+    const selectedClassId = classIdParam ? Number(classIdParam) : teacherClasses[0].id;
+    const currentClass = teacherClasses.find((c: any) => Number(c.id) === selectedClassId) || teacherClasses[0];
+
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const tid = activeTerm?.id || 1;
+
+    const rawStudents = queries.getClassEnrolledStudentsForAttendance.all(currentClass.id) as any[];
+    const students = rawStudents.map((s: any) => {
+      const record = queries.getAttendanceRecordForStudentDate.get(s.id, queryDate, tid) as any;
+      return {
+        id: s.id,
+        student_id: s.id,
+        name: s.name,
+        reg_id: s.reg_id,
+        image_url: s.image_url,
+        class_name: s.class_name || currentClass.name,
+        status: record?.status || "present",
+        remarks: record?.remarks || "",
+        recorded_at: record?.created_at || null,
+      };
+    });
+
+    return apiSuccess({
+      date: queryDate,
+      has_class: true,
+      class_id: currentClass.id,
+      class_name: currentClass.name,
+      classes: teacherClasses,
+      total_students: students.length,
+      students,
+    });
+  }
+
+  // ── Teacher Attendance: Batch Register Submission ─────────────────────────
+  if (pathname === "/api/teacher/attendance/batch" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["teacher", "operator"]);
+    const body = await readJson(req);
+    const classId = Number(body?.class_id);
+    const date = trimStr(body?.date) || new Date().toISOString().slice(0, 10);
+    const records = Array.isArray(body?.records) ? body.records : [];
+
+    if (!records.length) return apiError(400, "Records array required");
+
+    const activeTerm = queries.getActiveAcademicTerm.get() as any;
+    const activeSession = queries.getActiveAcademicSession.get() as any;
+    const tid = Number(body?.term_id || activeTerm?.id || 1);
+    const sid = Number(body?.session_id || activeSession?.id || 1);
+
+    let savedCount = 0;
+    let alertsSent = 0;
+
+    for (const r of records) {
+      const studentId = Number(r.student_id);
+      if (!isPositiveIntId(studentId)) continue;
+      const status = ["present", "absent", "late", "holiday", "excused"].includes(r.status) ? r.status : "present";
+      const remarks = r.remarks ? trimStr(r.remarks) : null;
+
+      queries.upsertAttendanceRecord.run(studentId, tid, sid, date, status, remarks, auth.userId);
+      savedCount++;
+
+      // Dispatch alert to student's guardians
+      try {
+        const guardians = queries.getStudentGuardians.all(studentId) as any[];
+        const studentObj = queries.getUserById.get(studentId) as any;
+        const studentName = studentObj?.name || "Your ward";
+        
+        for (const g of guardians) {
+          const guardianUser = queries.getUserById.get(Number(g.guardian_id)) as any;
+          if (guardianUser && guardianUser.notify_attendance === 0) continue;
+
+          const notifMsg = `Daily Roll Call: ${studentName} was marked ${status.toUpperCase()} in class on ${date}.${remarks ? ` Note: "${remarks}"` : ""}`;
+          
+          queries.createNotification.run(
+            Number(g.guardian_id),
+            "attendance",
+            notifMsg,
+            "/guardian/attendance"
+          );
+
+          notifyUser(Number(g.guardian_id), {
+            type: "attendance",
+            message: notifMsg,
+            link: "/guardian/attendance",
+          });
+          alertsSent++;
+        }
+      } catch (err) {
+        console.warn("[attendance] Failed to notify guardian for student:", studentId, err);
+      }
+    }
+
+    auditLog(auth.userId, "ATTENDANCE_BATCH_RECORDED", "classes", classId, JSON.stringify({ date, count: savedCount, alertsSent }));
+    return apiSuccess({ success: true, count: savedCount, alertsSent, date });
+  }
+
+  // ── Guardian Security: Password Update ────────────────────────────────────
+  if (pathname === "/api/guardian/settings/password" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const body = await readJson(req);
+    const currentPassword = String(body?.current_password || "");
+    const newPassword = String(body?.new_password || "");
+
+    if (!currentPassword || !newPassword) return apiError(400, "Current password and new password required");
+    if (newPassword.length < MIN_PASSWORD_LENGTH) return apiError(400, `New password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+
+    const user = queries.getUserById.get(auth.userId) as any;
+    if (!user) return apiError(404, "User not found");
+
+    const match = await verifyPassword(currentPassword, user.password_hash);
+    if (!match) return apiError(400, "Current password is incorrect");
+
+    const newHash = await hashPassword(newPassword);
+    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, auth.userId);
+    auditLog(auth.userId, "PASSWORD_UPDATED", "users", auth.userId, "{}");
+
+    return apiSuccess({ success: true, message: "Password updated successfully" });
+  }
+
+  // ── Guardian Settings: Profile Update ─────────────────────────────────────
+  if (pathname === "/api/guardian/settings/profile" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const body = await readJson(req);
+    const phone = trimStr(body?.phone || "");
+    const address = trimStr(body?.address || "");
+
+    queries.updateGuardianProfile.run(phone || null, address || null, auth.userId);
+    auditLog(auth.userId, "PROFILE_UPDATED", "users", auth.userId, JSON.stringify({ phone, address }));
+
+    return apiSuccess({ success: true, message: "Profile updated successfully" });
+  }
+
+  // ── Guardian Settings: Notification Preferences ──────────────────────────
+  if (pathname === "/api/guardian/settings/notifications" && method === "POST") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const body = await readJson(req);
+    const notify_attendance = (body?.notify_attendance === 0 || body?.notify_attendance === false) ? 0 : 1;
+    const notify_results = (body?.notify_results === 0 || body?.notify_results === false) ? 0 : 1;
+    const notify_fees = (body?.notify_fees === 0 || body?.notify_fees === false) ? 0 : 1;
+    const notify_messages = (body?.notify_messages === 0 || body?.notify_messages === false) ? 0 : 1;
+
+    queries.updateGuardianNotificationPreferences.run(
+      notify_attendance,
+      notify_results,
+      notify_fees,
+      notify_messages,
+      auth.userId
+    );
+
+    return apiSuccess({
+      success: true,
+      message: "Notification preferences saved",
+      preferences: { notify_attendance, notify_results, notify_fees, notify_messages },
+    });
+  }
+
+  // ── Guardian Report Card Share Token ──────────────────────────────────────
+  const wardShareTokenMatch = pathname.match(/^\/api\/guardian\/wards\/(\d+)\/share-token$/);
+  if (wardShareTokenMatch && method === "GET") {
+    const auth = requireAuth(req);
+    requireRole(auth.role, ["guardian"]);
+    const wardId = Number(wardShareTokenMatch[1]);
+    const link = db.prepare("SELECT student_id FROM guardian_student_links WHERE guardian_id = ? AND (student_id = ? OR id = ?) AND status = 'approved'").get(auth.userId, wardId, wardId) as any;
+    if (!link) return apiError(403, "Access denied: not your ward");
+
+    const token = Buffer.from(`${auth.userId}:${link.student_id}:${Date.now()}`).toString("base64url");
+    const shareUrl = `/student/report-card?student_id=${link.student_id}&token=${token}`;
+    return apiSuccess({ token, share_url: shareUrl });
+  }
+
+  // ── Guardian Verify Report Card Share Token ──────────────────────────────
+  if (pathname === "/api/guardian/verify-share-token" && method === "GET") {
+    const rawToken = url.searchParams.get("token") || "";
+    if (!rawToken) return apiError(400, "Token query parameter required");
+    try {
+      const decoded = Buffer.from(rawToken, "base64url").toString("utf-8");
+      const [guardianIdStr, studentIdStr, timestampStr] = decoded.split(":");
+      const guardianId = Number(guardianIdStr);
+      const studentId = Number(studentIdStr);
+      const timestamp = Number(timestampStr);
+
+      if (!isPositiveIntId(guardianId) || !isPositiveIntId(studentId) || !Number.isFinite(timestamp)) {
+        return apiError(400, "Invalid share token format");
+      }
+
+      const student = queries.getUserById.get(studentId) as any;
+      if (!student || student.role !== "student") return apiError(404, "Student not found");
+
+      return apiSuccess({ valid: true, student_id: studentId, guardian_id: guardianId, created_at: new Date(timestamp).toISOString() });
+    } catch {
+      return apiError(400, "Invalid token");
+    }
+  }
+
+  // ── VAPID Public Key Discovery ────────────────────────────────────────────
+  if (pathname === "/api/notifications/vapid-public-key" && method === "GET") {
+    const vapidPublicKey = Bun.env.VAPID_PUBLIC_KEY || "BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDZKrxZElOEGqcMPSCqbYp512vtR45N_XXGYZoSTWiME";
+    return apiSuccess({ publicKey: vapidPublicKey });
+  }
+
   return apiError(404, "Not found");
 }
 
@@ -5118,59 +7246,339 @@ console.log(`Static dist: ${distDir}`);
 console.log(`Setup required: ${setupRequired}`);
 console.log(`JWT Secret: ${Bun.env.JWT_SECRET ? "✅ Custom secret loaded from .env" : "❌ Default (insecure) — run: bun run start"}`);
 
-// --- Local DNS IP Masking ---
+// --- Local DNS IP Masking & mDNS Zero-Config ---
 let isDnsListening = false;
+let isMdnsListening = false;
 const initialDbUrl = (queries.getSetting.get("CUSTOM_URL") as any)?.value;
-let activeCustomUrl = initialDbUrl || Bun.env.CUSTOM_URL || "exampool.ng";
+let activeCustomUrl = initialDbUrl || Bun.env.CUSTOM_URL || "exampool.com";
 
-if (primaryLocalIp) {
+// Type number-to-name lookup for DNS Packet
+const DNS_TYPE_NUM_TO_NAME: Record<number, string> = {};
+for (const [tName, tNum] of Object.entries(DNS.Packet.TYPE)) {
+  DNS_TYPE_NUM_TO_NAME[tNum as number] = tName;
+}
+
+// Upstream recursive resolver (Google & Cloudflare public DNS)
+const upstreamDns = new DNS({
+  nameServers: ["8.8.8.8", "1.1.1.1", "8.8.4.4", "1.0.0.1"],
+  timeout: 2500,
+  retryOverTCP: true,
+});
+
+// High-speed in-memory DNS cache for upstream queries
+interface CachedDnsRecord {
+  expiresAt: number;
+  rcode: number;
+  answers: any[];
+  authorities: any[];
+  additionals: any[];
+}
+const dnsUpstreamCache = new Map<string, CachedDnsRecord>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of dnsUpstreamCache.entries()) {
+    if (entry.expiresAt <= now) dnsUpstreamCache.delete(key);
+  }
+}, 60_000);
+
+// Helper: check if a requested domain matches our local app domains
+function isMatchingCustomDomain(qName: string, activeUrl: string): boolean {
+  const q = qName.toLowerCase().replace(/\.$/, "").trim();
+  const target = (activeUrl || "exampool.com").toLowerCase().replace(/\.$/, "").trim();
+  const targetBase = target.replace(/\.[a-z0-9-]+$/i, "");
+
+  if (target) {
+    if (q === target || q === `www.${target}` || q.endsWith(`.${target}`)) return true;
+  }
+
+  // Built-in friendly domains (exampool.com, exampool.local, exampool.ng, exampool.co)
+  if (
+    q === "exampool.com" ||
+    q === "www.exampool.com" ||
+    q.endsWith(".exampool.com") ||
+    q === "exampool.local" ||
+    q === "www.exampool.local" ||
+    q.endsWith(".exampool.local") ||
+    q === "exampool.co" ||
+    q === "www.exampool.co" ||
+    q.endsWith(".exampool.co") ||
+    q === "exampool.ng" ||
+    q === "www.exampool.ng" ||
+    q.endsWith(".exampool.ng")
+  ) {
+    return true;
+  }
+
+  if (targetBase.length > 2 && (q === `${targetBase}.local` || q.endsWith(`.${targetBase}.local`))) {
+    return true;
+  }
+
+  return false;
+}
+
+// Function to safely update the local OS hosts file (Windows & Unix)
+function syncHostsFile(customUrl: string): boolean {
+  const isWindows = process.platform === "win32";
+  const hostsPath = isWindows
+    ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "drivers", "etc", "hosts")
+    : "/etc/hosts";
+
+  try {
+    if (!fs.existsSync(hostsPath)) return false;
+    let content = fs.readFileSync(hostsPath, "utf-8");
+
+    const domains = new Set(["exampool.com", "www.exampool.com", "exampool.local", "www.exampool.local", "exampool.co", "www.exampool.co", "exampool.ng", "www.exampool.ng"]);
+    if (customUrl) {
+      const clean = customUrl.toLowerCase().trim();
+      domains.add(clean);
+      if (!clean.startsWith("www.")) domains.add(`www.${clean}`);
+      const baseName = clean.replace(/\.[a-z0-9-]+$/i, "");
+      if (baseName && baseName !== "exampool") {
+        domains.add(`${baseName}.local`);
+      }
+    }
+
+    const markerStart = "# === EXAMPOOL LOCAL DOMAIN MAP START ===";
+    const markerEnd = "# === EXAMPOOL LOCAL DOMAIN MAP END ===";
+
+    const domainList = Array.from(domains).join(" ");
+    const block = `${markerStart}\n127.0.0.1 ${domainList}\n::1 ${domainList}\n${markerEnd}`;
+
+    if (content.includes(markerStart)) {
+      const regex = new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}`, "g");
+      content = content.replace(regex, block);
+    } else {
+      content = content.trimEnd() + "\n\n" + block + "\n";
+    }
+
+    fs.writeFileSync(hostsPath, content, "utf-8");
+    console.log(`[HOSTS] Local hosts file mapped: ${domainList} -> 127.0.0.1`);
+    return true;
+  } catch {
+    // EPERM is normal when not running elevated
+    return false;
+  }
+}
+
+// Attempt initial hosts file sync
+syncHostsFile(activeCustomUrl);
+
+// Helper: always resolve the current primary LAN IP (handles DHCP changes)
+function getCurrentPrimaryIp(): string {
+  if (primaryLocalIp) return primaryLocalIp;
+  // Fallback: rescan interfaces if primary was empty at startup
+  try {
+    const ifaces = os.networkInterfaces();
+    const virtualPrefixes = ["vEthernet", "VMware", "VirtualBox", "Loopback", "Teredo", "Bluetooth", "WSL"];
+    for (const [name, addrs] of Object.entries(ifaces)) {
+      for (const a of addrs ?? []) {
+        if (a.family === "IPv4" && !a.internal && !virtualPrefixes.some(p => name.startsWith(p))) {
+          return a.address;
+        }
+      }
+    }
+    for (const addrs of Object.values(ifaces)) {
+      for (const a of addrs ?? []) if (a.family === "IPv4" && !a.internal) return a.address;
+    }
+  } catch {}
+  return primaryLocalIp || "127.0.0.1";
+}
+
+// Periodic refresh of primaryLocalIp in case DHCP lease changes
+setInterval(() => {
+  const refreshed = getCurrentPrimaryIp();
+  if (refreshed && refreshed !== primaryLocalIp) {
+    primaryLocalIp = refreshed;
+    console.log(`[DNS] Primary LAN IP refreshed: ${primaryLocalIp}`);
+  }
+}, 30_000);
+
+// --- Zero-Config Multicast DNS (mDNS) Responder on UDP 5353 ---
+function startMdnsResponder() {
+  try {
+    const mdnsSocket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+
+    mdnsSocket.on("error", () => {
+      // Non-fatal if port 5353 has OS binding restrictions
+    });
+
+    mdnsSocket.on("message", (msg: Buffer, rinfo: any) => {
+      try {
+        const parsed = DNS.Packet.parse(msg);
+        for (const question of parsed.questions || []) {
+          const qName = String(question.name || "").toLowerCase().replace(/\.$/, "");
+          if (
+            qName === "exampool.local" ||
+            qName === "www.exampool.local" ||
+            isMatchingCustomDomain(qName, activeCustomUrl)
+          ) {
+            const qType = question.type;
+            if (qType === DNS.Packet.TYPE.A || qType === 1 || qType === 255) {
+              const resPacket = new DNS.Packet();
+              resPacket.header.id = parsed.header.id || 0;
+              resPacket.header.qr = 1;
+              resPacket.header.aa = 1;
+              resPacket.header.rcode = 0;
+              resPacket.questions = [question];
+              resPacket.answers.push({
+                name: question.name,
+                type: DNS.Packet.TYPE.A,
+                class: DNS.Packet.CLASS.IN,
+                ttl: 120,
+                address: getCurrentPrimaryIp(),
+              } as any);
+
+              const buf = resPacket.toBuffer();
+              try {
+                mdnsSocket.send(buf, 0, buf.length, 5353, "224.0.0.251");
+                if (rinfo.port && rinfo.port !== 5353) {
+                  mdnsSocket.send(buf, 0, buf.length, rinfo.port, rinfo.address);
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    });
+
+    mdnsSocket.bind(5353, () => {
+      try {
+        mdnsSocket.addMembership("224.0.0.251");
+        isMdnsListening = true;
+      } catch {}
+    });
+  } catch {}
+}
+
+startMdnsResponder();
+
+if (primaryLocalIp || getCurrentPrimaryIp()) {
   try {
     const { Packet } = DNS;
     const dnsServer = DNS.createServer({
       udp: true,
-      handle: (request, send, rinfo) => {
+      handle: async (request: any, send: (response: any) => Promise<any>, rinfo: any) => {
         const response = Packet.createResponseFromRequest(request);
         const [question] = request.questions;
         if (!question) return send(response);
-        
-        const { name } = question;
-        if (name.toLowerCase() === activeCustomUrl.toLowerCase() && question.type === Packet.TYPE.A) {
-          response.answers.push({
-            name,
-            type: Packet.TYPE.A,
-            class: Packet.CLASS.IN,
-            ttl: 300,
-            address: primaryLocalIp
-          } as any);
+
+        const qName = String(question.name || "").toLowerCase().replace(/\.$/, "");
+        const isMatch = isMatchingCustomDomain(qName, activeCustomUrl);
+
+        if (isMatch) {
+          // Authoritative answer for our custom domain / local domain
+          response.header.aa = 1;
+          response.header.ra = 1;
+          response.header.rcode = 0;
+
+          if (question.type === Packet.TYPE.A || question.type === 1 || question.type === 255) {
+            const ip = getCurrentPrimaryIp();
+            response.answers.push({
+              name: question.name,
+              type: Packet.TYPE.A,
+              class: Packet.CLASS.IN,
+              ttl: 60,
+              address: ip,
+            } as any);
+          }
+          // For AAAA (IPv6) or HTTPS queries on our local domain, return empty answer with NOERROR immediately
+          return send(response);
         }
+
+        // --- Recursive Upstream Forwarding for all other domains ---
+        const typeStr = typeof question.type === "number"
+          ? (DNS_TYPE_NUM_TO_NAME[question.type] || "A")
+          : (question.type || "A");
+        const cacheKey = `${qName}|${typeStr}`;
+        const now = Date.now();
+        const cached = dnsUpstreamCache.get(cacheKey);
+
+        if (cached && cached.expiresAt > now) {
+          response.header.rcode = cached.rcode;
+          response.header.ra = 1;
+          response.answers = cached.answers;
+          response.authorities = cached.authorities;
+          response.additionals = cached.additionals;
+          return send(response);
+        }
+
+        try {
+          const upstreamRes = await upstreamDns.resolve(question.name, typeStr);
+          if (upstreamRes) {
+            response.header.rcode = upstreamRes.header.rcode ?? 0;
+            response.header.ra = 1;
+            response.answers = upstreamRes.answers ? [...upstreamRes.answers] : [];
+            response.authorities = upstreamRes.authorities ? [...upstreamRes.authorities] : [];
+            response.additionals = upstreamRes.additionals ? [...upstreamRes.additionals] : [];
+
+            // Cache upstream answer
+            let minTtl = 60;
+            for (const a of response.answers) {
+              if (typeof a.ttl === "number" && a.ttl > 0 && a.ttl < minTtl) minTtl = a.ttl;
+            }
+            if (dnsUpstreamCache.size < 500) {
+              dnsUpstreamCache.set(cacheKey, {
+                expiresAt: now + Math.min(minTtl, 300) * 1000,
+                rcode: response.header.rcode,
+                answers: response.answers,
+                authorities: response.authorities,
+                additionals: response.additionals,
+              });
+            }
+
+            return send(response);
+          }
+        } catch {
+          // Upstream query failed / domain does not exist
+          response.header.rcode = 3; // NXDOMAIN
+        }
+
         send(response);
-      }
+      },
     });
 
     dnsServer.on("listening", () => {
       isDnsListening = true;
-      console.log(`[DNS] Local IP Masking active: ${activeCustomUrl} -> ${primaryLocalIp}`);
-      console.log(`      To use this, set your Wi-Fi router's primary DNS to ${primaryLocalIp}`);
+      const ip = getCurrentPrimaryIp();
+      console.log(`[DNS] Local IP Masking active: ${activeCustomUrl} (+www.${activeCustomUrl}, *.${activeCustomUrl}) -> ${ip}`);
+      console.log(`[DNS] Recursive Upstream Proxy: ✅ Active (Google & Cloudflare DNS pass-through)`);
+      console.log(`[mDNS] Zero-Config Wi-Fi URL:  http://exampool.local:${server.port}`);
+      console.log(`      • Fast Wi-Fi Access:     http://exampool.local:${server.port} (Works on iPhones/Android/Mac/PC on same Wi-Fi)`);
+      console.log(`      • Custom Domain Access:  http://${activeCustomUrl}:${server.port} (Set router Primary DNS to ${ip})`);
+      console.log(`      • Direct LAN IP Access:  http://${ip}:${server.port}`);
+      console.log(`      • Host PC Setup:         Run 'bun run hosts:setup' to map ${activeCustomUrl} on this computer`);
     });
 
     dnsServer.on("error", (err: any) => {
       isDnsListening = false;
       if (err.code === "EACCES" || err.code === "EPERM") {
         console.warn(`[DNS WARNING] Could not bind to port 53. Run the server as Administrator to enable URL masking.`);
+        console.warn(`              Right-click → Run as Administrator, then: bun run start`);
+        console.warn(`              Zero-Config mDNS still works: http://exampool.local:${server.port}`);
+        console.warn(`              Direct IP access still works: http://${getCurrentPrimaryIp()}:${server.port}`);
       } else if (err.code === "EADDRINUSE") {
-        console.warn(`[DNS WARNING] Port 53 on ${primaryLocalIp} is in use by another service (e.g. WSL/ICS).`);
-        console.warn(`              To free Port 53, disable Internet Connection Sharing / Mobile Hotspot in Windows settings.`);
+        console.warn(`[DNS WARNING] Port 53 in use by another service (e.g. WSL/ICS, Hyper-V, or another DNS).`);
+        console.warn(`              To free Port 53: disable Internet Connection Sharing in Windows Settings.`);
+        console.warn(`              Zero-Config mDNS still works: http://exampool.local:${server.port}`);
+        console.warn(`              Direct IP access still works: http://${getCurrentPrimaryIp()}:${server.port}`);
       } else {
         console.warn(`[DNS WARNING] Could not start local DNS: ${err.message}`);
+        console.warn(`              Direct IP access fallback: http://${getCurrentPrimaryIp()}:${server.port}`);
       }
     });
 
-    // Start on port 53 bound specifically to the physical network adapter IP
-    dnsServer.listen({ udp: { port: 53, address: primaryLocalIp } });
+    // Bind to all interfaces so any LAN client using this host as DNS can resolve
+    const dnsBindIp = "0.0.0.0";
+    dnsServer.listen({ udp: { port: 53, address: dnsBindIp } });
   } catch (err: any) {
     isDnsListening = false;
     console.warn(`[DNS WARNING] Failed to initialize local DNS: ${err.message}`);
+    console.warn(`              Direct IP access still works: http://${getCurrentPrimaryIp()}:${server.port}`);
   }
+} else {
+  console.warn(`[DNS] No LAN IP detected — DNS masking disabled. Connect to Wi-Fi/Ethernet to enable custom URL.`);
+  console.warn(`      Direct fallback: http://127.0.0.1:${server.port}`);
 }
 
 // --- Graceful Shutdown ---
@@ -5188,3 +7596,4 @@ function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+

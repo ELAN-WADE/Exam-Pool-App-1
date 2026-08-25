@@ -3,9 +3,9 @@
 import { useState, useRef, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "../../hooks/useAuth";
-import { useAcademic } from "../context/AcademicContext";
-import { api } from "../../lib/api";
 import { NotificationBell } from "./NotificationBell";
+import { DigitalClock } from "./DigitalClock";
+import { AcademicSwitcher } from "./AcademicSwitcher";
 import styles from "./TopBar.module.css";
 
 type Props = {
@@ -28,17 +28,21 @@ const BREADCRUMB_MAP: Record<string, string> = {
   "/ADMIN/timetable": "Timetable",
   "/ADMIN/users":     "Users",
   "/ADMIN/settings":  "Settings",
+  "/guardian/dashboard": "Dashboard",
+  "/guardian/wards":     "My Wards",
+  "/guardian/links":     "Guardian Links",
+  "/guardian/calendar":  "Calendar",
+  "/guardian/notifications": "Notifications",
 };
 
 export function TopBar({ onMenuClick, title }: Props) {
   const { user, logout } = useAuth();
-  const { sessions, terms, selectedSession, selectedTerm, setSelectedSession, setSelectedTerm, refreshAcademic } = useAcademic();
   const pathname = usePathname();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const pageTitle = title ?? BREADCRUMB_MAP[pathname?.replace(/\/$/, "") ?? ""] ?? "ExamPool";
-  const roleLabel = user?.role === "operator" ? "Operator" : user?.role === "teacher" ? "Teacher" : "Student";
+  const pageTitle = title ?? BREADCRUMB_MAP[pathname?.replace(/\/$/, "") ?? ""] ?? "ACAD";
+  const roleLabel = user?.role === "operator" ? "Operator" : user?.role === "teacher" ? "Teacher" : user?.role === "guardian" ? "Guardian" : "Student";
 
   // Close user menu on outside click
   useEffect(() => {
@@ -53,86 +57,76 @@ export function TopBar({ onMenuClick, title }: Props) {
 
   return (
     <header className={styles.topbar}>
-      {/* Left */}
+      {/* Left: Mobile Menu & Digital Watch */}
       <div className={styles.left}>
         <button
           className={styles.menuBtn}
           onClick={onMenuClick}
           aria-label="Toggle menu"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" strokeWidth="2.2">
             <line x1="3" y1="6" x2="21" y2="6" />
             <line x1="3" y1="12" x2="21" y2="12" />
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        {/* Breadcrumb removed as requested */}
+
+        <div className={styles.clockWrapper}>
+          <DigitalClock />
+        </div>
       </div>
 
-      {/* Right */}
+      {/* Right: Academic Switcher, Notifications, User Chip */}
       <div className={styles.right}>
-        {/* Academic Switcher (View Filter - does not alter global active session) */}
-        {(user?.role === "operator" || user?.role === "teacher") && sessions.length > 0 && (
-          <div className="hidden sm:flex items-center gap-2">
-            <select
-              value={selectedSession?.id || ""}
-              onChange={(e) => {
-                const s = sessions.find(x => x.id === Number(e.target.value));
-                if (s) {
-                  setSelectedSession(s);
-                  // Default to first term of that session if available
-                  const firstTerm = terms.find(t => t.session_id === s.id);
-                  setSelectedTerm(firstTerm || null);
-                }
-              }}
-              className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
-              title="Filter by Academic Session"
-            >
-              {sessions.map(s => <option key={s.id} value={s.id}>{s.name} {s.is_active ? "(Active)" : ""}</option>)}
-            </select>
-            
-            <select
-              value={selectedTerm?.id || ""}
-              onChange={(e) => {
-                const t = terms.find(x => x.id === Number(e.target.value));
-                setSelectedTerm(t || null);
-              }}
-              className="text-xs py-1 px-2 rounded-lg bg-slate-100 border border-slate-200 outline-none text-slate-700 font-bold cursor-pointer hover:bg-slate-200 transition"
-              title="Filter by Academic Term"
-            >
-              <option value="">All Terms</option>
-              {terms.filter(t => t.session_id === selectedSession?.id).map(t => (
-                <option key={t.id} value={t.id}>{t.name} {t.is_active ? "(Active)" : ""}</option>
-              ))}
-            </select>
-          </div>
+        {/* Compact Academic Session & Term Switcher — visible for all roles so any user can browse historical sessions */}
+        {user && (
+          <AcademicSwitcher />
         )}
 
         {/* Notification bell */}
-        {(user?.role === "operator" || user?.role === "teacher") && (
-          <NotificationBell role={user.role === "operator" ? "ADMIN" : "teacher"} />
+        {(user?.role === "operator" || user?.role === "teacher" || user?.role === "guardian") && (
+          <NotificationBell role={user.role === "operator" ? "ADMIN" : user.role === "guardian" ? "guardian" : "teacher"} />
         )}
 
-        {/* User chip */}
+        {/* User chip with Multi-Coloured Role Accent */}
         <div className={styles.userChipWrap} ref={menuRef}>
           <button
             className={styles.userChip}
             onClick={() => setUserMenuOpen((v) => !v)}
             aria-label="User menu"
           >
-            <div className={styles.avatar}>
+            <div
+              className={styles.avatar}
+              style={{
+                background:
+                  user?.role === "operator"
+                    ? "linear-gradient(135deg, #4F46E5 0%, #6366F1 100%)"
+                    : user?.role === "guardian"
+                    ? "linear-gradient(135deg, #6366F1 0%, #818CF8 100%)"
+                    : "linear-gradient(135deg, #7C3AED 0%, #A855F7 100%)",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+              }}
+            >
               {user?.name?.charAt(0)?.toUpperCase() ?? "?"}
             </div>
             <div className={styles.userMeta}>
               <span className={styles.userName}>{user?.name ?? "—"}</span>
-              <span className={styles.userRole}>{roleLabel}</span>
+              <span
+                className={styles.userRole}
+                style={{
+                  color: user?.role === "operator" ? "#4F46E5" : user?.role === "guardian" ? "#6366F1" : "#7C3AED",
+                  fontWeight: 700,
+                }}
+              >
+                {roleLabel}
+              </span>
             </div>
             <svg
               width="14"
               height="14"
               viewBox="0 0 24 24"
               fill="none"
-              stroke="currentColor"
+              stroke="#64748B"
               strokeWidth="2"
               className={`${styles.chevron} ${userMenuOpen ? styles.chevronOpen : ""}`}
             >
@@ -143,7 +137,17 @@ export function TopBar({ onMenuClick, title }: Props) {
           {userMenuOpen && (
             <div className={styles.userDropdown}>
               <div className={styles.dropdownHeader}>
-                <div className={styles.dropdownAvatar}>
+                <div
+                  className={styles.dropdownAvatar}
+                  style={{
+                    background:
+                      user?.role === "operator"
+                        ? "linear-gradient(135deg, #4F46E5 0%, #6366F1 100%)"
+                        : user?.role === "guardian"
+                        ? "linear-gradient(135deg, #6366F1 0%, #818CF8 100%)"
+                        : "linear-gradient(135deg, #7C3AED 0%, #A855F7 100%)",
+                  }}
+                >
                   {user?.name?.charAt(0)?.toUpperCase() ?? "?"}
                 </div>
                 <div>
@@ -160,7 +164,7 @@ export function TopBar({ onMenuClick, title }: Props) {
                   window.location.href = "/";
                 }}
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2">
                   <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
                   <polyline points="16 17 21 12 16 7" />
                   <line x1="21" y1="12" x2="9" y2="12" />

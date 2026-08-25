@@ -1,20 +1,49 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { api } from "../../../lib/api";
 import type { Subject, ExamResult, ActiveExamData } from "../../../lib/types";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { useAuth } from "../../../hooks/useAuth";
-import { BookIcon, CheckCircleIcon, EmptyBoxIcon, SubjectIcon, ClockIcon, CalendarIcon, PlayIcon, DownloadIcon } from "../../../components/icons/Icons";
-import { Skeleton } from "../../../components/ui/Skeleton";
-import { EmptyState } from "../../../components/ui/EmptyState";
-import { ProgressRing } from "../../../components/ui/ProgressRing";
-import { getCachedAssignments, cacheAssignments, getPendingSubmissions, clearPendingSubmissions, OfflineSubmission } from "../../../lib/offlineSync";
-import { DownloadAppWidget } from "../../../components/ui/DownloadAppWidget";
 import { useAcademic } from "../../../components/context/AcademicContext";
+import { ConfirmDialog } from "../../../components/ui";
+import { useToast } from "../../../hooks/useToast";
+import {
+  BookIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  CalendarIcon,
+  GraduationCapIcon,
+  DownloadIcon,
+  SparklesIcon,
+  DocumentIcon,
+  ArrowRightIcon,
+} from "../../../components/icons/Icons";
 import styles from "./page.module.css";
+
+// Animation Variants
+const containerVariants: Variants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.06,
+      delayChildren: 0.04,
+    },
+  },
+};
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.35, ease: "easeOut" },
+  },
+};
 
 export default function StudentDashboardPage() {
   return (
@@ -26,57 +55,66 @@ export default function StudentDashboardPage() {
 
 function DashboardContent() {
   const { user } = useAuth();
-  const { activeSession, activeTerm, selectedSession, selectedTerm } = useAcademic();
-  const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
-  const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
+  const { selectedSession, selectedTerm } = useAcademic();
   const router = useRouter();
-  const [subjects,    setSubjects]    = useState<Subject[]>([]);
-  const [results,     setResults]     = useState<ExamResult[]>([]);
-  const [activeExams, setActiveExams] = useState<Subject[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState("");
+
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [results, setResults] = useState<ExamResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [currentTime, setCurrentTime] = useState(Date.now());
-  const timeOffsetRef                 = useRef<number>(0);
+  const [selectedTab, setSelectedTab] = useState<"all" | "live" | "upcoming" | "completed">("all");
+  const timeOffsetRef = useRef<number>(0);
+  const navigatingRef = useRef(false);
+
+  const [retaking, setRetaking] = useState<number | null>(null);
+  const [retakeTarget, setRetakeTarget] = useState<{ examId: number; subjectId: number } | null>(null);
+  const { showToast } = useToast();
+
+  // Real Live Student Telemetry (Streak, Today's Goal, Cohort Rank)
+  const [telemetry, setTelemetry] = useState<import("../../../lib/types").StudentTelemetry | null>(null);
 
   const fetchData = async (signal?: AbortSignal, isInitial = false) => {
     try {
-      const [subjectsData, resultsData, activeData] = await Promise.all([
+      const [subjectsData, resultsData, activeData, telemetryData] = await Promise.all([
         api.getSubjects(selectedSession?.id, selectedTerm?.id),
         api.getResults(selectedSession?.id, selectedTerm?.id),
         api.getActiveExams(),
+        api.getStudentTelemetry().catch(() => null),
       ]);
 
       if (signal?.aborted) return;
-      
+
+      if (telemetryData) {
+        setTelemetry(telemetryData);
+      }
+
       const payload = activeData as ActiveExamData;
       if (payload && payload.server_time) {
         const serverMs = new Date(payload.server_time).getTime();
         timeOffsetRef.current = serverMs - Date.now();
       }
-      
+
       const now = Date.now() + timeOffsetRef.current;
-      const activeOne = subjectsData.find(s => {
+      const activeOne = subjectsData.find((s) => {
         if (!s.exam_datetime) return false;
         const start = new Date(s.exam_datetime).getTime();
         const end = start + Number(s.window_duration || 120) * 60_000;
-        const isTaken = resultsData.some(r => Number(r.subject_id) === Number(s.id));
+        const isTaken = resultsData.some((r) => Number(r.subject_id) === Number(s.id));
         return !isTaken && s.is_published === 1 && now >= start && now < end;
       });
-      
-      if (activeOne) {
-        // Exam is live and published. Auto-route the student.
+
+      if (activeOne && !navigatingRef.current) {
+        navigatingRef.current = true;
         router.replace(`/student/exam?subjectId=${activeOne.id}`);
         return;
       }
 
       setSubjects(subjectsData ?? []);
       setResults(resultsData ?? []);
-      
-      const activeDataPayload = (activeData as any)?.exams ?? activeData;
-      setActiveExams((activeDataPayload as Subject[]) ?? []);
     } catch (err: any) {
       if (signal?.aborted) return;
-      if (isInitial) setError(err.message || "Failed to load dashboard");
+      if (isInitial) setError(err.message || "Failed to load dashboard data");
     } finally {
       if (!signal?.aborted && isInitial) setLoading(false);
     }
@@ -86,277 +124,671 @@ function DashboardContent() {
     let mounted = true;
     setLoading(true);
     const abortController = new AbortController();
-    
-    fetchData(abortController.signal, true).then(() => { if (!mounted) return; });
-    const interval = setInterval(() => { fetchData(abortController.signal, false); }, 15000);
+
+    fetchData(abortController.signal, true).then(() => {
+      if (!mounted) return;
+    });
+    const interval = setInterval(() => {
+      fetchData(abortController.signal, false);
+    }, 15000);
     const clockInterval = setInterval(() => setCurrentTime(Date.now() + timeOffsetRef.current), 1000);
-    
-    return () => { 
-      mounted = false; 
+
+    return () => {
+      mounted = false;
       abortController.abort();
-      clearInterval(interval); 
-      clearInterval(clockInterval); 
+      clearInterval(interval);
+      clearInterval(clockInterval);
     };
   }, [selectedSession?.id, selectedTerm?.id]);
 
-  const takenIds  = useMemo(() => new Set(results.map((r) => Number(r.subject_id))), [results]);
-  const activeIds = useMemo(() => new Set(activeExams.map((e: any) => Number(e.subject_id || e.id))), [activeExams]);
-
-  const stats = useMemo(() => {
-    const taken = results.filter((r) => r.status === "completed");
-    const avg = taken.length === 0 ? 0 : Math.round(
-      taken.reduce((acc, curr) => {
-        const total = Number(curr.total_score ?? 0);
-        if (!total) return acc;
-        return acc + (Number(curr.score ?? 0) / total) * 100;
-      }, 0) / taken.length,
-    );
-    const available = subjects.filter(s => !takenIds.has(Number(s.id))).length;
-    return { available, examsTaken: taken.length, avgScore: avg };
-  }, [subjects, results, takenIds]);
+  const takenIds = useMemo(() => new Set(results.map((r) => Number(r.subject_id))), [results]);
 
   const firstName = user?.name?.split(" ")[0] ?? "Student";
 
-  const [retaking, setRetaking] = useState<number | null>(null);
-
-  const handleRetake = async (examId: number, subjectId: number) => {
-    if (!confirm("Are you sure you want to retake this exam? Your previous attempt will be overwritten and your score will be reset.")) return;
-    setRetaking(examId);
+  const confirmRetake = async () => {
+    if (!retakeTarget) return;
+    setRetaking(retakeTarget.examId);
+    setRetakeTarget(null);
     try {
-      await api.retakeExam(examId);
-      localStorage.removeItem(`exam_answers_${examId}`);
-      router.push(`/student/exam?subjectId=${subjectId}`);
+      await api.retakeExam(retakeTarget.examId);
+      localStorage.removeItem(`exam_answers_${retakeTarget.examId}`);
+      router.push(`/student/exam?subjectId=${retakeTarget.subjectId}`);
     } catch (err: any) {
-      alert(err.message || "Failed to retake exam.");
+      showToast(err.message || "Failed to retake exam.", "error");
       setRetaking(null);
     }
   };
 
-  // Auto-route instantly when the local clock hits the start time
-  useEffect(() => {
-    const activeOne = subjects.find(s => {
-      if (!s.exam_datetime) return false;
+  // Group exams by status
+  const { liveExams, upcomingExams, completedExams } = useMemo(() => {
+    const now = currentTime;
+    const live: Subject[] = [];
+    const upcoming: Subject[] = [];
+    const completed: Subject[] = [];
+
+    for (const s of subjects) {
+      const isTaken = takenIds.has(Number(s.id));
+      if (isTaken) {
+        completed.push(s);
+        continue;
+      }
+      if (Number(s.is_published) !== 1) continue;
+
+      if (!s.exam_datetime) {
+        live.push(s);
+        continue;
+      }
+
       const start = new Date(s.exam_datetime).getTime();
       const end = start + Number(s.window_duration || 120) * 60_000;
-      return !takenIds.has(Number(s.id)) && s.is_published === 1 && currentTime >= start && currentTime < end;
-    });
-    if (activeOne) {
-      router.replace(`/student/exam?subjectId=${activeOne.id}`);
-    }
-  }, [currentTime, subjects, takenIds, router]);
 
-  if (loading) return (
-    <div>
-      <Skeleton height={130} borderRadius="var(--radius-xl)" className="animate-enter" style={{ marginBottom: "2rem" }} />
-      <div className={styles.statsRow}>
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} height={96} borderRadius="var(--radius-lg)" className="animate-enter" style={{ animationDelay: `${i * 50}ms` }} />
-        ))}
-      </div>
-      <div className={styles.grid}>
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} height={220} borderRadius="var(--radius-xl)" className="animate-enter" style={{ animationDelay: `${i * 50 + 150}ms` }} />
-        ))}
-      </div>
-    </div>
-  );
-  if (error) return <p className={styles.error}>{error}</p>;
+      if (now >= start && now <= end) {
+        live.push(s);
+      } else if (now < start) {
+        upcoming.push(s);
+      } else {
+        completed.push(s);
+      }
+    }
+    return { liveExams: live, upcomingExams: upcoming, completedExams: completed };
+  }, [subjects, takenIds, currentTime]);
+
+  const filteredSubjects = useMemo(() => {
+    if (selectedTab === "live") return liveExams;
+    if (selectedTab === "upcoming") return upcomingExams;
+    if (selectedTab === "completed") return completedExams;
+    return subjects;
+  }, [selectedTab, subjects, liveExams, upcomingExams, completedExams]);
+
+  const recentSubmissions = useMemo(() => {
+    return results
+      .filter((r) => r.status === "completed")
+      .slice(-3)
+      .reverse();
+  }, [results]);
+
+  const dailyGoal = telemetry?.dailyGoal ?? 10;
+  const todayQuestions = telemetry?.todayQuestions ?? 0;
+  const practicePercent = telemetry?.practicePercent ?? (dailyGoal > 0 ? Math.min(Math.round((todayQuestions / dailyGoal) * 100), 100) : 0);
+
+  const tabs: Array<{ id: "all" | "live" | "upcoming" | "completed"; label: string }> = [
+    { id: "all", label: "All" },
+    { id: "live", label: "Live" },
+    { id: "upcoming", label: "Upcoming" },
+    { id: "completed", label: "Completed" },
+  ];
 
   return (
-    <div>
-      {/* Welcome Banner */}
-      <div className={`${styles.welcomeBanner} animate-enter`}>
-        <div className={styles.welcomeText}>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-700 text-xs font-bold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
-            {currentTermName} · {currentSessionName} Academic Session
-          </div>
-          <h1 className={styles.greeting}>
-            Welcome to {currentTermName} <span className="text-teal-600">({currentSessionName})</span>
+    <motion.div
+      className={styles.container}
+      initial="hidden"
+      animate="visible"
+      variants={containerVariants}
+    >
+      <ConfirmDialog
+        open={!!retakeTarget}
+        onClose={() => setRetakeTarget(null)}
+        onConfirm={confirmRetake}
+        title="Retake Examination"
+        message="Your previous score will be archived and a new sitting attempt will be initialized."
+        confirmLabel="Retake Sitting"
+        loading={retaking !== null}
+      />
+
+      {/* ── 1. Hero Welcome & Quick Stats Section ── */}
+      <motion.section className={styles.heroSection} variants={itemVariants}>
+        <div className={styles.heroLeft}>
+          <h1 className={styles.heroTitle}>
+            Welcome back, <span className={styles.nameHighlight}>{firstName}</span>{" "}
+            <span className={styles.waveEmoji}>👋</span>
           </h1>
-          <p className={styles.sub}>
-            Hello, {firstName}! 👋 · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })} · {stats.available} pending · {stats.examsTaken} completed
+          <p className={styles.heroSubtitle}>
+            You&#39;re improving! Keep up the great work.
           </p>
         </div>
-      </div>
 
-      {/* Stats Row */}
-      <div className={styles.statsRow}>
-        <div className={`${styles.statCard} animate-enter`} style={{ animationDelay: "50ms", "--accent": "var(--color-primary)" } as React.CSSProperties}>
-          <div className={styles.statIconBox} style={{ background: "rgba(20, 184, 166, 0.12)", color: "var(--color-primary)" }}>
-            <BookIcon width="22" height="22" />
-          </div>
-          <div className={styles.statData}>
-            <div className={styles.statValue}>{stats.available}</div>
-            <div className={styles.statLabel}>Available</div>
-          </div>
-        </div>
-      </div>
+        {/* Triple Stat Cards: Day Streak, Today's Goal & Classmates Cohort */}
+        <div className={styles.telemetryPillGroup}>
+          {/* Flame Day Streak Card */}
+          <motion.div
+            className={styles.telemetryBadge}
+            whileHover={{ y: -2 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className={styles.streakIconBox}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="#EA580C" stroke="#EA580C" strokeWidth="0.5">
+                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
+              </svg>
+            </div>
+            <div className={styles.telemetryBadgeContent}>
+              <span className={styles.telemetryNumber}>{telemetry?.streak ?? 0}</span>
+              <span className={styles.telemetryText}>Day Streak</span>
+              <span className={styles.telemetryCaption}>
+                {telemetry?.bestStreak ? `Best: ${telemetry.bestStreak} ${telemetry.bestStreak === 1 ? "day" : "days"}` : "Start streak today!"}
+              </span>
+            </div>
+          </motion.div>
 
-      {/* Exam Categories */}
-      {subjects.length === 0 ? (
-        <div className="animate-enter" style={{ animationDelay: "200ms" }}>
-          <EmptyState
-            title="No Exams Available"
-            description="No exams have been published for your term yet. Check back later."
-            icon={<EmptyBoxIcon width="32" height="32" />}
-          />
-        </div>
-      ) : (
-        <div className={styles.categories}>
-          {["active", "upcoming"].map((category) => {
-            const categorySubjects = subjects.filter((s) => {
-              const isTaken = takenIds.has(Number(s.id));
-              if (!s.exam_datetime) {
-                if (category === "active") return !isTaken && s.is_published === 1;
-                return false;
-              }
-              const examDate = new Date(s.exam_datetime);
-              const now = currentTime;
-              const start = examDate.getTime();
-              const end = start + Number(s.window_duration || 120) * 60_000;
-              
-              if (category === "active") return !isTaken && s.is_published === 1 && now >= start && now < end;
-              if (category === "upcoming") return !isTaken && s.is_published === 1 && now < start;
-              if (category === "past") return isTaken || now >= end;
-              return false;
-            });
-
-            if (categorySubjects.length === 0) return null;
-
-            return (
-              <div key={category} className={styles.categorySection} style={{ marginBottom: "3rem" }}>
-                <div className={styles.sectionHeader}>
-                  <span className={styles.sectionLabel} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    {category === "active" ? (
-                      <><PlayIcon width="16" height="16" style={{ color: "var(--color-primary)" }} /> Open Now</>
-                    ) : (
-                      <><CalendarIcon width="16" height="16" style={{ color: "var(--color-info)" }} /> Upcoming Timetable</>
-                    )}
-                  </span>
+          {/* Goal Card with Animated Progress Bar */}
+          <motion.div
+            className={styles.telemetryBadge}
+            whileHover={{ y: -2 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className={styles.goalIconBox}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#165AF6" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <circle cx="12" cy="12" r="6"/>
+                <circle cx="12" cy="12" r="2"/>
+              </svg>
+            </div>
+            <div className={styles.telemetryBadgeContent}>
+              <span className={styles.telemetryNumber}>{telemetry?.todayQuestions ?? 0}/{telemetry?.dailyGoal ?? 10}</span>
+              <span className={styles.telemetryText}>Today&#39;s Goal</span>
+              <div className={styles.goalProgressWrap}>
+                <div className={styles.goalProgressBarTrack}>
+                  <motion.div
+                    className={styles.goalProgressBarFill}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${telemetry?.practicePercent ?? 0}%` }}
+                    transition={{ duration: 0.6, ease: "easeOut" }}
+                  />
                 </div>
-
-                <div className={styles.grid}>
-                  {categorySubjects.map((s, i: number) => {
-                    const isUnscheduled = !s.exam_datetime;
-                    const examDate   = isUnscheduled ? new Date() : new Date(s.exam_datetime!);
-                    const now        = currentTime;
-                    const start      = isUnscheduled ? 0 : examDate.getTime();
-                    const end        = isUnscheduled ? Infinity : start + Number(s.window_duration || 120) * 60_000;
-                    const isTaken    = takenIds.has(Number(s.id));
-                    const isActive   = activeIds.has(Number(s.id));
-                    const isOpen     = isUnscheduled ? true : (now >= start && now < end);
-                    const isClosed   = isUnscheduled ? false : (now >= end);
-                    const isUpcoming = isUnscheduled ? false : (now < start);
-                    
-                    let countdownText = "";
-                    if (isUpcoming) {
-                      const diffSeconds = Math.floor((start - now) / 1000);
-                      const d = Math.floor(diffSeconds / 86400);
-                      const h = Math.floor((diffSeconds % 86400) / 3600);
-                      const m = Math.floor((diffSeconds % 3600) / 60).toString().padStart(2, "0");
-                      const s = (diffSeconds % 60).toString().padStart(2, "0");
-                      if (d > 0) countdownText = `${d}d ${h}h ${m}m ${s}s`;
-                      else countdownText = `${h}h ${m}m ${s}s`;
-                    }
-
-                    return (
-                      <div
-                        key={s.id}
-                        className={`${styles.card} ${(isClosed || isTaken) ? styles.cardDim : ""} ${isTaken ? styles.taken : isOpen ? styles.open : isUpcoming ? styles.upcoming : styles.closed} animate-enter`}
-                        style={{ animationDelay: `${200 + i * 50}ms` }}
-                      >
-                        <div className={styles.cardContent}>
-                          <div className={styles.cardTop}>
-                            <div className={styles.subjectIconBox}>
-                              <SubjectIcon width="16" height="16" />
-                            </div>
-                            <div style={{ display: "flex", gap: "0.4rem" }}>
-                              {isTaken    && <span className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}><CheckCircleIcon width="12" height="12" /> Done</span>}
-                              {!isTaken && isOpen     && <span className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}><PlayIcon width="12" height="12" /> Open</span>}
-                              {!isTaken && isClosed   && <span className="badge badge-muted">Closed</span>}
-                              {!isTaken && isUpcoming && <span className="badge badge-info">Upcoming</span>}
-                            </div>
-                          </div>
-
-                          <h3 className={styles.subjectName}>{s.name}</h3>
-                          <code className={styles.code}>{s.code}</code>
-
-                          <div className={styles.meta}>
-                            {isUnscheduled ? (
-                              <div className={styles.metaRow} style={{ color: "var(--color-primary)", fontWeight: 600 }}>
-                                <CalendarIcon width="12" height="12" />
-                                Available Anytime
-                              </div>
-                            ) : (
-                              <div className={styles.metaRow}>
-                                <CalendarIcon width="12" height="12" />
-                                {examDate.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                              </div>
-                            )}
-                            <div className={styles.metaRow}>
-                              <ClockIcon width="12" height="12" />
-                              {s.duration || 0} minutes
-                            </div>
-                            {isUpcoming && countdownText && (
-                              <div className={styles.metaRow} style={{ color: "var(--color-primary)", fontWeight: 700, marginTop: "0.25rem" }}>
-                                <ClockIcon width="12" height="12" />
-                                Starts in: {countdownText}
-                              </div>
-                            )}
-                            {(s.retake_count || 0) > 0 && (
-                              <div className={styles.metaRow} style={{ color: "var(--color-warning)", fontWeight: 600 }}>
-                                <CheckCircleIcon width="12" height="12" />
-                                Retaken {s.retake_count || 0} time{(s.retake_count || 0) !== 1 ? "s" : ""}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className={styles.cardAction}>
-                          {isTaken ? (
-                            s.can_retake === 1 ? (
-                              <button 
-                                className={`btn btn-primary ${styles.fullBtn}`} 
-                                onClick={() => handleRetake(s.id, s.id)}
-                                disabled={retaking === s.exam_id}
-                                style={{ transform: "scale(1.02)", boxShadow: "0 4px 12px rgba(var(--color-primary-rgb), 0.3)" }}
-                              >
-                                {retaking === s.exam_id ? "Opening..." : "Retake Exam"}
-                              </button>
-                            ) : (
-                              <button className={`btn btn-ghost ${styles.fullBtn}`} disabled>Exam Completed</button>
-                            )
-                          ) : isActive ? (
-                            <Link href={`/student/exam?subjectId=${s.id}`} className={`btn ${styles.resumeBtn} ${styles.fullBtn}`}>
-                              <PlayIcon width="13" height="13" /> Resume
-                            </Link>
-                          ) : isOpen ? (
-                            <Link href={`/student/exam?subjectId=${s.id}`} className={`btn btn-primary ${styles.fullBtn}`} style={{ transform: "scale(1.02)", boxShadow: "0 4px 12px rgba(var(--color-primary-rgb), 0.3)" }}>
-                              Start Exam →
-                            </Link>
-                          ) : (
-                            <button className={`btn btn-ghost ${styles.fullBtn}`} disabled>
-                              {isClosed ? "Exam Closed" : "Not Open Yet"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <span className={styles.goalProgressPct}>{telemetry?.practicePercent ?? 0}%</span>
               </div>
-            );
-          })}
+            </div>
+          </motion.div>
+
+          {/* Classmates & Cohort Size Card */}
+          <motion.div
+            className={styles.telemetryBadge}
+            whileHover={{ y: -2 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className={styles.cohortIconBox}>
+              <GraduationCapIcon width="20" height="20" />
+            </div>
+            <div className={styles.telemetryBadgeContent}>
+              <span className={styles.telemetryNumber}>{telemetry?.cohortTotal ?? 1}</span>
+              <span className={styles.telemetryText}>Classmates</span>
+              <span className={styles.telemetryCaption}>
+                {user?.grade || telemetry?.cohortName ? `${user?.grade || telemetry?.cohortName} • Rank #${telemetry?.rank ?? 1}` : `Rank #${telemetry?.rank ?? 1} in cohort`}
+              </span>
+            </div>
+          </motion.div>
+        </div>
+      </motion.section>
+
+      {error && (
+        <div style={{ padding: "0.85rem 1.25rem", background: "#FEF2F2", color: "#DC2626", borderRadius: "12px", border: "1px solid #FEE2E2", fontSize: "0.875rem" }}>
+          <span>{error}</span>
         </div>
       )}
 
-      {/* PWA Download Widget */}
-      <div className={`${styles.statsRow} animate-enter`} style={{ animationDelay: "100ms", marginTop: "1.5rem" }}>
-        <DownloadAppWidget />
-      </div>
-    </div>
+      {/* ── 2. Enrolled Academic Curriculum Track Container ── */}
+      <motion.section className={styles.curriculumContainer} id="curriculum-track" variants={itemVariants}>
+        <div className={styles.curriculumHeader}>
+          <div className={styles.curriculumTitleGroup}>
+            <div className={styles.trackIconBadge}>
+              <GraduationCapIcon width="22" height="22" />
+            </div>
+            <div className={styles.trackDetails}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span className={styles.curriculumEyebrow}>Academic Track</span>
+                {telemetry?.rank && (
+                  <span style={{ fontSize: "0.6875rem", fontWeight: 700, color: "#165AF6", background: "#EFF4FF", border: "1px solid #DBEAFE", borderRadius: "6px", padding: "0.1rem 0.45rem" }}>
+                    Rank #{telemetry.rank} of {telemetry.cohortTotal}
+                  </span>
+                )}
+              </div>
+              <h2 className={styles.curriculumClassTitle}>
+                {user?.grade || "JSS 3"}
+              </h2>
+            </div>
+          </div>
+
+          {/* Filter Tab Chips with Spring Underline Indicator */}
+          <div className={styles.tabList}>
+            {tabs.map((tab) => {
+              const isActive = selectedTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setSelectedTab(tab.id)}
+                  className={`${styles.tabBtn} ${isActive ? styles.tabBtnActive : ""}`}
+                >
+                  <span>{tab.label}</span>
+                  {isActive && (
+                    <motion.div
+                      layoutId="tabActiveUnderline"
+                      className={styles.tabActiveUnderline}
+                      transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {loading ? (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.75rem", padding: "3rem 1rem", color: "#64748B", fontSize: "0.875rem" }}>
+            <div className="spinner" style={{ width: 22, height: 22, borderColor: "#E2E8F0", borderTopColor: "#165AF6" }} />
+            <span>Loading enrolled subjects…</span>
+          </div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {filteredSubjects.length === 0 ? (
+              /* 3D-Styled Illustrated Empty State with Subtle Floating Motion */
+              <motion.div
+                key="empty"
+                className={styles.emptySubjectsBox}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.25 }}
+              >
+                <motion.div
+                  className={styles.emptyIllustrationWrapper}
+                  animate={{ y: [0, -5, 0] }}
+                  transition={{ repeat: Infinity, duration: 3.5, ease: "easeInOut" }}
+                >
+                  <svg width="120" height="100" viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    {/* Ambient Soft Shadow */}
+                    <ellipse cx="60" cy="85" rx="45" ry="8" fill="#E2E8F0" opacity="0.6" />
+                    {/* 3D Base Book */}
+                    <path d="M25 65L60 78L95 65L95 55L60 68L25 55Z" fill="#CBD5E1" />
+                    <path d="M25 55L60 68L95 55L95 45L60 58L25 45Z" fill="#E2E8F0" />
+                    {/* Top Book Cover (Royal Blue) */}
+                    <path d="M25 45L60 58L95 45L60 32Z" fill="#165AF6" />
+                    <path d="M25 45L60 58L60 68L25 55Z" fill="#1248C8" />
+                    {/* Open Book Spine Overlay */}
+                    <path d="M60 32L95 45L95 55L60 42Z" fill="#3B82F6" />
+                    {/* Bookmark Ribbon */}
+                    <path d="M55 35L60 37L65 35L65 48L60 45L55 48Z" fill="#F59E0B" />
+                    {/* Floating Micro Sparkles */}
+                    <circle cx="20" cy="30" r="2.5" fill="#38BDF8" />
+                    <circle cx="100" cy="35" r="2" fill="#FCD34D" />
+                    <circle cx="85" cy="20" r="3" fill="#10B981" />
+                    <path d="M32 20L34 24L38 26L34 28L32 32L30 28L26 26L30 24Z" fill="#818CF8" opacity="0.8" />
+                  </svg>
+                </motion.div>
+                <div className={styles.emptyTextCol}>
+                  <h3 className={styles.emptyTitle}>No subjects found in this tab</h3>
+                  <p className={styles.emptySubtitle}>
+                    Switch filter tabs or check with your class teacher for schedule updates.
+                  </p>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="grid"
+                className={styles.subjectGrid}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                {filteredSubjects.map((s, idx) => {
+                  const isTaken = takenIds.has(Number(s.id));
+                  const isLive = liveExams.some((l) => l.id === s.id);
+                  const isCore = idx === 0 || s.code?.toUpperCase().includes("ENG") || s.code?.toUpperCase().includes("MTH");
+
+                  return (
+                    <motion.div
+                      key={s.id}
+                      className={`${styles.subjectCard} ${isLive ? styles.subjectCardLive : ""}`}
+                      whileHover={{ y: -3 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <div className={styles.subjectCardHeader}>
+                        <div className={styles.subjectIconBox}>
+                          <BookIcon width="16" height="16" />
+                        </div>
+                        {isCore && (
+                          <span className={styles.coreBadge}>
+                            CORE
+                          </span>
+                        )}
+                      </div>
+
+                      <h3 className={styles.subjectCardName}>{s.name}</h3>
+
+                      <div className={styles.subjectCardFooter}>
+                        {isTaken ? (
+                          <Link href="/student/results" className={styles.subjectBtnResult}>
+                            <span>View Result</span>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </Link>
+                        ) : isLive ? (
+                          <Link href={`/student/exam?subjectId=${s.id}`} className={styles.subjectBtnLive}>
+                            <span>Enter Exam Hall →</span>
+                          </Link>
+                        ) : (
+                          <Link href={`/student/practice?subjectId=${s.id}`} className={styles.subjectBtnPractice}>
+                            <span>Practice →</span>
+                          </Link>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
+      </motion.section>
+
+      {/* ── 3. 5-Tile Quick Action Matrix (Quick Action Cards) ── */}
+      <motion.section className={styles.actionGrid} variants={itemVariants}>
+        {/* 1. Start Mock Exam (Blue #165AF6) */}
+        <Link href="/student/practice" className={styles.actionTile}>
+          <div className={styles.actionTileHeader}>
+            <div
+              className={styles.actionTileIconBox}
+              style={{ background: "#EFF4FF", color: "#165AF6", border: "1px solid #DBEAFE" }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+            </div>
+            <span className={styles.sparkleDot} style={{ color: "#165AF6" }}>✦</span>
+          </div>
+          <div className={styles.actionTileBody}>
+            <span className={styles.actionTileTitle}>Start Mock Exam</span>
+            <span className={styles.actionTileSubtitle}>Attempt a full mock exam now</span>
+          </div>
+          <div
+            className={styles.actionTileArrowCircle}
+            style={{ background: "#EFF4FF", color: "#165AF6" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </div>
+        </Link>
+
+        {/* 2. Practice Mode (Green #10B981) */}
+        <Link href="/student/practice" className={styles.actionTile}>
+          <div className={styles.actionTileHeader}>
+            <div
+              className={styles.actionTileIconBox}
+              style={{ background: "#ECFDF5", color: "#10B981", border: "1px solid #A7F3D0" }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+              </svg>
+            </div>
+            <span className={styles.sparkleDot} style={{ color: "#10B981" }}>✦</span>
+          </div>
+          <div className={styles.actionTileBody}>
+            <span className={styles.actionTileTitle}>Practice Mode</span>
+            <span className={styles.actionTileSubtitle}>Practice questions by subject</span>
+          </div>
+          <div
+            className={styles.actionTileArrowCircle}
+            style={{ background: "#ECFDF5", color: "#10B981" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </div>
+        </Link>
+
+        {/* 3. Offline Hub (Amber #F59E0B) */}
+        <Link href="/student/offline-assignments" className={styles.actionTile}>
+          <div className={styles.actionTileHeader}>
+            <div
+              className={styles.actionTileIconBox}
+              style={{ background: "#FEF3C7", color: "#F59E0B", border: "1px solid #FDE68A" }}
+            >
+              <DownloadIcon width="20" height="20" />
+            </div>
+            <span className={styles.sparkleDot} style={{ color: "#F59E0B" }}>✦</span>
+          </div>
+          <div className={styles.actionTileBody}>
+            <span className={styles.actionTileTitle}>Offline Hub</span>
+            <span className={styles.actionTileSubtitle}>Access downloaded content</span>
+          </div>
+          <div
+            className={styles.actionTileArrowCircle}
+            style={{ background: "#FEF3C7", color: "#F59E0B" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </div>
+        </Link>
+
+        {/* 4. Exam History (Red #EF4444) */}
+        <Link href="/student/results" className={styles.actionTile}>
+          <div className={styles.actionTileHeader}>
+            <div
+              className={styles.actionTileIconBox}
+              style={{ background: "#FEE2E2", color: "#EF4444", border: "1px solid #FECACA" }}
+            >
+              <ClockIcon width="20" height="20" />
+            </div>
+            <span className={styles.sparkleDot} style={{ color: "#EF4444" }}>✦</span>
+          </div>
+          <div className={styles.actionTileBody}>
+            <span className={styles.actionTileTitle}>Exam History</span>
+            <span className={styles.actionTileSubtitle}>View your past exams</span>
+          </div>
+          <div
+            className={styles.actionTileArrowCircle}
+            style={{ background: "#FEE2E2", color: "#EF4444" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </div>
+        </Link>
+
+        {/* 5. Candidate ID (Purple #8B5CF6) */}
+        <Link href="/student/settings" className={styles.actionTile}>
+          <div className={styles.actionTileHeader}>
+            <div
+              className={styles.actionTileIconBox}
+              style={{ background: "#EDE9FE", color: "#8B5CF6", border: "1px solid #DDD6FE" }}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <circle cx="9" cy="10" r="2" />
+                <line x1="15" y1="8" x2="17" y2="8" />
+                <line x1="15" y1="12" x2="17" y2="12" />
+                <line x1="7" y1="16" x2="17" y2="16" />
+              </svg>
+            </div>
+            <span className={styles.sparkleDot} style={{ color: "#8B5CF6" }}>✦</span>
+          </div>
+          <div className={styles.actionTileBody}>
+            <span className={styles.actionTileTitle}>Candidate ID</span>
+            <span className={styles.actionTileSubtitle}>View &amp; manage your profile</span>
+          </div>
+          <div
+            className={styles.actionTileArrowCircle}
+            style={{ background: "#EDE9FE", color: "#8B5CF6" }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
+            </svg>
+          </div>
+        </Link>
+      </motion.section>
+
+      {/* ── 4. Two-Column Activity & Schedule Section ── */}
+      <motion.section className={styles.feedGrid} variants={itemVariants}>
+        {/* Left Column: Upcoming Examination Schedule */}
+        <div className={styles.feedCard}>
+          <div className={styles.feedHeader}>
+            <div className={styles.feedTitleGroup}>
+              <CalendarIcon width="18" height="18" style={{ color: "#165AF6" }} />
+              <h3 className={styles.feedHeading}>Upcoming Examination Schedule</h3>
+            </div>
+            <Link href="/student/practice" className={styles.feedViewAll}>
+              View All
+            </Link>
+          </div>
+
+          <div className={styles.feedBody}>
+            {upcomingExams.length === 0 && liveExams.length === 0 ? (
+              <div className={styles.emptyFeed}>
+                <ClockIcon width="24" height="24" style={{ color: "#94A3B8" }} />
+                <span>No upcoming examinations currently scheduled.</span>
+              </div>
+            ) : (
+              <>
+                {/* Live Exam Item (if active) */}
+                {liveExams.slice(0, 1).map((item) => {
+                  const d = item.exam_datetime ? new Date(item.exam_datetime) : new Date();
+                  const monthName = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+                  const dayNumber = d.getDate();
+                  const weekdayName = d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+
+                  return (
+                    <div key={item.id} className={styles.scheduleItem}>
+                      <div className={styles.scheduleLeft}>
+                        <div className={styles.dateBadge}>
+                          <span className={styles.dateMonth}>{monthName}</span>
+                          <span className={styles.dateDay}>{dayNumber}</span>
+                          <span className={styles.dateWeekday}>{weekdayName}</span>
+                        </div>
+                        <div className={styles.scheduleInfo}>
+                          <div className={styles.scheduleTitleRow}>
+                            <span className={styles.scheduleTitle}>{item.name}</span>
+                            <span className={styles.statusPillLive}>• Live</span>
+                          </div>
+                          <span className={styles.scheduleMeta}>
+                            Active Now · {item.window_duration || 120} mins
+                          </span>
+                        </div>
+                      </div>
+                      <Link href={`/student/exam?subjectId=${item.id}`} className={styles.scheduleBtnPrimary}>
+                        Start Exam
+                      </Link>
+                    </div>
+                  );
+                })}
+
+                {/* Upcoming Exam Items */}
+                {upcomingExams.slice(0, liveExams.length > 0 ? 1 : 2).map((item) => {
+                  const d = item.exam_datetime ? new Date(item.exam_datetime) : new Date(Date.now() + 86400000);
+                  const monthName = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
+                  const dayNumber = d.getDate();
+                  const weekdayName = d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase();
+
+                  return (
+                    <div key={item.id} className={styles.scheduleItem}>
+                      <div className={styles.scheduleLeft}>
+                        <div className={styles.dateBadge}>
+                          <span className={styles.dateMonth}>{monthName}</span>
+                          <span className={styles.dateDay}>{dayNumber}</span>
+                          <span className={styles.dateWeekday}>{weekdayName}</span>
+                        </div>
+                        <div className={styles.scheduleInfo}>
+                          <div className={styles.scheduleTitleRow}>
+                            <span className={styles.scheduleTitle}>{item.name}</span>
+                            <span className={styles.statusPillUpcoming}>• Upcoming</span>
+                          </div>
+                          <span className={styles.scheduleMeta}>
+                            {d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · {item.window_duration || 120} mins
+                          </span>
+                        </div>
+                      </div>
+                      <Link href={`/student/practice?subjectId=${item.id}`} className={styles.scheduleBtnSecondary}>
+                        View Details
+                      </Link>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Recent Submissions */}
+        <div className={styles.feedCard}>
+          <div className={styles.feedHeader}>
+            <div className={styles.feedTitleGroup}>
+              <CheckCircleIcon width="18" height="18" style={{ color: "#059669" }} />
+              <h3 className={styles.feedHeading}>Recent Submissions</h3>
+            </div>
+            {recentSubmissions.length > 0 && (
+              <Link href="/student/results" className={styles.feedViewAll}>
+                View All
+              </Link>
+            )}
+          </div>
+
+          <div className={styles.feedBody}>
+            {recentSubmissions.length === 0 ? (
+              <div className={styles.emptyFeed}>
+                <BookIcon width="24" height="24" style={{ color: "#94A3B8" }} />
+                <span>No examination submissions recorded yet.</span>
+              </div>
+            ) : (
+              recentSubmissions.map((res, index) => {
+                const d = res.end_time ? new Date(res.end_time) : new Date();
+                const formattedDate = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                const totalScore = Number(res.total_score || 100);
+                const score = Number(res.score || 0);
+                const scorePct = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
+
+                // Alternate subtle document icon backgrounds
+                const iconColors = [
+                  { bg: "#FEF3C7", color: "#F59E0B" },
+                  { bg: "#EDE9FE", color: "#8B5CF6" },
+                  { bg: "#ECFDF5", color: "#10B981" },
+                ];
+                const activeColor = iconColors[index % iconColors.length];
+
+                return (
+                  <div key={res.id} className={styles.submissionItem}>
+                    <div className={styles.submissionLeft}>
+                      <div
+                        className={styles.docIconBox}
+                        style={{ background: activeColor.bg, color: activeColor.color }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                          <line x1="16" y1="13" x2="8" y2="13" />
+                          <line x1="16" y1="17" x2="8" y2="17" />
+                        </svg>
+                      </div>
+                      <div className={styles.submissionInfo}>
+                        <span className={styles.submissionSubject}>
+                          {res.subject_name || "Examination Paper"}
+                        </span>
+                        <span className={styles.submissionDate}>
+                          Submitted on {formattedDate}
+                        </span>
+                      </div>
+                    </div>
+                    <div className={styles.scoreChipCol}>
+                      <span className={styles.scorePercentText}>{scorePct}%</span>
+                      <span className={styles.scoreLabelText}>Score</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </motion.section>
+    </motion.div>
   );
 }
-
-

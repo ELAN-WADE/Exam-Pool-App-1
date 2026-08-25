@@ -154,7 +154,7 @@ export function useCalculator(initialMode: CalculatorMode = 'standard', onClose:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'CALC_OPEN' })
-    }).catch(console.error);
+    }).catch(() => {});
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);

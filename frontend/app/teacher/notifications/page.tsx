@@ -1,5 +1,12 @@
+"use client";
+
+import { RequireRole } from "../../../components/auth/RequireRole";
 import { NotificationsPage } from "../../../components/ui/NotificationsPage";
 
 export default function TeacherNotificationsRoute() {
-  return <NotificationsPage />;
+  return (
+    <RequireRole role="teacher">
+      <NotificationsPage />
+    </RequireRole>
+  );
 }

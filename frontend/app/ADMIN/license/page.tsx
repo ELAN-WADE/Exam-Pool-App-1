@@ -1,9 +1,43 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
-import { api } from "../../../lib/api";
-import { CheckCircleIcon, WarningIcon, DocumentIcon } from "../../../components/icons/Icons";
+import {
+  PageHeader,
+  Badge,
+  Button,
+} from "../../../components/ui";
+import {
+  ShieldCheckIcon,
+  DocumentIcon,
+  CheckCircleIcon,
+  WarningIcon,
+  CheckIcon,
+  SchoolIcon,
+  LayersIcon,
+  ActivityIcon,
+  RefreshIcon,
+} from "../../../components/icons/Icons";
+import styles from "./page.module.css";
+
+interface MachineInfo {
+  hostname?: string;
+  platform?: string;
+  arch?: string;
+  cpu?: string;
+  memory_gb?: number;
+}
+
+interface LicensePayload {
+  sub?: string;
+  tier?: string;
+  iat?: number;
+  exp?: number;
+  max_devices?: number;
+  hw_fp?: string;
+  error?: string;
+  status?: string;
+}
 
 export default function LicensePage() {
   return (
@@ -14,39 +48,68 @@ export default function LicensePage() {
 }
 
 function LicenseDashboard() {
-  const [licenseInfo, setLicenseInfo] = useState<any>(null);
+  const [licenseInfo, setLicenseInfo] = useState<LicensePayload | null>(null);
+  const [machineInfo, setMachineInfo] = useState<MachineInfo | null>(null);
   const [fingerprint, setFingerprint] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const loadData = async () => {
+  const loadData = useCallback(async (signal?: AbortSignal, isRefresh = false) => {
     try {
-      // In a real scenario, this would call an API endpoint returning the decoded MLF and hardware fingerprint.
-      // E.g., const res = await fetch('/api/admin/license');
-      // For now, we simulate fetching the server's current state.
-      // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie auth
+      if (isRefresh) setRefreshing(true);
+      else setLoading(true);
+      setError("");
+
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/system/license`, {
         credentials: "include",
+        signal,
       });
+
+      if (signal?.aborted) return;
       if (!res.ok) {
-        throw new Error("Failed to fetch license data");
+        throw new Error("Failed to fetch license data from server");
       }
+
       const data = await res.json();
-      setLicenseInfo(data.license);
-      setFingerprint(data.hardware_fingerprint);
+      if (!signal?.aborted) {
+        setLicenseInfo(data.license || null);
+        setFingerprint(data.hardware_fingerprint || "");
+        setMachineInfo(data.machine_info || null);
+      }
     } catch (err: any) {
-      setError(err.message);
+      if (!signal?.aborted) {
+        setError(err.message || "Unable to reach server licensing subsystem");
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    const controller = new AbortController();
+    loadData(controller.signal);
+    return () => controller.abort();
+  }, [loadData]);
+
+  const handleCopyFingerprint = async () => {
+    if (!fingerprint) return;
+    try {
+      await navigator.clipboard.writeText(fingerprint);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -58,135 +121,360 @@ function LicenseDashboard() {
 
     try {
       const text = await file.text();
-      const payload = JSON.parse(text); // Expecting MLF JSON
+      let payload: any;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        throw new Error("The selected file is not a valid JSON document.");
+      }
 
-      // [SECURITY FIX VULN-13] Use credentials: "include" — HttpOnly cookie auth
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${API_BASE}/api/system/license`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || "Failed to upload license");
+        throw new Error(d.error || "Failed to verify and register Master License File");
       }
 
-      setSuccess("License file uploaded and verified successfully.");
-      await loadData();
+      const d = await res.json();
+      setSuccess(d.message || "Master License registered and cryptographically bound to hardware successfully.");
+      await loadData(undefined, true);
     } catch (err: any) {
-      setError("Invalid license file: " + err.message);
+      setError(err.message || "Failed to upload license file");
     } finally {
       setUploading(false);
     }
   };
 
-  if (loading) {
-    return <div className="spinner" style={{ margin: "3rem auto" }} />;
-  }
-
-  const isActivated = licenseInfo && licenseInfo.tier !== "core";
+  const isActivated = Boolean(licenseInfo && licenseInfo.tier && licenseInfo.tier !== "core" && !licenseInfo.error);
+  const formattedTier = licenseInfo?.tier ? licenseInfo.tier.replace(/_/g, " ").toUpperCase() : "STANDARD EVALUATION";
+  const schoolName = licenseInfo?.sub || "ExamPool Institutional Deployment";
+  const issuedDate = licenseInfo?.iat ? new Date(licenseInfo.iat * 1000).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" }) : "Active";
+  const maxDevices = licenseInfo?.max_devices ? Number(licenseInfo.max_devices) : 50;
 
   return (
-    <main style={{ padding: "2rem", maxWidth: "800px", margin: "0 auto" }}>
-      <h1 className="pageTitle" style={{ marginBottom: "2rem" }}>License Management</h1>
+    <div className={styles.container}>
+      {/* ── Page Header ── */}
+      <PageHeader
+        eyebrow="Administration"
+        title="License & Hardware Security"
+        subtitle="Cryptographic machine hardware locking and institutional software activation."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            leftIcon={<RefreshIcon width="14" height="14" />}
+            loading={refreshing}
+            onClick={() => loadData(undefined, true)}
+          >
+            Refresh Status
+          </Button>
+        }
+      />
 
+      {/* ── Toast Alerts ── */}
       {error && (
-        <div className="card" style={{ background: "var(--color-danger-glow)", borderColor: "var(--color-danger)", marginBottom: "1.5rem" }}>
-          <p style={{ color: "var(--color-danger)", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <WarningIcon width="20" height="20" />
-            {error}
-          </p>
+        <div className={`${styles.alertBanner} ${styles.alertError}`} role="alert">
+          <div className="flex items-center gap-2">
+            <WarningIcon width="18" height="18" />
+            <span>{error}</span>
+          </div>
+          <button className={styles.alertClose} onClick={() => setError("")}>
+            Dismiss
+          </button>
         </div>
       )}
 
       {success && (
-        <div className="card" style={{ background: "var(--color-success-glow)", borderColor: "var(--color-success)", marginBottom: "1.5rem" }}>
-          <p style={{ color: "var(--color-success)", display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <CheckCircleIcon width="20" height="20" />
-            {success}
-          </p>
+        <div className={`${styles.alertBanner} ${styles.alertSuccess}`} role="status">
+          <div className="flex items-center gap-2">
+            <CheckCircleIcon width="18" height="18" />
+            <span>{success}</span>
+          </div>
+          <button className={styles.alertClose} onClick={() => setSuccess("")}>
+            Dismiss
+          </button>
         </div>
       )}
 
-      {/* Hardware Fingerprint Section */}
-      <div className="card" style={{ marginBottom: "2rem" }}>
-        <h3 style={{ fontSize: "1.1rem", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <DocumentIcon width="20" height="20" /> Server Identity
-        </h3>
-        <p style={{ color: "var(--color-muted)", fontSize: "0.9rem", marginBottom: "1rem" }}>
-          This server's unique hardware fingerprint. You must provide this code when requesting an offline license from ExamPool HQ.
-        </p>
-        <div style={{ background: "var(--color-surface-2)", padding: "1rem", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <code style={{ fontSize: "1.2rem", fontWeight: "bold", color: "var(--color-primary)" }}>{fingerprint || "UNKNOWN"}</code>
-          <button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(fingerprint)}>
-            Copy
-          </button>
+      {loading ? (
+        <div className={styles.loadingContainer}>
+          <div className="w-8 h-8 border-2 border-slate-700 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-medium text-slate-500">Verifying cryptographic machine hardware identity...</span>
         </div>
-      </div>
+      ) : (
+        <>
+          {/* ── Activation Hero Card ── */}
+          <div className={`${styles.heroCard} ${isActivated ? styles.heroActivated : styles.heroUnlicensed}`}>
+            <div className={styles.heroTop}>
+              <div className={styles.heroHeaderLeft}>
+                <div className={`${styles.heroIconBadge} ${isActivated ? styles.heroIconActive : styles.heroIconNeutral}`} style={{ color: isActivated ? "#10B981" : "#64748B" }}>
+                  <ShieldCheckIcon width="24" height="24" />
+                </div>
+                <div className={styles.heroTitleGroup}>
+                  <span className={styles.heroEyebrow}>Software License Tier</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <h2 className={styles.heroTitle}>{formattedTier}</h2>
+                    {isActivated ? (
+                      <Badge variant="success" size="sm" dot>
+                        Machine Bound
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        Evaluation Mode
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </div>
 
-      {/* Active License Status */}
-      <div className="card" style={{ marginBottom: "2rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem" }}>
-          <div>
-            <h3 style={{ fontSize: "1.1rem", marginBottom: "0.25rem" }}>Current License Status</h3>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.9rem" }}>Status of the Master License File (MLF)</p>
+              <div>
+                <Badge variant={isActivated ? "primary" : "neutral"} size="md">
+                  {isActivated ? "Verified Installation" : "Local Single Node"}
+                </Badge>
+              </div>
+            </div>
+
+            {/* License Metadata Grid */}
+            <div className={styles.metaGrid}>
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>Licensed Entity</span>
+                <span className={styles.metaValue}>{schoolName}</span>
+              </div>
+
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>Activation Tier</span>
+                <span className={`${styles.metaValue} ${styles.metaMono}`}>{formattedTier}</span>
+              </div>
+
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>License Status</span>
+                <span className={styles.metaValue}>{licenseInfo?.error ? "Signature Mismatch" : "Active & Verified"}</span>
+              </div>
+
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>Network Client Capacity</span>
+                <span className={`${styles.metaValue} ${styles.metaMono}`}>
+                  {maxDevices} Concurrent Devices
+                </span>
+              </div>
+            </div>
           </div>
-          <span className={`badge ${isActivated ? "badge-success" : "badge-warning"}`} style={{ fontSize: "0.9rem", padding: "0.4rem 0.8rem" }}>
-            {isActivated ? "Activated" : "Core (Unlicensed)"}
-          </span>
-        </div>
 
-        {isActivated ? (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.5rem", background: "var(--color-surface-2)", padding: "1.5rem", borderRadius: "var(--radius-md)" }}>
-            <div>
-              <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.25rem" }}>School</div>
-              <div style={{ fontWeight: 600 }}>{licenseInfo.sub}</div>
+          {/* ── Server Hardware Fingerprint & Machine Identity ── */}
+          <div className={styles.fingerprintCard}>
+            <div className={styles.cardHeader}>
+              <div className={styles.cardHeaderLeft}>
+                <SchoolIcon width="20" height="20" style={{ color: "#6366F1" }} />
+                <div>
+                  <h3 className={styles.cardTitle}>Physical Host Hardware Identity</h3>
+                  <p className={styles.cardSubtitle}>
+                    Tamper-proof hardware signature computed from host CPU, memory, and MAC address.
+                  </p>
+                </div>
+              </div>
+              <Badge variant="neutral" size="sm">
+                Anti-Cloning Active
+              </Badge>
             </div>
-            <div>
-              <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.25rem" }}>Tier</div>
-              <div style={{ fontWeight: 600, color: "var(--color-primary)" }}>{licenseInfo.tier.replace("_", " ").toUpperCase()}</div>
+
+            {/* Machine Specs Pill Row */}
+            {machineInfo && (
+              <div className={styles.specsRow}>
+                <div className={styles.specPill}>
+                  <span className={styles.specKey}>Host:</span>
+                  <span className={styles.specVal}>{machineInfo.hostname || "local"}</span>
+                </div>
+                <div className={styles.specPill}>
+                  <span className={styles.specKey}>Platform:</span>
+                  <span className={styles.specVal}>{machineInfo.platform} ({machineInfo.arch})</span>
+                </div>
+                <div className={styles.specPill}>
+                  <span className={styles.specKey}>CPU:</span>
+                  <span className={styles.specVal}>{machineInfo.cpu}</span>
+                </div>
+                <div className={styles.specPill}>
+                  <span className={styles.specKey}>Memory:</span>
+                  <span className={styles.specVal}>{machineInfo.memory_gb} GB RAM</span>
+                </div>
+              </div>
+            )}
+
+            {/* Fingerprint Display & Copy */}
+            <div className={styles.fingerprintBox}>
+              <code className={styles.fingerprintCode}>
+                {fingerprint || "EP-HW-0000-0000-0000-0000"}
+              </code>
+              <Button
+                variant={copied ? "success" : "primary"}
+                size="sm"
+                leftIcon={copied ? <CheckIcon width="14" height="14" /> : <DocumentIcon width="14" height="14" />}
+                className={styles.copyButton}
+                onClick={handleCopyFingerprint}
+              >
+                {copied ? "Copied!" : "Copy Signature"}
+              </Button>
             </div>
-            <div>
-              <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.25rem" }}>Issued</div>
-              <div style={{ fontWeight: 600 }}>{new Date(licenseInfo.iat * 1000).toLocaleDateString()}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.8rem", color: "var(--color-muted)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "0.25rem" }}>Max Kiosk Devices</div>
-              <div style={{ fontWeight: 600 }}>{licenseInfo.max_devices}</div>
+
+            <div className={styles.lockNotice}>
+              <ShieldCheckIcon width="16" height="16" className="text-emerald-600 flex-shrink-0" />
+              <span>
+                <strong>Anti-Piracy Machine Lock:</strong> This server installation is cryptographically bound to this physical machine. If this folder or database is copied or moved to an unauthorized computer, the hardware lock will engage and require re-activation.
+              </span>
             </div>
           </div>
-        ) : (
-          <p style={{ color: "var(--color-muted)", fontSize: "0.95rem" }}>
-            The system is running on the free core tier. Kiosk lockdown and encrypted content packages are unavailable.
-          </p>
-        )}
-      </div>
 
-      {/* Upload New License */}
-      <div className="card">
-        <h3 style={{ fontSize: "1.1rem", marginBottom: "0.5rem" }}>Upload Master License File</h3>
-        <p style={{ color: "var(--color-muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-          Select the <code style={{ background: "var(--color-surface-2)", padding: "0.2rem 0.4rem", borderRadius: "4px" }}>license.json</code> file provided by ExamPool HQ to upgrade your server.
-        </p>
+          {/* ── Feature Capability Matrix ── */}
+          <div className={styles.featuresSection}>
+            <h3 className={styles.sectionHeading}>
+              <LayersIcon width="16" height="16" />
+              Institutional Security & Operational Capabilities
+            </h3>
 
-        <div style={{ border: "2px dashed var(--color-border)", padding: "3rem 2rem", borderRadius: "var(--radius-lg)", textAlign: "center", position: "relative", background: "var(--color-surface-2)", transition: "all 0.2s" }}>
-          <input
-            type="file"
-            accept="application/json"
-            onChange={handleFileUpload}
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer" }}
-            disabled={uploading}
-          />
-          <DocumentIcon width="40" height="40" style={{ color: "var(--color-muted)", marginBottom: "1rem" }} />
-          <div style={{ fontWeight: 600, color: "var(--color-text)", marginBottom: "0.5rem" }}>
-            {uploading ? "Verifying signature..." : "Click or drag license.json here"}
+            <div className={styles.featuresGrid}>
+              {/* Feature 1 */}
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>
+                  <ActivityIcon width="18" height="18" />
+                </div>
+                <div className={styles.featureContent}>
+                  <div className={styles.featureHeader}>
+                    <span className={styles.featureTitle}>Local Network Examination Engine</span>
+                    <Badge variant="success" size="sm">
+                      Active
+                    </Badge>
+                  </div>
+                  <p className={styles.featureDesc}>
+                    Zero-cloud, high-throughput exam delivery across air-gapped school Wi-Fi or LAN laboratories.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 2 */}
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>
+                  <DocumentIcon width="18" height="18" />
+                </div>
+                <div className={styles.featureContent}>
+                  <div className={styles.featureHeader}>
+                    <span className={styles.featureTitle}>Past Paper Question Auto-Parser</span>
+                    <Badge variant="success" size="sm">
+                      Active
+                    </Badge>
+                  </div>
+                  <p className={styles.featureDesc}>
+                    Automated extraction of WAEC, JAMB, NECO, and BECE PDF question papers into local SQLite repositories.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 3 */}
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>
+                  <SchoolIcon width="18" height="18" />
+                </div>
+                <div className={styles.featureContent}>
+                  <div className={styles.featureHeader}>
+                    <span className={styles.featureTitle}>Multi-Term Continuous Assessment</span>
+                    <Badge variant="success" size="sm">
+                      Active
+                    </Badge>
+                  </div>
+                  <p className={styles.featureDesc}>
+                    Weighted assessments (CA1, CA2, Final Exams) with termly remark management and teacher sign-off.
+                  </p>
+                </div>
+              </div>
+
+              {/* Feature 4 */}
+              <div className={styles.featureCard}>
+                <div className={styles.featureIcon}>
+                  <LayersIcon width="18" height="18" />
+                </div>
+                <div className={styles.featureContent}>
+                  <div className={styles.featureHeader}>
+                    <span className={styles.featureTitle}>Annual Broad Sheet & Report Cards</span>
+                    <Badge variant="success" size="sm">
+                      Active
+                    </Badge>
+                  </div>
+                  <p className={styles.featureDesc}>
+                    Automated termly position rankings, annual grade broad sheets, and printable student transcript cards.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-          {!uploading && <div style={{ fontSize: "0.85rem", color: "var(--color-muted)" }}>JSON file, max 10KB</div>}
-        </div>
-      </div>
-    </main>
+
+          {/* ── Upload Master License File ── */}
+          <div className={styles.uploadCard}>
+            <div>
+              <h3 className={styles.cardTitle}>Register Master License File</h3>
+              <p className={styles.cardSubtitle}>
+                Upload the cryptographically signed <code className="font-mono text-slate-800 bg-slate-100 px-1 py-0.5 rounded">license.json</code> file provided by ExamPool HQ to register your institution or unlock capacity.
+              </p>
+            </div>
+
+            <div className={`${styles.dropzone} ${uploading ? styles.dropzoneActive : ""}`}>
+              <input
+                type="file"
+                accept="application/json,.json"
+                className={styles.dropzoneFileInput}
+                disabled={uploading}
+                onChange={handleFileUpload}
+                aria-label="Upload license.json"
+              />
+              <div className={styles.dropzoneIcon}>
+                <DocumentIcon width="24" height="24" />
+              </div>
+              <div className={styles.dropzoneTitle}>
+                {uploading ? "Verifying signature and binding machine..." : "Click or drag license.json here"}
+              </div>
+              <div className={styles.dropzoneSub}>
+                Cryptographically signed JSON license certificate, max 10KB
+              </div>
+            </div>
+          </div>
+
+          {/* ── Offline Air-Gapped Activation Guide ── */}
+          <div className={styles.stepperCard}>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+              Offline School Licensing Workflow
+            </h3>
+
+            <div className={styles.stepsGrid}>
+              <div className={styles.stepItem}>
+                <span className={styles.stepNumber}>STEP 01</span>
+                <span className={styles.stepTitle}>Copy Hardware Signature</span>
+                <p className={styles.stepText}>
+                  Copy your unique Server Hardware Identity token generated above.
+                </p>
+              </div>
+
+              <div className={styles.stepItem}>
+                <span className={styles.stepNumber}>STEP 02</span>
+                <span className={styles.stepTitle}>Request Signed License</span>
+                <p className={styles.stepText}>
+                  Submit the signature to your authorized ExamPool distributor or portal to generate a locked certificate.
+                </p>
+              </div>
+
+              <div className={styles.stepItem}>
+                <span className={styles.stepNumber}>STEP 03</span>
+                <span className={styles.stepTitle}>Activate Offline</span>
+                <p className={styles.stepText}>
+                  Drop the received license file into the upload zone above. Activated instantly with zero internet required.
+                </p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

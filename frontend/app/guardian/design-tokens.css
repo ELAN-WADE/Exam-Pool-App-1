@@ -1,0 +1,85 @@
+/* ── ACAD Guardian PWA Mobile Design Tokens ── */
+:root {
+  /* 1. Palette: Neutral Foundation + Primary Brand Blue + Semantic Accents */
+  --g-bg-app: #F8FAFC;
+  --g-bg-canvas: #F1F5F9;
+  --g-surface: #FFFFFF;
+  --g-surface-subtle: #F8FAFC;
+  --g-surface-elevated: #FFFFFF;
+
+  --g-border: #E2E8F0;
+  --g-border-subtle: #F1F5F9;
+  --g-border-focus: #165AF6;
+
+  --g-text-primary: #0F172A;
+  --g-text-secondary: #475569;
+  --g-text-muted: #64748B;
+  --g-text-tertiary: #94A3B8;
+  --g-text-inverse: #FFFFFF;
+
+  /* Primary Brand Blue */
+  --g-primary: #165AF6;
+  --g-primary-hover: #1248C8;
+  --g-primary-subtle: #EFF4FF;
+  --g-primary-border: #DBEAFE;
+  --g-primary-ghost: rgba(22, 90, 246, 0.08);
+
+  /* Semantic Accents */
+  --g-success: #059669;
+  --g-success-subtle: #ECFDF5;
+  --g-success-border: #A7F3D0;
+
+  --g-warning: #D97706;
+  --g-warning-subtle: #FFFBEB;
+  --g-warning-border: #FDE68A;
+
+  --g-danger: #DC2626;
+  --g-danger-subtle: #FEF2F2;
+  --g-danger-border: #FECACA;
+
+  --g-purple: #7C3AED;
+  --g-purple-subtle: #F5F3FF;
+  --g-purple-border: #DDD6FE;
+
+  /* 2. Typography */
+  --g-font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --g-font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --g-font-mono: "JetBrains Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+
+  /* 3. Spacing Scale (8px Grid) */
+  --g-space-xs: 0.25rem;  /* 4px */
+  --g-space-sm: 0.5rem;   /* 8px */
+  --g-space-md: 0.75rem;  /* 12px */
+  --g-space-lg: 1rem;     /* 16px */
+  --g-space-xl: 1.25rem;  /* 20px */
+  --g-space-2xl: 1.5rem;  /* 24px */
+  --g-space-3xl: 2rem;    /* 32px */
+
+  /* Mobile Page Gutter (20px - 24px) */
+  --g-page-gutter: 1.25rem;
+
+  /* 4. Corner Radii */
+  --g-radius-xs: 6px;
+  --g-radius-sm: 8px;
+  --g-radius-md: 12px;
+  --g-radius-lg: 16px;
+  --g-radius-xl: 20px;
+  --g-radius-2xl: 24px;
+  --g-radius-full: 9999px;
+
+  /* 5. Shadows */
+  --g-shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.04);
+  --g-shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.06), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --g-shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.03);
+  --g-shadow-sheet: 0 -10px 30px -5px rgba(15, 23, 42, 0.12);
+
+  /* 6. Transitions */
+  --g-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --g-duration: 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --g-duration: 0ms;
+  }
+}

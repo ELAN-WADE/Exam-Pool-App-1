@@ -1,23 +1,32 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback, Suspense } from "react";
+import React, { useEffect, useMemo, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ReviewModal } from "../../../components/teacher/ReviewModal";
 import { useAcademic } from "../../../components/context/AcademicContext";
 import { api } from "../../../lib/api";
 import type { EnrolledStudent, Subject } from "../../../lib/types";
-import { scorePct, letterGrade, gradeBadgeClass, gradeColor } from "../../../lib/gradeUtils";
-import { UsersIcon, SearchIcon, ArrowUpIcon, EyeIcon, DocumentIcon } from "../../../components/icons/Icons";
+import { scorePct, letterGrade } from "../../../lib/gradeUtils";
+import {
+  PageHeader,
+  FilterBar,
+  Table,
+  type TableColumn,
+  Button,
+} from "../../../components/ui";
+import {
+  UsersIcon,
+  CheckCircleIcon,
+  ClockIcon,
+  BookIcon,
+} from "../../../components/icons/Icons";
 import styles from "./page.module.css";
-
-
 
 export default function TeacherStudentsPage() {
   return (
     <RequireRole role="teacher">
-      <Suspense fallback={<div className="loadingWrap"><div className="spinner" /></div>}>
+      <Suspense fallback={<div className="p-6">Loading student roster...</div>}>
         <StudentRoster />
       </Suspense>
     </RequireRole>
@@ -28,24 +37,20 @@ function StudentRoster() {
   const params = useSearchParams();
   const subjectId = Number(params.get("subjectId") ?? 0);
 
-  const [students,    setStudents]    = useState<EnrolledStudent[]>([]);
-  const [subjects,    setSubjects]    = useState<Subject[]>([]);
-  const { selectedSession, selectedTerm } = useAcademic();
-  const [loading,     setLoading]     = useState(true);
-  const [error,       setError]       = useState("");
-  const [query,       setQuery]       = useState("");
-  const [toast,       setToast]       = useState<{ type: "success" | "error"; text: string } | null>(null);
-  const [gradeModal,  setGradeModal]  = useState<any | null>(null);
-  const [gradeValue,  setGradeValue]  = useState("");
-  const [gradeSaving, setGradeSaving] = useState(false);
-  const [gradeLevels, setGradeLevels] = useState<any[]>([]);
-  const [reviewModal,   setReviewModal]   = useState<any | null>(null);
-  const [reviewData,    setReviewData]    = useState<any | null>(null);
-  const [reviewLoading, setReviewLoading] = useState(false);
+  const [students, setStudents] = useState<EnrolledStudent[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const { selectedSession, selectedTerm, activeSession, activeTerm } = useAcademic();
+  const currentSessionName = selectedSession?.name || activeSession?.name || "2026/2027";
+  const currentTermName = selectedTerm?.name || activeTerm?.name || "First Term";
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const [selectedSubjectId, setSelectedSubjectId] = useState<number>(0);
+  const [toast, setToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
-  const activeSubjectId = subjectId > 0 ? subjectId : (subjects[0]?.id ?? 0);
-  const activeSubjectIdRef = useRef(activeSubjectId);
-  useEffect(() => { activeSubjectIdRef.current = activeSubjectId; }, [activeSubjectId]);
+  const [reviewModal, setReviewModal] = useState<any | null>(null);
+  const [reviewData, setReviewData] = useState<any | null>(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const showToast = (type: "success" | "error", text: string) => {
     setToast({ type, text });
@@ -69,14 +74,13 @@ function StudentRoster() {
 
     (async () => {
       try {
+        setLoading(true);
         const subs = (await api.getSubjects(selectedSession?.id, selectedTerm?.id)) as Subject[];
         if (signal.aborted) return;
         setSubjects(subs ?? []);
-        
-        const gradesData = await api.getGradeLevels();
-        if (!signal.aborted) setGradeLevels(gradesData?.grades ?? []);
 
         const sid = subjectId > 0 ? subjectId : Number(subs[0]?.id ?? 0);
+        setSelectedSubjectId(sid);
         if (sid) await loadStudents(sid, signal);
       } catch (err) {
         if (!signal.aborted) setError(err instanceof Error ? err.message : "Failed to load");
@@ -87,276 +91,254 @@ function StudentRoster() {
     return () => controller.abort();
   }, [subjectId, selectedSession?.id, selectedTerm?.id, loadStudents]);
 
-  // ── Live-update: re-fetch roster when a student submits an exam ──
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const notif = (e as CustomEvent).detail;
-      if (notif?.type === "exam_submitted") {
-        const sid = activeSubjectIdRef.current;
-        if (sid) loadStudents(sid);
-      }
-    };
-    window.addEventListener("notification_received", handler);
-    return () => window.removeEventListener("notification_received", handler);
-  }, [loadStudents]);
+  const activeSubject = useMemo(() => {
+    return subjects.find((s) => s.id === selectedSubjectId) || subjects[0];
+  }, [subjects, selectedSubjectId]);
 
-  const filtered = useMemo(() => {
+  const handleSubjectChange = (newId: number) => {
+    setSelectedSubjectId(newId);
+    loadStudents(newId);
+  };
+
+  const filteredStudents = useMemo(() => {
     const q = query.toLowerCase();
     if (!q) return students;
     return students.filter(
-      (s) => String(s.name || "").toLowerCase().includes(q) ||
-             String(s.reg_id || "").toLowerCase().includes(q) ||
-             String(s.grade || "").toLowerCase().includes(q),
+      (st) =>
+        st.name?.toLowerCase().includes(q) ||
+        st.email?.toLowerCase().includes(q) ||
+        st.reg_id?.toLowerCase().includes(q) ||
+        st.grade?.toLowerCase().includes(q)
     );
   }, [students, query]);
 
-  const stats = useMemo(() => {
-    const taken = students.filter((s) => s.exam_status === "completed");
-    const pcts  = taken.map((s) => scorePct(s.score, s.total_score));
-    const avg   = pcts.length === 0 ? 0 : Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length);
-    const pass  = pcts.filter((p) => p >= 50).length;
-    return { total: students.length, taken: taken.length, avg, pass };
-  }, [students]);
-
-  const openGrade = (row: any) => {
-    setGradeModal(row);
-    const matched = gradeLevels.find(g => g.name === row.grade || g.id === Number(row.grade_level_id || row.grade));
-    setGradeValue(matched ? String(matched.id) : (row.grade_level_id ? String(row.grade_level_id) : ""));
-  };
-
-  const saveGrade = async () => {
-    if (!gradeModal || !gradeValue.trim()) return;
-    setGradeSaving(true);
-    try {
-      const selectedGradeName = gradeLevels.find(g => g.id === Number(gradeValue))?.name || gradeValue;
-      await api.updateStudentGrade(Number(gradeModal.id), Number(gradeValue));
-      showToast("success", `${gradeModal.name} moved to ${selectedGradeName}`);
-      setGradeModal(null);
-      await loadStudents(activeSubjectId);
-    } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to update grade");
-    } finally {
-      setGradeSaving(false);
-    }
-  };
-
-  const openReview = async (row: any) => {
-    if (!row.exam_status || row.exam_status !== "completed") return;
-    setReviewModal(row);
-    setReviewData(null);
+  const openReview = async (st: EnrolledStudent) => {
+    setReviewModal(st);
     setReviewLoading(true);
     try {
-      // exam_id is now included directly in the roster row from the server
-      const examId = Number(row.exam_id);
-      if (!examId) { showToast("error", "Exam record not found"); setReviewModal(null); return; }
-      const data = await api.getExamReview(examId) as any;
-      setReviewData(data);
-    } catch (err) {
-      showToast("error", err instanceof Error ? err.message : "Failed to load review");
-      setReviewModal(null);
+      const res = await api.getExamByStudentSubject(st.id, selectedSubjectId);
+      if (res?.id) {
+        const detail = await api.getExamReview(res.id);
+        setReviewData(detail);
+      } else {
+        setReviewData(null);
+      }
+    } catch {
+      showToast("error", "Could not load exam attempt details");
     } finally {
       setReviewLoading(false);
     }
   };
 
-  if (loading) return <div className="loadingWrap"><div className="spinner" /></div>;
-  if (error)   return <div style={{ padding: "2rem", color: "var(--color-danger)" }}>{error}</div>;
+  const completedCount = useMemo(() => students.filter((s) => s.exam_status === "completed").length, [students]);
+  const inProgressCount = useMemo(() => students.filter((s) => s.exam_status === "in_progress").length, [students]);
+  const notStartedCount = useMemo(() => students.filter((s) => !s.exam_status || s.exam_status === "not_started").length, [students]);
 
-  const activeSubject = subjects.find((s) => Number(s.id) === activeSubjectId);
+  const columns: TableColumn<EnrolledStudent>[] = [
+    {
+      key: "name",
+      header: "Candidate Name",
+      sortable: true,
+      render: (st) => (
+        <div className={styles.candidateCell}>
+          <div className={styles.avatar}>{String(st.name || "?").charAt(0).toUpperCase()}</div>
+          <div>
+            <div style={{ fontWeight: 600, color: "var(--color-text)", fontSize: "0.8125rem" }}>{st.name}</div>
+            <div style={{ fontSize: "0.6875rem", color: "var(--color-muted)", fontFamily: "var(--font-mono, monospace)" }}>
+              {st.reg_id || st.email}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "grade",
+      header: "Class / Cohort",
+      render: (st) => (
+        <span style={{ fontSize: "0.8125rem", color: "var(--color-text)" }}>
+          {st.grade || "General"}
+        </span>
+      ),
+    },
+    {
+      key: "exam_status",
+      header: "Assessment Status",
+      align: "center",
+      width: "160px",
+      render: (st) => {
+        const status = st.exam_status || "not_started";
+        const isCompleted = status === "completed";
+        return (
+          <span className={`${styles.statusTag} ${isCompleted ? styles.statusCompleted : styles.statusPending}`}>
+            {isCompleted ? "Completed" : status === "in_progress" ? "In Progress" : "Not Started"}
+          </span>
+        );
+      },
+    },
+    {
+      key: "score",
+      header: "Recorded Score",
+      render: (st) => {
+        if (st.exam_status !== "completed" || st.score === undefined || st.score === null) {
+          return <span style={{ color: "var(--color-muted)", fontSize: "0.75rem" }}>—</span>;
+        }
+        const pct = scorePct(st.score, st.total_score || 100);
+        const grade = letterGrade(pct);
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <span style={{ fontFamily: "var(--font-mono, monospace)", fontWeight: 600, color: "var(--color-text)" }}>
+              {st.score}
+            </span>
+            <span style={{ fontFamily: "var(--font-mono, monospace)", fontSize: "0.75rem", color: "var(--color-muted)" }}>
+              ({pct}% · {grade})
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: "actions",
+      header: "Action",
+      align: "right",
+      width: "140px",
+      render: (st) => {
+        const isCompleted = st.exam_status === "completed";
+        return isCompleted ? (
+          <Button variant="secondary" size="xs" onClick={() => openReview(st)}>
+            Review Submission
+          </Button>
+        ) : (
+          <span style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>—</span>
+        );
+      },
+    },
+  ];
 
   return (
-    <>
-      {toast && <div className={`toast ${toast.type === "success" ? "toast-success" : "toast-error"}`}>{toast.text}</div>}
-
-      {/* Header */}
-      <div className="pageHeader" style={{ flexWrap: "wrap", gap: "0.75rem" }}>
-        <div>
-          <h1 className="pageTitle">Student Roster</h1>
-          {activeSubject && (
-            <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginTop: "0.25rem" }}>
-              {activeSubject.name} · <code style={{ fontSize: "0.8rem" }}>{activeSubject.code}</code> · Term: {activeSubject.term}
-            </p>
-          )}
+    <div className={styles.container}>
+      {toast && (
+        <div style={{ position: "fixed", bottom: "1.5rem", right: "1.5rem", padding: "0.65rem 1rem", borderRadius: "8px", background: "var(--color-text)", color: "#FFFFFF", fontSize: "0.8125rem", fontWeight: 600, zIndex: 1100 }}>
+          {toast.text}
         </div>
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-          <button
-            className="btn btn-ghost"
-            onClick={() => loadStudents(activeSubjectId)}
-            title="Refresh to see newly completed exams"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M3 12a9 9 0 009-9 9 9 0 015.657 2.343"/>
-              <polyline points="21 3 21 9 15 9"/>
-              <path d="M21 12a9 9 0 01-9 9 9 9 0 01-5.657-2.343"/>
-            </svg>
-            Refresh
-          </button>
-          <Link href="/teacher/dashboard" className="btn btn-ghost">← Back</Link>
-        </div>
-      </div>
+      )}
 
-      {/* Subject Tabs */}
-      {subjects.length > 1 && (
-        <div className={styles.tabs}>
-          {subjects.map((s) => (
-            <Link
-              key={s.id}
-              href={`/teacher/students?subjectId=${s.id}`}
-              className={`${styles.tab} ${Number(s.id) === activeSubjectId ? styles.tabActive : ""}`}
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Roster & Enrolled Candidates"
+        title="Student Directory"
+        subtitle={`Session ${currentSessionName} · ${currentTermName}`}
+        actions={
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--color-muted)" }}>Course:</label>
+            <select
+              value={selectedSubjectId}
+              onChange={(e) => handleSubjectChange(Number(e.target.value))}
+              style={{
+                padding: "0.4rem 0.65rem",
+                borderRadius: "6px",
+                border: "1px solid var(--color-border)",
+                background: "#FFFFFF",
+                fontSize: "0.8125rem",
+                color: "var(--color-text)",
+              }}
             >
-              {s.name}
-            </Link>
-          ))}
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.code} — {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
+      />
+
+      {error && (
+        <div style={{ padding: "0.875rem 1rem", background: "var(--color-surface-2)", border: "1px solid var(--color-border)", borderRadius: "8px", color: "var(--color-danger, #DC2626)", fontSize: "0.8125rem" }}>
+          {error}
         </div>
       )}
 
-      {/* Stats */}
-      <div className={styles.statsRow}>
-        {[
-          { label: "Enrolled",    value: stats.total, color: "#4f7cff" },
-          { label: "Attempted",   value: stats.taken, color: "#a78bfa" },
-          { label: "Avg Score",   value: `${stats.avg}%`, color: "#22c55e" },
-          { label: "Pass Rate",   value: stats.taken > 0 ? `${Math.round((stats.pass / stats.taken) * 100)}%` : "—", color: "#f59e0b" },
-        ].map((s) => (
-          <div key={s.label} className={styles.statCard}>
-            <div className={styles.statValue} style={{ color: s.color }}>{s.value}</div>
-            <div className={styles.statLabel}>{s.label}</div>
+      {/* ── Minimalist KPI Metrics Row ──────────────────────── */}
+      <section className={styles.statsGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Enrolled Roster</span>
+            <div className={styles.statIcon} style={{ color: "#4F46E5" }}><UsersIcon width="15" height="15" /></div>
           </div>
-        ))}
-      </div>
-
-      {/* Search */}
-      <div className={`searchBar ${styles.search}`}>
-        <SearchIcon width="14" height="14" />
-        <input placeholder="Search by name, reg ID or grade…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      </div>
-
-      {/* Table */}
-      <div className={`card ${styles.tableCard}`}>
-        {filtered.length === 0 ? (
-          <div className={styles.empty}>
-            <div className={styles.emptyIconWrapper}>
-              <UsersIcon width="48" height="48" />
-            </div>
-            <p>{query ? "No students match your search." : "No students enrolled in this subject yet. Ask the operator to enroll students."}</p>
-          </div>
-        ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Student</th>
-                <th>Reg ID</th>
-                <th>Grade / Class</th>
-                <th>Enrolled</th>
-                <th>Score</th>
-                <th>Letter</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row) => {
-                const pct        = scorePct(row.score, row.total_score);
-                const letter     = letterGrade(pct);
-                const hasExam    = row.exam_status === "completed";
-                const gradeClass = hasExam ? gradeBadgeClass(pct) : "badge-muted";
-                return (
-                  <tr key={row.id}>
-                    <td>
-                      <div className={styles.studentCell}>
-                        <div className={styles.avatar}>{String(row.name || "?").charAt(0).toUpperCase()}</div>
-                        <div>
-                          <span style={{ fontWeight: 500 }}>{row.name || "—"}</span>
-                          <div style={{ fontSize: "0.75rem", color: "var(--color-muted)" }}>{row.email || ""}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "var(--color-muted)" }}>{row.reg_id || "—"}</td>
-                    <td>
-                      <span style={{ fontWeight: 500 }}>{row.grade || "—"}</span>
-                    </td>
-                    <td style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>
-                      {row.enrolled_at ? new Date(row.enrolled_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
-                    </td>
-                    <td>
-                      {hasExam ? (
-                        <div className={styles.scoreCell}>
-                          <span style={{ fontWeight: 600 }}>{row.score ?? 0}</span>
-                          <span style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>/ {Number(row.total_score ?? 0) || "?"}</span>
-                          <div className={styles.pctBar}>
-                            <div className={styles.pctFill} style={{ width: `${pct}%`, background: gradeColor(pct) }} />
-                          </div>
-                          <span style={{ fontSize: "0.78rem", color: "var(--color-muted)" }}>{pct}%</span>
-                        </div>
-                      ) : (
-                        <span style={{ color: "var(--color-muted)", fontSize: "0.8rem" }}>—</span>
-                      )}
-                    </td>
-                    <td>
-                      {hasExam
-                        ? <span className={`badge ${gradeClass}`}>{letter}</span>
-                        : <span className="badge badge-muted">—</span>
-                      }
-                    </td>
-                    <td>
-                      {hasExam
-                        ? <span className="badge badge-success">Completed</span>
-                        : <span className="badge badge-info">Pending</span>
-                      }
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Grade / Promote Modal */}
-      {gradeModal && (
-        <div className="overlay" onClick={(e) => e.target === e.currentTarget && setGradeModal(null)}>
-          <div className="modal" style={{ maxWidth: 420 }}>
-            <h2>Promote / Demote Student</h2>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", marginTop: "0.4rem" }}>
-              Updating class grade for <strong>{gradeModal.name}</strong> (currently: <strong>{gradeModal.grade || "unset"}</strong>)
-            </p>
-            <div className="field" style={{ marginTop: "1rem" }}>
-              <label>New Grade / Class *</label>
-              <select className="select" value={gradeValue} onChange={(e) => setGradeValue(e.target.value)}>
-                <option value="">Select grade…</option>
-                {gradeLevels.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
-              <button className="btn btn-ghost" onClick={() => setGradeModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={saveGrade} disabled={gradeSaving || !gradeValue.trim()}>
-                {gradeSaving ? "Saving…" : "Save Grade"}
-              </button>
-            </div>
+          <div>
+            <div className={styles.statValue}>{students.length}</div>
+            <div className={styles.statFootnote}>{activeSubject?.code || "Subject"} candidates</div>
           </div>
         </div>
-      )}
 
-      {/* Exam Review Modal */}
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Submitted Exams</span>
+            <div className={styles.statIcon} style={{ color: "#10B981" }}><CheckCircleIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{completedCount}</div>
+            <div className={styles.statFootnote}>Evaluations completed</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Active Attempts</span>
+            <div className={styles.statIcon} style={{ color: "#F97316" }}><ClockIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{inProgressCount}</div>
+            <div className={styles.statFootnote}>In-progress CBT sessions</div>
+          </div>
+        </div>
+
+        <div className={styles.statCard}>
+          <div className={styles.statTop}>
+            <span className={styles.statLabel}>Pending Intake</span>
+            <div className={styles.statIcon} style={{ color: "#06B6D4" }}><BookIcon width="15" height="15" /></div>
+          </div>
+          <div>
+            <div className={styles.statValue}>{notStartedCount}</div>
+            <div className={styles.statFootnote}>Not yet commenced</div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Filter Bar ─────────────────────────────────────────── */}
+      <FilterBar
+        searchQuery={query}
+        onSearchChange={setQuery}
+        searchPlaceholder="Search candidates by name, reg ID, class..."
+        hasActiveFilters={Boolean(query)}
+        onReset={() => setQuery("")}
+      />
+
+      {/* ── Students Table ─────────────────────────────────────── */}
+      <div className={styles.tableContainer}>
+        <Table
+          columns={columns}
+          data={filteredStudents}
+          keyExtractor={(st) => st.id}
+          loading={loading}
+          emptyTitle="No Candidates Enrolled"
+          emptySubtitle={query ? "No candidates match your search." : "No candidates enrolled in this subject yet."}
+        />
+      </div>
+
+      {/* Review Modal */}
       {reviewModal && (
         <ReviewModal
-          activeSubjectName={activeSubject?.name || ""}
+          activeSubjectName={activeSubject?.name || "Exam Assessment"}
           studentName={reviewModal.name}
           reviewData={reviewData}
           reviewLoading={reviewLoading}
           onClose={() => setReviewModal(null)}
-          onGradeUpdate={(examId, newTotal) => {
-            // Optimistically update the students list with the new score
-            setStudents(students.map(s => {
-              if (s.exam_id === examId) {
-                return { ...s, score: newTotal };
-              }
-              return s;
-            }));
+          onGradeUpdate={async () => {
+            if (selectedSubjectId) await loadStudents(selectedSubjectId);
           }}
         />
       )}
-
-
-    </>
+    </div>
   );
 }

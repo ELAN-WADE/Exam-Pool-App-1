@@ -1,14 +1,14 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ChangePasswordModal } from "../../../components/auth/ChangePasswordModal";
 import { useAuth } from "../../../hooks/useAuth";
 import { api } from "../../../lib/api";
-import { examWindowStatus } from "../../../lib/gradeUtils";
-import { BookIcon, CheckCircleIcon, BarChartIcon, DocumentIcon, PlayIcon, LockIcon } from "../../../components/icons/Icons";
+import { Button } from "../../../components/ui";
+import { LockIcon, GraduationCapIcon } from "../../../components/icons/Icons";
+import { ErrorState } from "../../../components/ui/ErrorState";
 import styles from "./page.module.css";
 
 export default function StudentSettingsPage() {
@@ -23,104 +23,147 @@ function StudentSettings() {
   const { user, logout } = useAuth();
   const router = useRouter();
   const [showPwModal, setShowPwModal] = useState(false);
-  const [profile, setProfile]         = useState<any>(null);
-  const [loading, setLoading]         = useState(true);
+  const [profile, setProfile] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    api.getMyProfile().then((p) => {
-      setProfile(p);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    api
+      .getMyProfile()
+      .then((p) => {
+        setProfile(p);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Failed to load profile");
+        setLoading(false);
+      });
   }, []);
 
-  const initial   = user?.name?.charAt(0)?.toUpperCase() ?? "S";
-  const enrolled  = (profile?.enrolled_subjects ?? []) as any[];
-  const stats     = profile?.stats ?? { total_enrolled: 0, exams_completed: 0, avg_score_pct: 0 };
+  const initial = user?.name?.charAt(0)?.toUpperCase() ?? "S";
 
-  const getStatusBadge = (s: any) => {
-    const status = examWindowStatus(s);
-    const map: Record<string, React.ReactElement> = {
-      completed:    <span className="badge badge-success">Completed</span>,
-      "in-progress": <span className="badge badge-warning">In Progress</span>,
-      open:         <span className="badge badge-warning">Open Now</span>,
-      closed:       <span className="badge badge-danger">Closed</span>,
-      upcoming:     <span className="badge badge-info">Upcoming</span>,
-      unpublished:  <span className="badge badge-muted">Unpublished</span>,
-    };
-    return map[status] ?? null;
-  };
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "320px", gap: "0.75rem", color: "#64748B", fontSize: "0.875rem" }}>
+        <div className="spinner" style={{ width: 22, height: 22, borderColor: "#E2E8F0", borderTopColor: "#165AF6" }} />
+        <span>Loading candidate profile…</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <ErrorState
+        message={error}
+        onRetry={() => {
+          setError("");
+          setLoading(true);
+        }}
+      />
+    );
+  }
 
   return (
-    <>
+    <div className={styles.container}>
       {showPwModal && <ChangePasswordModal onClose={() => setShowPwModal(false)} />}
 
-      <div className={styles.page}>
-        <div className="pageHeader" style={{ padding: "0 0.5rem" }}>
-          <h1 className="pageTitle">My Profile</h1>
-          <Link href="/student/dashboard" className="btn btn-ghost">← Dashboard</Link>
+      {/* ── 1. Hero Identity & Telemetry Strip ── */}
+      <section className={styles.heroSection}>
+        <div className={styles.heroLeft}>
+          <h1 className={styles.heroTitle}>Student Profile &amp; Security</h1>
+          <p className={styles.heroSubtitle}>
+            Manage registration details, assigned class cohort, and portal authentication credentials.
+          </p>
         </div>
 
-        {/* ── Profile Card ── */}
-        <div className={styles.profileCard}>
-          <div className={styles.profileHeader}>
-            <div className={styles.profileAvatar}>{initial}</div>
+        <div className={styles.telemetryPillGroup}>
+          <div className={styles.telemetryBadge}>
+            <div className={styles.telemetryIcon}>
+              <GraduationCapIcon width="18" height="18" />
+            </div>
+            <div className={styles.telemetryBadgeContent}>
+              <span className={styles.telemetryNumber}>{user?.grade || "Candidate"}</span>
+              <span className={styles.telemetryText}>Assigned Cohort</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 2. Profile Information Card ──────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <div className={styles.avatar}>{initial}</div>
+          <div>
+            <div className={styles.name}>{user?.name ?? "—"}</div>
+            <div className={styles.email}>{user?.email ?? "—"}</div>
+            {user?.grade && (
+              <span className={styles.gradeBadge}>{user.grade}</span>
+            )}
+          </div>
+        </div>
+
+        <div className={styles.gridFields}>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>System Role</span>
+            <span className={styles.fieldValue}>Candidate (Student)</span>
+          </div>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>Class / Grade</span>
+            <span className={styles.fieldValue}>{user?.grade || "General Cohort"}</span>
+          </div>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>Registration ID</span>
+            <span className={styles.fieldValue} style={{ fontFamily: "monospace" }}>
+              {profile?.user?.reg_id || "Unset"}
+            </span>
+          </div>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>Phone Contact</span>
+            <span className={styles.fieldValue}>{profile?.user?.phone || "—"}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 3. Security & Authentication Card ────────────────── */}
+      <section className={styles.card}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9375rem", fontWeight: 700, color: "#0F172A" }}>
+          <LockIcon width="16" height="16" style={{ color: "#165AF6" }} />
+          <span>Security &amp; Authentication</span>
+        </div>
+
+        <div>
+          <div className={styles.actionRow}>
             <div>
-              <div className={styles.profileName}>{user?.name ?? "—"}</div>
-              <div className={styles.profileEmail}>{user?.email ?? "—"}</div>
-              <div className={styles.profileBadges}>
-                <span className="badge badge-info">Student</span>
-                {(user as any)?.grade && <span className="badge badge-success">{(user as any).grade}</span>}
+              <div style={{ fontWeight: 600, fontSize: "0.875rem", color: "#0F172A" }}>Portal Password</div>
+              <div style={{ fontSize: "0.75rem", color: "#64748B", marginTop: "0.15rem" }}>
+                Update your password to keep your examination attempts secure.
               </div>
             </div>
-          </div>
-
-          <div className={styles.profileFields}>
-            {([
-              ["Full Name",   user?.name],
-              ["Email",       user?.email],
-              ["Class/Grade", user?.grade ?? "—"],
-              ["Reg ID",      profile?.user?.reg_id ?? "—"],
-              ["Phone",       profile?.user?.phone ?? "—"],
-            ] as [string, string | null | undefined][]).map(([label, val]) => (
-              <React.Fragment key={label}>
-                <div className={styles.fieldLabel}>{label}</div>
-                <div className={styles.fieldValue}>{val || "—"}</div>
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
-
-
-        {/* ── Security ── */}
-        <div className={styles.sectionCard}>
-          <h3 className={styles.sectionTitle}>
-            <LockIcon width="16" height="16" /> Security
-          </h3>
-          <div className={styles.securityRow}>
-            <div>
-              <div className={styles.securityLabel}>Password</div>
-              <div className={styles.securitySub}>Update your login password</div>
-            </div>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowPwModal(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setShowPwModal(true)}>
               Change Password
-            </button>
+            </Button>
           </div>
-          <div className={styles.securityRow}>
+
+          <div className={styles.actionRow}>
             <div>
-              <div className={styles.securityLabel}>Logout</div>
-              <div className={styles.securitySub}>Sign out of all sessions</div>
+              <div style={{ fontWeight: 600, fontSize: "0.875rem", color: "#0F172A" }}>Sign Out</div>
+              <div style={{ fontSize: "0.75rem", color: "#64748B", marginTop: "0.15rem" }}>
+                End student session on this computer or terminal.
+              </div>
             </div>
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ color: "var(--color-danger)" }}
-              onClick={async () => { await logout(); router.replace("/"); }}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                await logout();
+                router.replace("/");
+              }}
             >
-              Logout
-            </button>
+              Sign Out
+            </Button>
           </div>
         </div>
-
-      </div>
-    </>
+      </section>
+    </div>
   );
 }

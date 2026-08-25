@@ -1,0 +1,111 @@
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-surface, #FFFFFF);
+  box-shadow: var(--shadow-xs, 0 1px 2px rgba(15, 23, 42, 0.03));
+}
+
+.table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8625rem;
+  color: var(--color-text, #0F172A);
+  text-align: left;
+}
+
+.thead {
+  background: var(--color-surface-2, #F8FAFC);
+}
+
+.th {
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted, #64748B);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.th.sortable {
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+.th.sortable:hover {
+  color: var(--color-primary, #4F46E5);
+}
+
+.thContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.sortIcon {
+  display: inline-flex;
+  color: var(--color-muted, #94A3B8);
+}
+
+.sortIcon.active {
+  color: var(--color-primary, #4F46E5);
+}
+
+.tr {
+  transition: background-color var(--duration-instant, 100ms) ease;
+}
+
+.tr:not(:last-child) .td {
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.tbody .tr:hover {
+  background-color: rgba(241, 245, 249, 0.6);
+}
+
+.td {
+  padding: 0.85rem 1rem;
+  color: var(--color-text-2, #334155);
+  vertical-align: middle;
+}
+
+.alignLeft { text-align: left; }
+.alignCenter { text-align: center; }
+.alignRight { text-align: right; font-variant-numeric: tabular-nums; }
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, monospace);
+}
+
+.emptyCell {
+  padding: 3rem 1rem;
+  text-align: center;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  background: var(--color-surface-2, #F8FAFC);
+  font-size: 0.8125rem;
+  color: var(--color-muted, #64748B);
+}
+
+.pageControls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pageBtn {
+  min-height: 30px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.75rem;
+}

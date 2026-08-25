@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { apiGet, apiPost, apiPut, extractToken, json, login } from "./helpers";
+import { apiGet, apiPost, apiPut, extractToken, json, login, bootstrapOperator } from "./helpers";
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -26,20 +26,7 @@ const TCH_EMAIL     = `tch_auth_${BASE_TS}@exampool.test`;
 const TCH_PASS      = "Teacher@123";
 
 beforeAll(async () => {
-  // Bootstrap operator via setup (idempotent — skip if 403)
-  const setupRes = await apiPost("/api/setup", {
-    name: "Auth Test Op", email: OP_EMAIL, password: OP_PASS,
-    schoolName: "QA School", currentTerm: "2026-T1",
-  });
-  if (setupRes.status === 201) {
-    const body = await json(setupRes);
-    operatorToken = extractToken(setupRes, body);
-  } else {
-    // Already configured — login
-    const loginRes = await apiPost("/api/auth/login", { email: OP_EMAIL, password: OP_PASS });
-    const body = await json(loginRes);
-    operatorToken = extractToken(loginRes, body);
-  }
+  operatorToken = await bootstrapOperator(OP_EMAIL, OP_PASS);
 
   // Register student
   const stuReg = await apiPost("/api/auth/register", {

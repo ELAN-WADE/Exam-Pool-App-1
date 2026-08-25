@@ -2,6 +2,8 @@ import type { User, Subject, Question, ExamResult, ActiveExamData, Config, Audit
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || ""; // Supports external backends on Vercel
 
+export { API_BASE };
+
 /** Next.js `trailingSlash: true` uses `/setup/`; avoid full-page redirects that reload the SPA while already on setup. */
 export function isSetupRoute(): boolean {
   if (typeof window === "undefined") return false;
@@ -13,8 +15,10 @@ export type SessionUser = {
   id: number;
   name: string;
   email: string;
-  role: "student" | "teacher" | "operator";
+  role: "student" | "teacher" | "operator" | "guardian";
   grade?: string | null;
+  reg_id?: string | null;
+  phone?: string | null;
   is_class_teacher?: boolean;
   assigned_class_id?: number | null;
   assigned_class_name?: string | null;
@@ -33,7 +37,7 @@ function isSessionUser(value: unknown): value is SessionUser {
     typeof o.id === "number" &&
     typeof o.name === "string" &&
     typeof o.email === "string" &&
-    (role === "student" || role === "teacher" || role === "operator")
+    (role === "student" || role === "teacher" || role === "operator" || role === "guardian")
   );
 }
 
@@ -84,6 +88,10 @@ export async function fetchWithAuth<T = any>(url: string, options: RequestInit =
       if (!isSetupRoute()) window.location.href = "/";
       return null as unknown as T;
     }
+    // redirectOn401 is false (e.g. login endpoint): throw with the server's error message
+    // so callers can display it to the user.
+    const err = await res.json().catch(() => ({ error: "Invalid credentials" }));
+    throw new Error((err as { error?: string }).error || "Invalid credentials");
   }
 
   if (res.status === 503) {
@@ -102,13 +110,22 @@ export async function fetchWithAuth<T = any>(url: string, options: RequestInit =
   return body;
 }
 
+function buildAcademicQuery(sessionId?: number, termId?: number): string {
+  const qs = new URLSearchParams();
+  if (sessionId) qs.set("sessionId", String(sessionId));
+  if (termId) qs.set("termId", String(termId));
+  const s = qs.toString();
+  return s ? `?${s}` : "";
+}
+
 export const api = {
   setup: (data: any) => fetchWithAuth<any>("/api/setup", { method: "POST", body: JSON.stringify(data) }),
   register: (data: any) => fetchWithAuth<any>("/api/auth/register", { method: "POST", body: JSON.stringify(data) }),
   login: (data: any) => fetchWithAuth<any>("/api/auth/login", { method: "POST", body: JSON.stringify(data) }, { redirectOn401: false }),
   me: () => getSession().then((s) => s.user),
   logout: () => fetchWithAuth<any>("/api/auth/logout", { method: "POST" }),
-  getSubjects: (sessionId?: number, termId?: number) => fetchWithAuth<Subject[]>(`/api/subjects${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  getSubjects: (sessionId?: number, termId?: number) => fetchWithAuth<Subject[]>(`/api/subjects${buildAcademicQuery(sessionId, termId)}`),
+  getSubjectsWithCounts: (sessionId?: number, termId?: number) => fetchWithAuth<(Subject & { question_count: number })[]>(`/api/subjects/with-question-counts${buildAcademicQuery(sessionId, termId)}`),
   getActiveAcademic: () => fetchWithAuth<{ activeSession: any; activeTerm: any }>("/api/academic/active"),
   getAcademicSessions: () => fetchWithAuth<{ sessions: any[]; terms: any[] }>("/api/academic/sessions"),
   createAcademicSession: (name: string) => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/sessions", { method: "POST", body: JSON.stringify({ name }) }),
@@ -116,12 +133,13 @@ export const api = {
   activateAcademicSession: (sessionId: number) => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/activate-session", { method: "POST", body: JSON.stringify({ sessionId }) }),
   activateAcademicTerm: (termId: number) => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/activate-term", { method: "POST", body: JSON.stringify({ termId }) }),
   endTerm: () => fetchWithAuth<{ success: boolean; message: string }>("/api/academic/end-term", { method: "POST" }),
-  getAcademicStats: (sessionId?: number, termId?: number) => fetchWithAuth<any>(`/api/academic/stats${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  getAcademicStats: (sessionId?: number, termId?: number) => fetchWithAuth<any>(`/api/academic/stats${buildAcademicQuery(sessionId, termId)}`),
   
   // v8: Grading System APIs
   getGradingConfig: () => fetchWithAuth<any>("/api/grading/config"),
   updateGradingConfig: (data: any) => fetchWithAuth<any>("/api/grading/config", { method: "PUT", body: JSON.stringify(data) }),
-  getGradingSubjects: (sessionId?: number, termId?: number) => fetchWithAuth<any[]>(`/api/grading/subjects${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  getGradingSubjects: (sessionId?: number, termId?: number) => fetchWithAuth<any[]>(`/api/grading/subjects${buildAcademicQuery(sessionId, termId)}`),
+  getGradingSubject: (subjectId: number) => fetchWithAuth<any>(`/api/grading/subjects/${subjectId}`),
   createGradingSubject: (data: any) => fetchWithAuth<any>("/api/grading/subjects", { method: "POST", body: JSON.stringify(data) }),
   getGradingPolicies: (subjectId: number) => fetchWithAuth<any[]>(`/api/grading/policies/${subjectId}`),
   updateGradingPolicies: (subjectId: number, data: any) => fetchWithAuth<any>(`/api/grading/policies/${subjectId}`, { method: "PUT", body: JSON.stringify(data) }),
@@ -132,11 +150,34 @@ export const api = {
   getAnnualResults: (sessionId?: number) => fetchWithAuth<any>(`/api/grading/annual${sessionId ? `?sessionId=${sessionId}` : ""}`),
   promoteStudent: (data: any) => fetchWithAuth<any>("/api/grading/annual/promote", { method: "POST", body: JSON.stringify(data) }),
 
+  // Class Teacher Grading Center APIs
+  getClassGradingCenter: (params?: { termId?: number; sessionId?: number; classId?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.termId) qs.set("termId", String(params.termId));
+    if (params?.sessionId) qs.set("sessionId", String(params.sessionId));
+    if (params?.classId) qs.set("classId", String(params.classId));
+    return fetchWithAuth<any>(`/api/grading/class-center${qs.toString() ? `?${qs.toString()}` : ""}`);
+  },
+  getStudentReportCard: (studentId: number, params?: { termId?: number; sessionId?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.termId) qs.set("termId", String(params.termId));
+    if (params?.sessionId) qs.set("sessionId", String(params.sessionId));
+    return fetchWithAuth<any>(`/api/grading/report-card/${studentId}${qs.toString() ? `?${qs.toString()}` : ""}`);
+  },
+  updateReportCardRemarks: (studentId: number, data: { teacher_remark?: string; principal_remark?: string }, params?: { termId?: number; sessionId?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.termId) qs.set("termId", String(params.termId));
+    if (params?.sessionId) qs.set("sessionId", String(params.sessionId));
+    return fetchWithAuth<any>(`/api/grading/report-card/${studentId}/remarks${qs.toString() ? `?${qs.toString()}` : ""}`, { method: "PUT", body: JSON.stringify(data) });
+  },
+
   createSubject: (data: any) => fetchWithAuth<Subject>("/api/subjects", { method: "POST", body: JSON.stringify(data) }),
   updateSubject: (id: number, data: any) =>
     fetchWithAuth<Subject>(`/api/subjects/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteSubject: (id: number) => fetchWithAuth<any>(`/api/subjects/${id}`, { method: "DELETE" }),
-  getTimetables: () => fetchWithAuth<any[]>("/api/timetables"),
+  updateSubjectSchedule: (id: number, data: any) =>
+    fetchWithAuth<any>(`/api/subjects/${id}/schedule`, { method: "PUT", body: JSON.stringify(data) }),
+  getTimetables: (sessionId?: number, termId?: number) => fetchWithAuth<any[]>(`/api/timetables${buildAcademicQuery(sessionId, termId)}`),
   createTimetable: (data: any) => fetchWithAuth<any>("/api/timetables", { method: "POST", body: JSON.stringify(data) }),
   updateTimetable: (id: number, data: any) => fetchWithAuth<any>(`/api/timetables/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteTimetable: (id: number) => fetchWithAuth<any>(`/api/timetables/${id}`, { method: "DELETE" }),
@@ -153,17 +194,44 @@ export const api = {
   submitExamWithAnswers: (examId: number, answers: any[]) =>
     fetchWithAuth<any>(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers }) }),
   startPractice: (practiceId: string) =>
-    fetchWithAuth<any>(`/api/practice/start?practiceId=${practiceId}`, { method: "POST" }),
+    fetchWithAuth<any>(`/api/practice/start?practiceId=${encodeURIComponent(practiceId)}`, {
+      method: "POST",
+      body: JSON.stringify({ practiceId, practice_id: practiceId }),
+    }),
   submitPractice: (practiceId: string, answers: any[]) =>
-    fetchWithAuth<any>(`/api/practice/submit?practiceId=${practiceId}`, { method: "POST", body: JSON.stringify({ answers }) }),
+    fetchWithAuth<any>(`/api/practice/submit?practiceId=${encodeURIComponent(practiceId)}`, {
+      method: "POST",
+      body: JSON.stringify({ practiceId, practice_id: practiceId, answers }),
+    }),
   getContentManifest: () => fetchWithAuth<any>("/api/sync/content/manifest"),
-  /** @deprecated Use submitExamWithAnswers instead */
-  submitExam: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/submit`, { method: "POST", body: JSON.stringify({ answers: [] }) }),
-  getResults: (sessionId?: number, termId?: number) => fetchWithAuth<ExamResult[]>(`/api/exams/results${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  getPackageQuestions: (packageId: string) =>
+    fetchWithAuth<{ questions: any[] }>(`/api/content/package-questions?packageId=${encodeURIComponent(packageId)}`),
+  createContentQuestion: (data: any) =>
+    fetchWithAuth<any>("/api/content/questions", { method: "POST", body: JSON.stringify(data) }),
+  updateContentQuestion: (id: number, data: any) =>
+    fetchWithAuth<any>(`/api/content/questions/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteContentQuestion: (id: number) =>
+    fetchWithAuth<any>(`/api/content/questions/${id}`, { method: "DELETE" }),
+  deleteContentPackage: (packageId: string) =>
+    fetchWithAuth<any>(`/api/content/packages/${encodeURIComponent(packageId)}`, { method: "DELETE" }),
+  revealExamSolution: (examId: number, questionId: number) =>
+    fetchWithAuth<{
+      success: boolean;
+      question_id: number;
+      explanation: string | null;
+      solution: string | null;
+      solution_reveals_remaining: number;
+      revealed_solutions: number[];
+    }>(`/api/exams/${examId}/reveal-solution`, { method: "POST", body: JSON.stringify({ question_id: questionId }) }),
+  getExamReview: (examId: number) =>
+    fetchWithAuth<{ exam: any; answers: any[]; student: any }>(`/api/exams/${examId}/review`),
+  releaseSubjectResults: (subjectId: number) =>
+    fetchWithAuth<{ released: boolean; count: number; subject_id: number }>(`/api/subjects/${subjectId}/release-results`, { method: "POST" }),
+  getResults: (sessionId?: number, termId?: number) => fetchWithAuth<ExamResult[]>(`/api/exams/results${buildAcademicQuery(sessionId, termId)}`),
   retakeExam: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/retake`, { method: "POST" }),
   /** Get in-progress exams for the current student (for resume detection) */
   getActiveExams: () => fetchWithAuth<ActiveExamData | Subject[]>("/api/exams/active"),
-  getUsers: (sessionId?: number, termId?: number) => fetchWithAuth<User[]>(`/api/users${sessionId && termId ? `?sessionId=${sessionId}&termId=${termId}` : ""}`),
+  getUsers: (sessionId?: number, termId?: number) => fetchWithAuth<User[]>(`/api/users${buildAcademicQuery(sessionId, termId)}`),
   deleteUser: (id: number) => fetchWithAuth<any>(`/api/users/${id}`, { method: "DELETE" }),
   createOperator: (data: any) => fetchWithAuth<User>("/api/users/operator", { method: "POST", body: JSON.stringify(data) }),
   getAuditLogs: () => fetchWithAuth<AuditLog[]>("/api/audit-logs"),
@@ -184,7 +252,10 @@ export const api = {
     fetchWithAuth<User>(`/api/users/${id}`, { method: "PUT", body: JSON.stringify({ is_active: true }) }),
   /** Reset user password (operator only) */
   resetPassword: (id: number, newPassword: string) =>
-    fetchWithAuth<any>(`/api/users/${id}/reset-password`, { method: "POST", body: JSON.stringify({ new_password: newPassword }) }),
+    fetchWithAuth<any>(`/api/users/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ new_password: newPassword, password: newPassword }),
+    }),
   /** Assign (or reassign) a teacher to a subject */
   assignTeacher: (subjectId: number, teacherId: number) =>
     fetchWithAuth<Subject>(`/api/subjects/${subjectId}`, { method: "PUT", body: JSON.stringify({ teacher_id: teacherId }) }),
@@ -219,8 +290,6 @@ export const api = {
   /** Promote or demote a student's grade */
   updateStudentGrade: (studentId: number, gradeLevelId: number) =>
     fetchWithAuth<any>(`/api/users/${studentId}/grade`, { method: "PUT", body: JSON.stringify({ grade_level_id: gradeLevelId }) }),
-  /** Get per-question exam review detail */
-  getExamReview: (examId: number) => fetchWithAuth<any>(`/api/exams/${examId}/review`),
   /** Trigger results CSV download */
   exportResultsCsv: () => {
     // Direct window navigation so the browser handles the file download
@@ -238,6 +307,8 @@ export const api = {
   getStudents: () => fetchWithAuth<User[]>("/api/users?role=student"),
   /** Full student profile: enrolled subjects + exam stats */
   getMyProfile: () => fetchWithAuth<any>("/api/users/me/profile"),
+  /** Get live student telemetry: day streak, today's goal, cohort rank */
+  getStudentTelemetry: () => fetchWithAuth<import("./types").StudentTelemetry>("/api/student/telemetry"),
   /** Bulk-enroll all active students in a grade into a subject */
   bulkEnrollByGrade: (subjectId: number, grade: string) =>
     fetchWithAuth<any>(`/api/subjects/${subjectId}/students/bulk`, { method: "POST", body: JSON.stringify({ grade }) }),
@@ -305,9 +376,9 @@ export const api = {
   /** Sync offline answers */
   syncOfflineAssignments: (exams: any[]) => fetchWithAuth<{ synced: number }>("/api/offline/sync", { method: "POST", body: JSON.stringify({ exams }) }),
   /** Get system network and custom domain settings (Operator only) */
-  getSystemSettings: () => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings"),
+  getSystemSettings: () => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean; mdns_active?: boolean }>("/api/system/settings"),
   /** Update custom domain URL (Operator only) */
-  updateSystemSettings: (data: { custom_url: string }) => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean }>("/api/system/settings", { method: "PUT", body: JSON.stringify(data) }),
+  updateSystemSettings: (data: { custom_url: string }) => fetchWithAuth<{ custom_url: string; server_ip: string; server_port: number; dns_active: boolean; mdns_active?: boolean }>("/api/system/settings", { method: "PUT", body: JSON.stringify(data) }),
   /** Set institution type and seed grade levels */
   setInstitutionType: (type: string) => fetchWithAuth<{ seeded: boolean; type: string }>("/api/settings/institution-type", { method: "POST", body: JSON.stringify({ type }) }),
   /** Get recent server console log entries for the terminal panel (Operator only) */
@@ -345,4 +416,10 @@ export const api = {
     if (sessionId) url += `?sessionId=${sessionId}`;
     return fetchWithAuth<{ snapshots: any[] }>(url);
   },
+  /** Generic GET request helper */
+  get: <T = any>(url: string) => fetchWithAuth<T>(url),
+  /** Generic POST request helper */
+  post: <T = any>(url: string, data?: any) => fetchWithAuth<T>(url, { method: "POST", body: data ? JSON.stringify(data) : undefined }),
+  /** Generic DELETE request helper */
+  delete: <T = any>(url: string) => fetchWithAuth<T>(url, { method: "DELETE" }),
 };

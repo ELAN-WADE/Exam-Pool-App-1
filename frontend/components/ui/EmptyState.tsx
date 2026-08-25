@@ -1,14 +1,17 @@
 import React from "react";
 import styles from "./EmptyState.module.css";
 
-interface EmptyStateProps {
+export interface EmptyStateProps {
   icon?: React.ReactNode;
   title: string;
-  description: string;
+  description?: string;
+  subtitle?: string;
   action?: React.ReactNode;
 }
 
-export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, subtitle, action }: EmptyStateProps) {
+  const desc = description || subtitle || "";
+
   return (
     <div className={styles.emptyStateContainer}>
       <div className={styles.iconWrapper}>
@@ -20,7 +23,7 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
         )}
       </div>
       <h3 className={styles.title}>{title}</h3>
-      <p className={styles.description}>{description}</p>
+      {desc && <p className={styles.description}>{desc}</p>}
       {action && <div className={styles.actionWrapper}>{action}</div>}
     </div>
   );

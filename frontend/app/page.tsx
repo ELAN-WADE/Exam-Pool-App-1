@@ -9,7 +9,7 @@ function StudentLoginHero() {
     <div className={styles.heroPanl}>
       <div className={styles.heroBrand}>
         <div className={styles.heroBrandIcon}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
             <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
           </svg>
         </div>
@@ -21,16 +21,16 @@ function StudentLoginHero() {
           Exams made<br />simple.
         </h2>
         <p className={styles.heroSub}>
-          A fast, reliable Local Area Network examination platform designed for students to take exams seamlessly.
+          Fast, reliable Local Area Network assessment platform for taking exams seamlessly.
         </p>
       </div>
 
       <div className={styles.heroFeatures}>
         {[
-          "Works fully offline on your LAN",
-          "Supports MCQ, True/False & Essays",
-          "Real-time auto-save during exams",
-          "Instant results & report cards",
+          "Fully offline on local LAN",
+          "MCQ, True/False & Essays",
+          "Real-time progress auto-save",
+          "Instant result scorecards",
         ].map((f) => (
           <div key={f} className={styles.heroFeatureItem}>
             <span className={styles.heroFeatureDot} />
@@ -50,17 +50,19 @@ export default function HomePage() {
       </div>
     }>
       <main className={styles.page}>
-        <StudentLoginHero />
-        <div className={styles.formPanl}>
-          <div className={styles.mobileBrand}>
-            <div className={styles.heroBrandIcon}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-              </svg>
+        <div className={styles.authContainer}>
+          <StudentLoginHero />
+          <div className={styles.formPanl}>
+            <div className={styles.mobileBrand}>
+              <div className={styles.heroBrandIcon}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                </svg>
+              </div>
+              <span className={styles.heroBrandName}>ExamPool</span>
             </div>
-            <span className={styles.heroBrandName}>ExamPool</span>
+            <LoginForm expectedRole="student" />
           </div>
-          <LoginForm expectedRole="student" />
         </div>
       </main>
     </Suspense>

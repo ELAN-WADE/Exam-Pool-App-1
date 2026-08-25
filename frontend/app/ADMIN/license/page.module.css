@@ -1,0 +1,485 @@
+/* ── License Management Module Styles ── */
+
+.container {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* ── Hero Status Card ── */
+.heroCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-lg, 16px);
+  padding: 1.75rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.heroActivated {
+  border-color: #CBD5E1;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.heroUnlicensed {
+  border-color: #E2E8F0;
+}
+
+.heroTop {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .heroTop {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.heroHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.heroIconBadge {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.heroIconActive {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.heroIconNeutral {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-muted, #64748B);
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.heroTitleGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.heroEyebrow {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748B;
+}
+
+.heroTitle {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #0F172A;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+/* ── License Metadata Grid ── */
+.metaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .metaGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.metaLabel {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748B;
+}
+
+.metaValue {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.metaMono {
+  font-family: var(--font-mono, 'Geist Mono', monospace);
+}
+
+/* ── Hardware Fingerprint Card ── */
+.fingerprintCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cardHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.cardTitle {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.cardSubtitle {
+  font-size: 0.78rem;
+  color: #64748B;
+  margin: 0.15rem 0 0 0;
+}
+
+/* Specs Row */
+.specsRow {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.specPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  background: #F1F5F9;
+  font-size: 0.72rem;
+}
+
+.specKey {
+  font-weight: 600;
+  color: #64748B;
+}
+
+.specVal {
+  font-family: var(--font-mono, 'Geist Mono', monospace);
+  font-weight: 600;
+  color: #1E293B;
+}
+
+.fingerprintBox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+@media (min-width: 640px) {
+  .fingerprintBox {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.fingerprintCode {
+  font-family: var(--font-mono, 'Geist Mono', monospace);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0F172A;
+  letter-spacing: 0.05em;
+}
+
+.copyButton {
+  flex-shrink: 0;
+}
+
+.lockNotice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.78rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+/* ── Feature Capabilities Section ── */
+.featuresSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sectionHeading {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0F172A;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .featuresGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.featureCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+
+.featureIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #F1F5F9;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.featureContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+}
+
+.featureHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.featureTitle {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.featureDesc {
+  font-size: 0.75rem;
+  color: #64748B;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* ── Upload Master License File ── */
+.uploadCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.dropzone {
+  position: relative;
+  border: 2px dashed #CBD5E1;
+  border-radius: 12px;
+  padding: 1.75rem 1.5rem;
+  text-align: center;
+  background: #F8FAFC;
+  transition: all 150ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.dropzone:hover,
+.dropzoneActive {
+  border-color: #64748B;
+  background: #F1F5F9;
+}
+
+.dropzoneFileInput {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.dropzoneIcon {
+  color: #64748B;
+  margin-bottom: 0.5rem;
+}
+
+.dropzoneTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.dropzoneSub {
+  font-size: 0.75rem;
+  color: #64748B;
+  margin-top: 0.25rem;
+}
+
+/* ── Stepper Guide ── */
+.stepperCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.stepsGrid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .stepsGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.stepItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.stepNumber {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #64748B;
+}
+
+.stepTitle {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.stepText {
+  font-size: 0.75rem;
+  color: #64748B;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* ── Alerts & Loading ── */
+.alertBanner {
+  padding: 0.85rem 1.25rem;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.alertError {
+  background: #FEF2F2;
+  border: 1px solid #FCA5A5;
+  color: #991B1B;
+}
+
+.alertSuccess {
+  background: #F0FDF4;
+  border: 1px solid #86EFAC;
+  color: #166534;
+}
+
+.alertClose {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+.alertClose:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.loadingContainer {
+  padding: 4rem 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}

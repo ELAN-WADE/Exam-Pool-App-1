@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { api } from "../../lib/api";
 
 type ReviewModalProps = {
@@ -22,16 +22,19 @@ export function ReviewModal({
   const [marksToAward, setMarksToAward] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localReviewData, setLocalReviewData] = useState<any>(reviewData);
+  const [error, setError] = useState<string | null>(null);
 
   // Sync local data if props change
-  if (reviewData && reviewData !== localReviewData && !gradingQuestion && !isSubmitting) {
-    setLocalReviewData(reviewData);
-  }
+  useEffect(() => {
+    if (reviewData && reviewData !== localReviewData && !gradingQuestion && !isSubmitting) {
+      setLocalReviewData(reviewData);
+    }
+  }, [reviewData, localReviewData, gradingQuestion, isSubmitting]);
 
   const handleGradeSubmit = async (questionId: number, maxMarks: number) => {
     const marks = Number(marksToAward);
     if (isNaN(marks) || marks < 0 || marks > maxMarks) {
-      alert(`Invalid marks. Must be between 0 and ${maxMarks}.`);
+      setError(`Invalid marks. Must be between 0 and ${maxMarks}.`);
       return;
     }
     
@@ -64,7 +67,7 @@ export function ReviewModal({
         onGradeUpdate(examId, newTotal);
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to grade essay");
+      setError(err instanceof Error ? err.message : "Failed to grade essay");
     } finally {
       setIsSubmitting(false);
     }
@@ -83,6 +86,12 @@ export function ReviewModal({
           <button className="btn btn-ghost btn-sm" onClick={onClose}>✕</button>
         </div>
         
+        {error && (
+          <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 8, padding: "0.6rem 1rem", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "var(--color-danger)", fontSize: "0.85rem" }}>{error}</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setError(null)} style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}>✕</button>
+          </div>
+        )}
         {reviewLoading ? (
           <div className="loadingWrap"><div className="spinner" /></div>
         ) : localReviewData ? (

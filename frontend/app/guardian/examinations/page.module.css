@@ -1,0 +1,168 @@
+/* ── Examinations Mobile Screen Styles ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pageTitle {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #0F172A;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.tabList {
+  display: flex;
+  gap: 0.4rem;
+  background: #F1F5F9;
+  padding: 0.25rem;
+  border-radius: 12px;
+}
+
+.tabBtn {
+  flex: 1;
+  padding: 0.4rem 0.5rem;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748B;
+  cursor: pointer;
+  transition: all 140ms ease;
+  text-align: center;
+}
+
+.tabBtnActive {
+  background: #FFFFFF !important;
+  color: #0F172A !important;
+  font-weight: 700 !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.examList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.examCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.cardMainRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.dateBox {
+  width: 46px;
+  height: 52px;
+  background: #EFF4FF;
+  border: 1px solid #DBEAFE;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dateMonth {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  color: #165AF6;
+  text-transform: uppercase;
+}
+
+.dateDay {
+  font-size: 1.0625rem;
+  font-weight: 800;
+  color: #0F172A;
+  line-height: 1;
+}
+
+.dateWeekday {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+}
+
+.examInfoCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+}
+
+.examTitleLine {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.examTitle {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.statusPill {
+  font-size: 0.625rem;
+  font-weight: 700;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+
+.statusLive {
+  background: #ECFDF5;
+  color: #059669;
+  border: 1px solid #A7F3D0;
+}
+
+.statusUpcoming {
+  background: #EFF4FF;
+  color: #165AF6;
+  border: 1px solid #DBEAFE;
+}
+
+.statusCompleted {
+  background: #F1F5F9;
+  color: #64748B;
+  border: 1px solid #E2E8F0;
+}
+
+.timeAndVenue {
+  font-size: 0.75rem;
+  color: #64748B;
+}
+
+.instructionsBox {
+  padding: 0.65rem 0.75rem;
+  background: #F8FAFC;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  color: #475569;
+  line-height: 1.4;
+  border: 1px solid #F1F5F9;
+}

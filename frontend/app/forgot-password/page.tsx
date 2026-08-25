@@ -82,173 +82,189 @@ export default function ForgotPasswordPage() {
 
   return (
     <main className={styles.page}>
-      {/* ── Left Hero ── */}
-      <div className={styles.heroPanl}>
-        <div className={styles.heroBrand}>
-          <div className={styles.heroBrandIcon}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
-              <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
-            </svg>
+      <div className={styles.authContainer}>
+        {/* ── Left Hero ── */}
+        <div className={styles.heroPanl}>
+          <div className={styles.heroBrand}>
+            <div className={styles.heroBrandIcon}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+              </svg>
+            </div>
+            <span className={styles.heroBrandName}>ExamPool</span>
           </div>
-          <span className={styles.heroBrandName}>ExamPool</span>
-        </div>
 
-        <div className={styles.heroBody}>
-          <h2 className={styles.heroTitle}>
-            Regain<br />access.
-          </h2>
-          <p className={styles.heroSub}>
-            Securely reset your password using your offline profile details.
-          </p>
-        </div>
-      </div>
-
-      {/* ── Right Form ── */}
-      <div className={styles.formPanl}>
-        <div className={styles.formWrap}>
-          <div className={styles.formHeader}>
-            <h1 className={styles.formTitle}>Reset Password</h1>
-            <p className={styles.formSubtitle}>
-              Remembered your password?{" "}
-              <Link href="/" className={styles.formSubtitleLink}>Sign in →</Link>
+          <div className={styles.heroBody}>
+            <h2 className={styles.heroTitle}>
+              Regain<br />access.
+            </h2>
+            <p className={styles.heroSub}>
+              Securely reset your password using your offline profile details.
             </p>
           </div>
 
-          {success ? (
-            <div className={styles.form}>
-              <div className={styles.alertSuccess}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                {success}
-              </div>
-              <button 
-                type="button" 
-                className={styles.submitBtn} 
-                onClick={() => router.push("/")}
-              >
-                Back to Sign in
-              </button>
+          <div className={styles.heroFeatures}>
+            <div className={styles.heroFeatureItem}>
+              <span className={styles.heroFeatureDot} />
+              <span>Offline profile verification</span>
             </div>
-          ) : (
-            <>
-              {error && (
-                <div className={styles.alertError}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ flexShrink: 0, marginTop: "1px" }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                  {error}
+            <div className={styles.heroFeatureItem}>
+              <span className={styles.heroFeatureDot} />
+              <span>Argon2id credential update</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Right Form ── */}
+        <div className={styles.formPanl}>
+          <div className={styles.formWrap}>
+            <div className={styles.formHeader}>
+              <h1 className={styles.formTitle}>Reset Password</h1>
+              <p className={styles.formSubtitle}>
+                Remembered your password?{" "}
+                <Link href="/" className={styles.formSubtitleLink}>Sign in →</Link>
+              </p>
+            </div>
+
+            {success ? (
+              <div className={styles.form}>
+                <div className={styles.alertSuccess}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  {success}
                 </div>
-              )}
-
-              {step === 1 ? (
-                <form onSubmit={handleEmailSubmit} className={styles.form}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel} htmlFor="reset-email">Registration ID or Email</label>
-                    <input
-                      id="reset-email"
-                      type="text"
-                      className={styles.fieldInput}
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="REG-XXXX or teacher@school.edu"
-                      required
-                    />
+                <button 
+                  type="button" 
+                  className={styles.submitBtn} 
+                  onClick={() => router.push("/")}
+                >
+                  Back to Sign in
+                </button>
+              </div>
+            ) : (
+              <>
+                {error && (
+                  <div className={styles.alertError}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ flexShrink: 0, marginTop: "1px" }}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    {error}
                   </div>
+                )}
 
-                  <button type="submit" className={styles.submitBtn} disabled={submitting}>
-                    {submitting ? (
-                      <>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
-                        Verifying…
-                      </>
-                    ) : "Next →"}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleResetSubmit} className={styles.form}>
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel} htmlFor="reset-verification">
-                      {role === "student" ? "Date of Birth (YYYY-MM-DD)" : "Phone Number"}
-                    </label>
-                    <input
-                      id="reset-verification"
-                      type={role === "student" ? "date" : "tel"}
-                      className={styles.fieldInput}
-                      value={verification}
-                      onChange={(e) => setVerification(e.target.value)}
-                      placeholder={role === "student" ? "YYYY-MM-DD" : "+1234567890"}
-                      required
-                    />
-                  </div>
-
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel} htmlFor="reset-new-password">New Password</label>
-                    <div style={{ position: "relative" }}>
+                {step === 1 ? (
+                  <form onSubmit={handleEmailSubmit} className={styles.form}>
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="reset-email">Registration ID or Email</label>
                       <input
-                        id="reset-new-password"
+                        id="reset-email"
+                        type="text"
+                        className={styles.fieldInput}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="REG-XXXX or teacher@school.edu"
+                        required
+                        autoFocus
+                      />
+                    </div>
+
+                    <button type="submit" className={styles.submitBtn} disabled={submitting}>
+                      {submitting ? (
+                        <>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
+                          Verifying…
+                        </>
+                      ) : "Next →"}
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleResetSubmit} className={styles.form}>
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="reset-verification">
+                        {role === "student" ? "Date of Birth (YYYY-MM-DD)" : "Phone Number"}
+                      </label>
+                      <input
+                        id="reset-verification"
+                        type={role === "student" ? "date" : "tel"}
+                        className={styles.fieldInput}
+                        value={verification}
+                        onChange={(e) => setVerification(e.target.value)}
+                        placeholder={role === "student" ? "YYYY-MM-DD" : "+1234567890"}
+                        required
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="reset-new-password">New Password</label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          id="reset-new-password"
+                          type={showPass ? "text" : "password"}
+                          className={styles.fieldInput}
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="••••••••"
+                          required
+                          minLength={6}
+                          style={{ paddingRight: "3rem" }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPass(!showPass)}
+                          style={{
+                            position: "absolute", right: "0.875rem", top: "50%", transform: "translateY(-50%)",
+                            background: "none", border: "none", cursor: "pointer", color: "var(--color-muted)",
+                            padding: "0", minHeight: "unset", display: "flex", alignItems: "center",
+                          }}
+                          tabIndex={-1}
+                          aria-label={showPass ? "Hide password" : "Show password"}
+                        >
+                          {showPass ? (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                          ) : (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className={styles.fieldGroup}>
+                      <label className={styles.fieldLabel} htmlFor="reset-confirm-password">Confirm Password</label>
+                      <input
+                        id="reset-confirm-password"
                         type={showPass ? "text" : "password"}
                         className={styles.fieldInput}
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••"
                         required
                         minLength={6}
-                        style={{ paddingRight: "3rem" }}
                       />
-                      <button
-                        type="button"
-                        onClick={() => setShowPass(!showPass)}
-                        style={{
-                          position: "absolute", right: "0.875rem", top: "50%", transform: "translateY(-50%)",
-                          background: "none", border: "none", cursor: "pointer", color: "var(--color-muted)",
-                          padding: "0", minHeight: "unset", display: "flex", alignItems: "center",
-                        }}
-                        tabIndex={-1}
-                      >
-                        {showPass ? (
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                        ) : (
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                        )}
-                      </button>
                     </div>
-                  </div>
-                  
-                  <div className={styles.fieldGroup}>
-                    <label className={styles.fieldLabel} htmlFor="reset-confirm-password">Confirm Password</label>
-                    <input
-                      id="reset-confirm-password"
-                      type={showPass ? "text" : "password"}
-                      className={styles.fieldInput}
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder="••••••••"
-                      required
-                      minLength={6}
-                    />
-                  </div>
 
-                  <button type="submit" className={styles.submitBtn} disabled={submitting}>
-                    {submitting ? (
-                      <>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
-                        Resetting…
-                      </>
-                    ) : "Reset Password"}
-                  </button>
-                  
-                  <button 
-                    type="button" 
-                    onClick={() => setStep(1)} 
-                    style={{ 
-                      background: "none", border: "none", color: "var(--color-muted)", 
-                      cursor: "pointer", fontSize: "0.875rem", marginTop: "0.5rem",
-                      textDecoration: "underline"
-                    }}
-                  >
-                    ← Back to Email
-                  </button>
-                </form>
-              )}
-            </>
-          )}
+                    <button type="submit" className={styles.submitBtn} disabled={submitting}>
+                      {submitting ? (
+                        <>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: "spin 0.8s linear infinite" }}><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" opacity="0.25"/><path d="M21 12a9 9 0 00-9-9"/></svg>
+                          Resetting…
+                        </>
+                      ) : "Reset Password"}
+                    </button>
+                    
+                    <button 
+                      type="button" 
+                      onClick={() => setStep(1)} 
+                      style={{ 
+                        background: "none", border: "none", color: "var(--color-muted)", 
+                        cursor: "pointer", fontSize: "0.8125rem", marginTop: "0.35rem",
+                        textDecoration: "underline", alignSelf: "center"
+                      }}
+                    >
+                      ← Back to Email
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </main>

@@ -1,0 +1,126 @@
+{
+  "name": "ExamPool Guardian",
+  "short_name": "Guardian",
+  "description": "Monitor your child's academic progress and stay connected with their education",
+  "start_url": "/guardian/dashboard",
+  "scope": "/guardian/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F8FAFC",
+  "theme_color": "#6366F1",
+  "lang": "en",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/guardian-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/guardian-192x192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/guardian-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/guardian-512x512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/guardian-mobile-1.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Guardian Dashboard"
+    },
+    {
+      "src": "/screenshots/guardian-mobile-2.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "Ward Results"
+    },
+    {
+      "src": "/screenshots/guardian-mobile-wards.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "mobile",
+      "label": "My Wards"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "My Dashboard",
+      "short_name": "Dashboard",
+      "description": "View your guardian dashboard",
+      "url": "/guardian/dashboard",
+      "icons": [
+        {
+          "src": "/icons/shortcut-guardian-dashboard.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "My Wards",
+      "short_name": "Wards",
+      "description": "View your linked students",
+      "url": "/guardian/wards",
+      "icons": [
+        {
+          "src": "/icons/shortcut-wards.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Recent Results",
+      "short_name": "Results",
+      "description": "View latest exam results",
+      "url": "/guardian/wards/results",
+      "icons": [
+        {
+          "src": "/icons/shortcut-results.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Link New Ward",
+      "short_name": "Link",
+      "description": "Link a new student to your account",
+      "url": "/guardian/links",
+      "icons": [
+        {
+          "src": "/icons/shortcut-link.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Settings",
+      "short_name": "Settings",
+      "description": "Manage your guardian settings",
+      "url": "/guardian/settings",
+      "icons": [
+        {
+          "src": "/icons/shortcut-settings.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false
+}

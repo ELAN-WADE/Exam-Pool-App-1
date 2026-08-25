@@ -1,0 +1,247 @@
+/* ── Minimalist Teacher Assignments CSS (Neutral-First) ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* ── Minimalist KPI Metrics Row ─────────────────────────── */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.875rem;
+}
+
+.statCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.5rem;
+  transition: border-color 150ms ease;
+}
+
+.statCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+.statTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.statLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statIcon {
+  color: var(--color-muted-2, #94A3B8);
+  display: flex;
+  align-items: center;
+}
+
+.statValue {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text, #0F172A);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.statFootnote {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+}
+
+/* ── Course Grid ────────────────────────────────────────── */
+.courseGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.courseCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+  transition: all 150ms ease;
+}
+
+.courseCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+}
+
+.courseCardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.courseName {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  line-height: 1.3;
+}
+
+.codeBadge {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface-2, #F1F5F9);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #E2E8F0);
+}
+
+.statusTag {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.statusLive {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #CBD5E1);
+}
+
+.statusDraft {
+  background: transparent;
+  color: var(--color-muted, #64748B);
+  border: 1px dashed var(--color-border, #E2E8F0);
+}
+
+.courseMetaGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.metaItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.metaLabel {
+  font-size: 0.6875rem;
+  color: var(--color-muted, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metaValue {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.courseActions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.primaryActionBtn {
+  flex: 1;
+  text-align: center;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: var(--color-primary, #0F172A);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.primaryActionBtn:hover {
+  background: #1E293B;
+}
+
+.secondaryActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: all 120ms ease;
+}
+
+.secondaryActionBtn:hover {
+  background: var(--color-surface-2, #F8FAFC);
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+/* ── Form Inputs ─────────────────────────────────────────── */
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.formLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.formInput,
+.formSelect {
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.8125rem;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #CBD5E1);
+  border-radius: 6px;
+  outline: none;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
+}

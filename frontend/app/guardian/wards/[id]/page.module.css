@@ -1,0 +1,121 @@
+/* ── Ward Profile Mobile Screen Styles ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.profileHero {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 20px;
+  padding: 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.avatarLarge {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #165AF6 0%, #0D47C9 100%);
+  color: #FFFFFF;
+  font-size: 1.5rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(22, 90, 246, 0.25);
+  border: 3px solid #EFF4FF;
+}
+
+.heroName {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: #0F172A;
+  margin: 0;
+}
+
+.heroMeta {
+  font-size: 0.75rem;
+  color: #64748B;
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.infoCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 18px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.cardTitle {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.infoItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.infoLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+}
+
+.infoValue {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.actionLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 14px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #0F172A;
+  text-decoration: none;
+  transition: all 140ms ease;
+}
+
+.actionBtn:hover {
+  background: #EFF4FF;
+  border-color: #DBEAFE;
+  color: #165AF6;
+}

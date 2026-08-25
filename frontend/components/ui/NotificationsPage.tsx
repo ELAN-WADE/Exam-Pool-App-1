@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchWithAuth } from "../../lib/api";
+import { PageHeader, Button } from "./index";
+import { BookIcon, CheckCircleIcon, DocumentIcon } from "../icons/Icons";
 
 type Notification = {
   id: number;
@@ -13,47 +15,22 @@ type Notification = {
   created_at: string;
 };
 
-/* ── Type → icon/colour mapping ─────────────────────────── */
-const TYPE_META: Record<string, { icon: React.ReactNode; colour: string; label: string }> = {
+const TYPE_META: Record<string, { label: string; icon: React.ReactNode }> = {
   exam_submitted: {
-    label: "Exam Submitted",
-    colour: "#4f7cff",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-        <polyline points="22 4 12 14.01 9 11.01" />
-      </svg>
-    ),
+    label: "Exam Submission",
+    icon: <CheckCircleIcon width="16" height="16" />,
   },
   subject_published: {
-    label: "Questions Ready",
-    colour: "#22c55e",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-        <path d="M4 19.5A2.5 2.5 0 016.5 17H20" />
-        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
-      </svg>
-    ),
+    label: "Questions Published",
+    icon: <BookIcon width="16" height="16" />,
   },
   remark_added: {
-    label: "Remark Added",
-    colour: "#f59e0b",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
+    label: "Broadsheet Remark",
+    icon: <DocumentIcon width="16" height="16" />,
   },
   info: {
-    label: "Info",
-    colour: "#38bdf8",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-        <circle cx="12" cy="12" r="10" />
-        <line x1="12" y1="8" x2="12" y2="12" />
-        <line x1="12" y1="16" x2="12.01" y2="16" />
-      </svg>
-    ),
+    label: "System Alert",
+    icon: <DocumentIcon width="16" height="16" />,
   },
 };
 
@@ -78,7 +55,6 @@ export function NotificationsPage() {
     loadNotifications();
   }, []);
 
-  /* Live SSE: increment badge + prepend new notification to the list */
   useEffect(() => {
     const handler = (e: Event) => {
       const notif = (e as CustomEvent).detail as Notification;
@@ -95,8 +71,8 @@ export function NotificationsPage() {
       const res = await fetchWithAuth("/api/notifications");
       setNotifications(res?.items || []);
       await fetchWithAuth("/api/notifications/read", { method: "PUT" });
-    } catch (e) {
-      console.error(e);
+    } catch {
+      // Silently fail
     } finally {
       setLoading(false);
     }
@@ -107,34 +83,17 @@ export function NotificationsPage() {
     filter === "all" ? notifications : notifications.filter((n) => n.type === filter);
 
   return (
-    <div style={{ maxWidth: 860, margin: "0 auto", padding: "0.25rem 0 3rem" }}>
-      {/* ── Header ── */}
-      <div style={{ marginBottom: "1.75rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.35rem" }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: "50%",
-            background: "var(--color-primary-glow)",
-            color: "var(--color-primary)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-            </svg>
-          </div>
-          <div>
-            <h1 style={{ fontSize: "1.5rem", fontWeight: 800, margin: 0 }}>Live Updates</h1>
-            <p style={{ color: "var(--color-muted)", fontSize: "0.85rem", margin: 0, display: "flex", alignItems: "center", gap: "0.4rem" }}>
-              <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px rgba(34,197,94,0.7)" }} />
-              Real-time — updates push automatically
-            </p>
-          </div>
-        </div>
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem", width: "100%" }}>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="System Events & Activity"
+        title="Live Updates & Notifications"
+        subtitle="Chronological event feed of examination submissions, question publishing, and broadsheet updates."
+      />
 
-      {/* ── Filter pills ── */}
+      {/* ── Filter Pills ──────────────────────────────────── */}
       {types.length > 1 && (
-        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1.25rem" }}>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           {types.map((t) => {
             const meta = getTypeMeta(t);
             const active = filter === t;
@@ -143,56 +102,48 @@ export function NotificationsPage() {
                 key={t}
                 onClick={() => setFilter(t)}
                 style={{
-                  padding: "0.35rem 1rem",
-                  borderRadius: 9999,
-                  border: `1.5px solid ${active ? meta.colour : "var(--color-border)"}`,
-                  background: active ? `${meta.colour}18` : "transparent",
-                  color: active ? meta.colour : "var(--color-muted)",
-                  fontSize: "0.8rem",
+                  padding: "0.35rem 0.75rem",
+                  borderRadius: "6px",
+                  border: `1px solid ${active ? "var(--color-border-hover, #CBD5E1)" : "var(--color-border, #E2E8F0)"}`,
+                  background: active ? "var(--color-surface-2, #F1F5F9)" : "#FFFFFF",
+                  color: "var(--color-text, #0F172A)",
+                  fontSize: "0.75rem",
                   fontWeight: active ? 700 : 500,
                   cursor: "pointer",
-                  transition: "all 0.15s",
-                  textTransform: "capitalize",
+                  transition: "all 120ms ease",
                 }}
               >
-                {t === "all" ? "All" : meta.label}
+                {t === "all" ? "All Updates" : meta.label}
               </button>
             );
           })}
         </div>
       )}
 
-      {/* ── Content ── */}
+      {/* ── Notifications List ────────────────────────────── */}
       {loading ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-          {[1, 2, 3].map((i) => (
-            <div key={i} style={{
-              height: 72, borderRadius: 12, background: "var(--color-surface)",
-              border: "1px solid var(--color-border)", animation: "pulse 1.5s infinite",
-            }} />
-          ))}
+        <div style={{ textAlign: "center", padding: "3rem", color: "var(--color-muted)", fontSize: "0.8125rem" }}>
+          Loading notification feed…
         </div>
       ) : filtered.length === 0 ? (
-        <div style={{
-          background: "var(--color-surface)",
-          border: "1.5px dashed var(--color-border)",
-          borderRadius: 14,
-          padding: "3.5rem 2rem",
-          textAlign: "center",
-        }}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--color-muted)" strokeWidth="1.5" style={{ marginBottom: "1rem" }}>
-            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-          </svg>
-          <p style={{ fontWeight: 600, color: "var(--color-text)", margin: "0 0 0.25rem" }}>
-            {filter === "all" ? "No notifications yet" : `No "${getTypeMeta(filter).label}" notifications`}
-          </p>
-          <p style={{ color: "var(--color-muted)", fontSize: "0.875rem", margin: 0 }}>
-            Activities from teachers will appear here in real-time.
-          </p>
+        <div
+          style={{
+            background: "var(--color-surface, #FFFFFF)",
+            border: "1px dashed var(--color-border, #E2E8F0)",
+            borderRadius: "12px",
+            padding: "3.5rem 2rem",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontWeight: 600, color: "var(--color-text)", fontSize: "0.9375rem", marginBottom: "0.25rem" }}>
+            No Updates Recorded
+          </div>
+          <div style={{ color: "var(--color-muted)", fontSize: "0.75rem" }}>
+            Real-time candidate submissions and faculty actions will appear here.
+          </div>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
           {filtered.map((notif) => {
             const meta = getTypeMeta(notif.type);
             const isUnread = !notif.is_read;
@@ -200,71 +151,93 @@ export function NotificationsPage() {
               <div
                 key={notif.id}
                 style={{
-                  background: "var(--color-surface)",
-                  border: `1.5px solid ${isUnread ? meta.colour + "50" : "var(--color-border)"}`,
-                  borderLeft: `4px solid ${isUnread ? meta.colour : "var(--color-border)"}`,
-                  borderRadius: 12,
+                  background: "var(--color-surface, #FFFFFF)",
+                  border: "1px solid var(--color-border, #E2E8F0)",
+                  borderRadius: "10px",
                   padding: "1rem 1.25rem",
                   display: "flex",
                   alignItems: "center",
+                  justifyContent: "space-between",
                   gap: "1rem",
-                  boxShadow: isUnread ? `0 2px 12px ${meta.colour}18` : "none",
-                  transition: "box-shadow 0.2s, border-color 0.2s",
+                  transition: "border-color 150ms ease",
                 }}
               >
-                {/* Icon bubble */}
-                <div style={{
-                  width: 40, height: 40, borderRadius: "50%", flexShrink: 0,
-                  background: `${meta.colour}18`,
-                  color: meta.colour,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  {meta.icon}
-                </div>
-
-                {/* Body */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.2rem" }}>
-                    <span style={{
-                      fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase",
-                      letterSpacing: "0.06em", color: meta.colour,
-                    }}>
-                      {meta.label}
-                    </span>
-                    {isUnread && (
-                      <span style={{
-                        width: 7, height: 7, borderRadius: "50%",
-                        background: meta.colour, display: "inline-block",
-                      }} />
-                    )}
-                  </div>
-                  <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--color-text)", fontWeight: isUnread ? 600 : 400, lineHeight: 1.45 }}>
-                    {notif.message}
-                  </p>
-                  <span style={{ fontSize: "0.78rem", color: "var(--color-muted)", marginTop: "0.25rem", display: "block" }}>
-                    {timeAgo(notif.created_at)}
-                  </span>
-                </div>
-
-                {/* CTA */}
-                {notif.link && (
-                  <Link
-                    href={notif.link}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.875rem", minWidth: 0 }}>
+                  <div
                     style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "6px",
+                      background: "var(--color-surface-2, #F1F5F9)",
+                      border: "1px solid var(--color-border, #E2E8F0)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--color-text, #0F172A)",
                       flexShrink: 0,
-                      padding: "0.45rem 1rem",
-                      background: `${meta.colour}18`,
-                      color: meta.colour,
-                      textDecoration: "none",
-                      borderRadius: 8,
-                      fontSize: "0.82rem",
-                      fontWeight: 600,
-                      border: `1px solid ${meta.colour}30`,
-                      whiteSpace: "nowrap",
-                      transition: "background 0.15s",
                     }}
                   >
-                    View →
+                    {meta.icon}
+                  </div>
+
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <span
+                        style={{
+                          fontSize: "0.6875rem",
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.04em",
+                          color: "var(--color-muted, #64748B)",
+                        }}
+                      >
+                        {meta.label}
+                      </span>
+                      {isUnread && (
+                        <span
+                          style={{
+                            width: "5px",
+                            height: "5px",
+                            borderRadius: "50%",
+                            background: "var(--color-primary, #0F172A)",
+                            display: "inline-block",
+                          }}
+                        />
+                      )}
+                    </div>
+                    <p
+                      style={{
+                        margin: "0.2rem 0 0",
+                        fontSize: "0.875rem",
+                        color: "var(--color-text, #0F172A)",
+                        fontWeight: isUnread ? 600 : 400,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {notif.message}
+                    </p>
+                    <span
+                      style={{
+                        fontSize: "0.6875rem",
+                        color: "var(--color-muted, #64748B)",
+                        fontFamily: "var(--font-mono, monospace)",
+                        marginTop: "0.25rem",
+                        display: "block",
+                      }}
+                    >
+                      {timeAgo(notif.created_at)}
+                    </span>
+                  </div>
+                </div>
+
+                {notif.link && (
+                  <Link
+                    href={notif.link.replace(/^\/operator\//, "/ADMIN/")}
+                    style={{ textDecoration: "none", flexShrink: 0 }}
+                  >
+                    <Button variant="secondary" size="xs">
+                      View →
+                    </Button>
                   </Link>
                 )}
               </div>

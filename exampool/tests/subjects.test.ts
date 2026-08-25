@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { apiGet, apiPost, apiPut, apiDelete, extractToken, json } from "./helpers";
+import { apiGet, apiPost, apiPut, apiDelete, extractToken, json, TEST_OPERATOR_EMAIL, TEST_OPERATOR_PASSWORD, TEST_OPERATOR_NAME } from "./helpers";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -26,13 +26,13 @@ const BASE_TS = Date.now();
 beforeAll(async () => {
   // Operator setup or login
   const setupRes = await apiPost("/api/setup", {
-    name: "Subj Op", email: `op_subj_${BASE_TS}@q.test`,
-    password: "Operator@123", schoolName: "Subj School", currentTerm: "2026-T1",
+    name: TEST_OPERATOR_NAME, email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD,
+    schoolName: "Subj School", currentTerm: "2026-T1",
   });
   if (setupRes.status === 201) {
     operatorToken = extractToken(setupRes, await json(setupRes));
   } else {
-    const lr = await apiPost("/api/auth/login", { email: `op_subj_${BASE_TS}@q.test`, password: "Operator@123" });
+    const lr = await apiPost("/api/auth/login", { email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD });
     operatorToken = extractToken(lr, await json(lr));
   }
 

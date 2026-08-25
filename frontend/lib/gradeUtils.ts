@@ -12,11 +12,13 @@ export function scorePct(score: number | null | undefined, totalScore: number | 
   return t > 0 ? Math.round((s / t) * 100) : 0;
 }
 
-/** Convert a percentage to a letter grade (A/B/C/F). */
-export function letterGrade(pct: number): "A" | "B" | "C" | "F" {
-  if (pct >= 70) return "A";
-  if (pct >= 55) return "B";
-  if (pct >= 40) return "C";
+/** Convert a percentage to a letter grade using the school's default 6-tier scale. */
+export function letterGrade(pct: number): "A" | "B" | "C" | "D" | "E" | "F" {
+  if (pct >= 75) return "A";
+  if (pct >= 65) return "B";
+  if (pct >= 55) return "C";
+  if (pct >= 45) return "D";
+  if (pct >= 40) return "E";
   return "F";
 }
 

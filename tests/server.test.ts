@@ -18,9 +18,7 @@ const OPERATOR_PASSWORD = "Secure@123";
 
 beforeAll(async () => {
   // If server is fresh (empty DB), call /api/setup. Otherwise login.
-  const info = await apiGet("/api/server-info");
-  expect(info.status).toBe(200);
-
+  // (server-info now requires operator auth — checked in T-001-A after login.)
   const setupRes = await apiPost("/api/setup", {
     name:        "Test Operator",
     email:       OPERATOR_EMAIL,
@@ -46,8 +44,8 @@ beforeAll(async () => {
 // ── T-001  SERVER STARTUP & NETWORK ─────────────────────────────────────────
 
 describe("T-001  Server health & network", () => {
-  test("T-001-A  GET /api/server-info returns 200 with ip and port", async () => {
-    const res  = await apiGet("/api/server-info");
+  test("T-001-A  GET /api/server-info returns 200 with ip and port (operator auth)", async () => {
+    const res  = await apiGet("/api/server-info", operatorToken);
     const body = await json(res);
     expect(res.status).toBe(200);
     expect(body.data).toHaveProperty("ip");
@@ -55,8 +53,13 @@ describe("T-001  Server health & network", () => {
     expect(typeof body.data.port).toBe("number");
   });
 
-  test("T-001-B  CORS headers present on all API responses", async () => {
+  test("T-001-A2  GET /api/server-info is rejected for unauthenticated callers", async () => {
     const res = await apiGet("/api/server-info");
+    expect([401, 403]).toContain(res.status);
+  });
+
+  test("T-001-B  CORS headers present on all API responses", async () => {
+    const res = await apiGet("/api/server-info", operatorToken);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
     expect(res.headers.get("access-control-allow-methods")).toContain("GET");
   });
@@ -131,7 +134,7 @@ describe("T-002  Setup flow", () => {
 
 describe("T-003  server-info version field", () => {
   test("T-003-A  version string present", async () => {
-    const res  = await apiGet("/api/server-info");
+    const res  = await apiGet("/api/server-info", operatorToken);
     const body = await json(res);
     expect(body.data.version).toBeTruthy();
     expect(typeof body.data.version).toBe("string");

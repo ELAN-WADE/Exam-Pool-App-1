@@ -1,0 +1,242 @@
+.container {
+  padding: 1.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.25rem;
+}
+
+.pageTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text, #0F172A);
+  margin: 0;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 10px;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.searchInput {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 0.875rem;
+  width: 100%;
+  color: var(--color-text, #0F172A);
+}
+
+.threadsGrid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 1.25rem;
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 14px;
+  overflow: hidden;
+  min-height: 580px;
+}
+
+@media (max-width: 768px) {
+  .threadsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.threadsSidebar {
+  border-right: 1px solid var(--color-border, #E2E8F0);
+  overflow-y: auto;
+  max-height: 600px;
+  background: #F8FAFC;
+}
+
+.threadItem {
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.threadItem:hover {
+  background: #F1F5F9;
+}
+
+.threadItemActive {
+  background: #EFF6FF;
+  border-left: 3px solid #165AF6;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #DBEAFE;
+  color: #1D4ED8;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9375rem;
+  flex-shrink: 0;
+}
+
+.threadInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.threadNameRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.2rem;
+}
+
+.senderName {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #0F172A;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeLabel {
+  font-size: 0.75rem;
+  color: #94A3B8;
+  flex-shrink: 0;
+}
+
+.wardLabel {
+  font-size: 0.75rem;
+  color: #64748B;
+  margin-bottom: 0.25rem;
+}
+
+.lastMsg {
+  font-size: 0.8125rem;
+  color: #475569;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+.chatArea {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chatHeader {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  background: #FFFFFF;
+}
+
+.chatHeaderTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.chatHeaderSub {
+  font-size: 0.75rem;
+  color: #64748B;
+}
+
+.chatMessages {
+  flex: 1;
+  padding: 1.25rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: #F8FAFC;
+  max-height: 440px;
+}
+
+.bubbleTeacher {
+  align-self: flex-end;
+  background: #165AF6;
+  color: #FFFFFF;
+  padding: 0.75rem 1rem;
+  border-radius: 12px 12px 2px 12px;
+  max-width: 75%;
+  font-size: 0.875rem;
+}
+
+.bubbleGuardian {
+  align-self: flex-start;
+  background: #FFFFFF;
+  color: #0F172A;
+  border: 1px solid #E2E8F0;
+  padding: 0.75rem 1rem;
+  border-radius: 12px 12px 12px 2px;
+  max-width: 75%;
+  font-size: 0.875rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.chatInputRow {
+  padding: 1rem 1.25rem;
+  background: #FFFFFF;
+  border-top: 1px solid var(--color-border, #E2E8F0);
+  display: flex;
+  gap: 0.75rem;
+}
+
+.chatInput {
+  flex: 1;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--color-border, #CBD5E1);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.chatInput:focus {
+  border-color: #165AF6;
+}
+
+.sendBtn {
+  padding: 0.6rem 1.25rem;
+  background: #165AF6;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sendBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 3rem;
+  color: #94A3B8;
+  text-align: center;
+}

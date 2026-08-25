@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { apiGet, apiPost, apiPut, apiDelete, extractToken, json } from "./helpers";
+import { apiGet, apiPost, apiPut, apiDelete, extractToken, json, TEST_OPERATOR_EMAIL, TEST_OPERATOR_PASSWORD, TEST_OPERATOR_NAME } from "./helpers";
 
 // ── Shared state ─────────────────────────────────────────────────────────────
 
@@ -24,19 +24,19 @@ let q1Id          = 0;
 let q2Id          = 0;
 
 const BASE_TS = Date.now();
-// Exam window: starts 1 minute ago, lasts 60 minutes → currently open
-const EXAM_START = new Date(Date.now() - 60_000).toISOString();
+// Exam window: starts 30 seconds ago (within 1-min grace), lasts 60 minutes → currently open
+const EXAM_START = new Date(Date.now() - 30_000).toISOString();
 
 beforeAll(async () => {
   // ── Operator bootstrap ──
   const setupRes = await apiPost("/api/setup", {
-    name: "Exam Op", email: `op_exam_${BASE_TS}@q.test`,
-    password: "Operator@123", schoolName: "Exam School", currentTerm: "2026-T1",
+    name: TEST_OPERATOR_NAME, email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD,
+    schoolName: "Exam School", currentTerm: "2026-T1",
   });
   if (setupRes.status === 201) {
     operatorToken = extractToken(setupRes, await json(setupRes));
   } else {
-    const lr = await apiPost("/api/auth/login", { email: `op_exam_${BASE_TS}@q.test`, password: "Operator@123" });
+    const lr = await apiPost("/api/auth/login", { email: TEST_OPERATOR_EMAIL, password: TEST_OPERATOR_PASSWORD });
     operatorToken = extractToken(lr, await json(lr));
   }
 

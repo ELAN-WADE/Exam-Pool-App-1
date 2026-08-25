@@ -1,0 +1,274 @@
+/* ── Minimalist Annual Results & Promotion Workspace (Neutral-First) ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  width: 100%;
+  max-width: 100%;
+}
+
+/* ── Minimalist KPI Metrics Row ─────────────────────────── */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.875rem;
+}
+
+.statCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.5rem;
+  transition: border-color 150ms ease;
+}
+
+.statCard:hover {
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+.statTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.statLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748B);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.statIcon {
+  color: var(--color-muted-2, #94A3B8);
+  display: flex;
+  align-items: center;
+}
+
+.statValue {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text, #0F172A);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+.statFootnote {
+  font-size: 0.75rem;
+  color: var(--color-muted, #64748B);
+}
+
+/* ── Filter Strip ───────────────────────────────────────── */
+.filterStrip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.searchBox {
+  position: relative;
+  flex: 1;
+  min-width: 240px;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 0.45rem 0.75rem 0.45rem 2rem;
+  font-size: 0.8125rem;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+
+.searchInput:focus {
+  border-color: var(--color-border-hover, #CBD5E1);
+}
+
+.searchIcon {
+  position: absolute;
+  left: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-muted-2, #94A3B8);
+  pointer-events: none;
+}
+
+.selectFilter {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 8px;
+  outline: none;
+}
+
+/* ── Table Card ─────────────────────────────────────────── */
+.tableCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.8125rem;
+}
+
+.tbl th {
+  background: var(--color-surface-2, #F8FAFC);
+  color: var(--color-muted, #64748B);
+  font-weight: 600;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.65rem 1.125rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.tbl td {
+  padding: 0.75rem 1.125rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+  vertical-align: middle;
+}
+
+.tbl tbody tr {
+  transition: background 100ms ease;
+}
+
+.tbl tbody tr:hover {
+  background: rgba(241, 245, 249, 0.5);
+}
+
+.tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.studentName {
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.regIdBadge {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  color: var(--color-muted, #64748B);
+}
+
+.scoreVal {
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--color-text, #0F172A);
+}
+
+.statusTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+}
+
+.statusPromoted {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #CBD5E1);
+}
+
+.statusGraduated {
+  background: var(--color-surface-2, #F1F5F9);
+  color: var(--color-text, #0F172A);
+  border: 1px solid var(--color-border, #CBD5E1);
+}
+
+.statusRepeated {
+  background: transparent;
+  color: var(--color-muted, #64748B);
+  border: 1px dashed var(--color-border, #E2E8F0);
+}
+
+.statusPending {
+  background: transparent;
+  color: var(--color-muted-2, #94A3B8);
+  border: 1px dashed var(--color-border, #E2E8F0);
+}
+
+.actionBtnGroup {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.actionBtn {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-primary, #4F46E5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+}
+
+.actionBtn:hover {
+  background: var(--color-surface-2, #F1F5F9);
+}
+
+.actionBtnSecondary {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-muted, #64748B);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+}
+
+.actionBtnSecondary:hover {
+  color: var(--color-text, #0F172A);
+  background: var(--color-surface-2, #F1F5F9);
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .statsGrid {
+    grid-template-columns: 1fr;
+  }
+  .filterStrip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

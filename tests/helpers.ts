@@ -7,7 +7,10 @@
 
 import { Database } from "bun:sqlite";
 
-export const BASE_URL = process.env.TEST_BASE_URL ?? "http://localhost:3999";
+import db from "../db";
+import { hashPassword } from "../auth";
+
+export const BASE_URL = process.env.TEST_BASE_URL ?? "http://localhost:8001";
 export const TEST_DB_PATH = ":memory:";   // overridden by EXAMPOOL_DB env
 
 // ── Typed response helpers ──────────────────────────────────────────────────
@@ -48,6 +51,30 @@ export async function json<T = any>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Bootstrap an operator user reliably across fresh and pre-configured databases */
+export async function bootstrapOperator(email: string, password: string): Promise<string> {
+  const setupRes = await apiPost("/api/setup", {
+    name: "Test Operator",
+    email,
+    password,
+    schoolName: "QA School",
+    currentTerm: "2026-T1",
+  });
+  if (setupRes.status === 201) {
+    const body = await json(setupRes);
+    return extractToken(setupRes, body);
+  }
+  const existing = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+  if (!existing) {
+    const pHash = await hashPassword(password);
+    db.prepare("INSERT INTO users (name, email, role, password_hash, is_active) VALUES ('Test Operator', ?, 'operator', ?, 1)")
+      .run(email, pHash);
+  }
+  const loginRes = await apiPost("/api/auth/login", { email, password });
+  const loginBody = await json(loginRes);
+  return extractToken(loginRes, loginBody);
+}
+
 // ── Account factory ─────────────────────────────────────────────────────────
 
 let _seq = Date.now();
@@ -62,9 +89,25 @@ export async function registerAndLogin(
   const password = "Password123";
   const name = `Test ${role} ${uid()}`;
 
+  // Make sure a grade level exists if student
+  let gradeLevelId = 1;
+  if (role === "student") {
+    const gl = db.prepare("SELECT id FROM grade_levels LIMIT 1").get() as any;
+    if (gl) gradeLevelId = gl.id;
+  }
+
   const regRes = await apiPost(
     "/api/auth/register",
-    { name, email, password, role, grade: role === "student" ? "JSS1" : undefined },
+    {
+      name,
+      email,
+      password,
+      role,
+      phone: role === "teacher" ? "08012345678" : undefined,
+      dob: role === "student" ? "2008-01-01" : undefined,
+      grade_level_id: role === "student" ? gradeLevelId : undefined,
+      grade: role === "student" ? "JSS1" : undefined,
+    },
     operatorToken,
   );
   if (!regRes.ok) {

@@ -4,8 +4,8 @@ import React, { useState } from "react";
 import { RequireRole } from "../../../components/auth/RequireRole";
 import { ChangePasswordModal } from "../../../components/auth/ChangePasswordModal";
 import { useAuth } from "../../../hooks/useAuth";
+import { PageHeader, Button } from "../../../components/ui";
 import { LockIcon } from "../../../components/icons/Icons";
-import Link from "next/link";
 import styles from "./page.module.css";
 
 export default function TeacherSettingsPage() {
@@ -21,74 +21,88 @@ function TeacherSettings() {
   const [showPwModal, setShowPwModal] = useState(false);
 
   const initial = user?.name?.charAt(0)?.toUpperCase() ?? "T";
+  const isClassTeacher = (user as any)?.is_class_teacher === true;
+  const assignedClassName = (user as any)?.assigned_class_name;
 
   return (
-    <>
+    <div className={styles.container}>
       {showPwModal && <ChangePasswordModal onClose={() => setShowPwModal(false)} />}
 
-      <div className={styles.page}>
-        <div className="pageHeader" style={{ padding: "0 0.5rem" }}>
-          <h1 className="pageTitle">My Profile</h1>
-          <Link href="/teacher/dashboard" className="btn btn-ghost">← Dashboard</Link>
-        </div>
+      {/* ── Page Header ───────────────────────────────────── */}
+      <PageHeader
+        eyebrow="Faculty Preferences"
+        title="Teacher Profile & Account"
+        subtitle="Manage faculty credentials, institutional class allocations, and password security."
+      />
 
-        {/* ── Profile Card ── */}
-        <div className={styles.profileCard}>
-          <div className={styles.profileHeader}>
-            <div className={styles.avatar}>{initial}</div>
-            <div>
-              <div className={styles.name}>{user?.name ?? "—"}</div>
-              <div className={styles.email}>{user?.email ?? "—"}</div>
-              <span className="badge badge-success" style={{ marginTop: "0.4rem" }}>Teacher</span>
-            </div>
-          </div>
-
-          <div className={styles.fields}>
-            {([
-              ["Role",  "Teacher"],
-              ["Name",  user?.name],
-              ["Email", user?.email],
-            ] as [string, string | null | undefined][]).map(([label, val]) => (
-              <React.Fragment key={label}>
-                <div className={styles.lbl}>{label}</div>
-                <div className={styles.val}>{val || "—"}</div>
-              </React.Fragment>
-            ))}
+      {/* ── Profile Information Card ──────────────────────── */}
+      <section className={styles.card}>
+        <div className={styles.cardHeader}>
+          <div className={styles.avatar}>{initial}</div>
+          <div>
+            <div className={styles.name}>{user?.name ?? "—"}</div>
+            <div className={styles.email}>{user?.email ?? "—"}</div>
           </div>
         </div>
 
-        {/* ── Security Card ── */}
-        <div className={styles.sectionCard}>
-          <h3 className={styles.sectionTitle}>
-            <LockIcon width="16" height="16" /> Security
-          </h3>
+        <div className={styles.gridFields}>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>System Role</span>
+            <span className={styles.fieldValue}>Faculty Teacher</span>
+          </div>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>Class Master Role</span>
+            <span className={styles.fieldValue}>
+              {isClassTeacher ? `Assigned (${assignedClassName})` : "Course Faculty"}
+            </span>
+          </div>
+          <div className={styles.fieldItem}>
+            <span className={styles.fieldLabel}>Account Status</span>
+            <span className={styles.fieldValue}>Active · Verified</span>
+          </div>
+        </div>
+      </section>
 
-          <div className={styles.row}>
+      {/* ── Security & Sessions Card ──────────────────────── */}
+      <section className={styles.card}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9375rem", fontWeight: 600, color: "var(--color-text)" }}>
+          <LockIcon width="16" height="16" />
+          <span>Security & Authentication</span>
+        </div>
+
+        <div>
+          <div className={styles.actionRow}>
             <div>
-              <div className={styles.rowLabel}>Password</div>
-              <div className={styles.rowSub}>Update your login password</div>
+              <div style={{ fontWeight: 600, fontSize: "0.875rem", color: "var(--color-text)" }}>Account Password</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", marginTop: "0.15rem" }}>
+                Update your login credentials to maintain secure access.
+              </div>
             </div>
-            <button className="btn btn-primary btn-sm" onClick={() => setShowPwModal(true)}>
+            <Button variant="secondary" size="sm" onClick={() => setShowPwModal(true)}>
               Change Password
-            </button>
+            </Button>
           </div>
 
-          <div className={styles.row}>
+          <div className={styles.actionRow}>
             <div>
-              <div className={styles.rowLabel}>Logout</div>
-              <div className={styles.rowSub}>Sign out of this session</div>
+              <div style={{ fontWeight: 600, fontSize: "0.875rem", color: "var(--color-text)" }}>Sign Out</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--color-muted)", marginTop: "0.15rem" }}>
+                Terminate active faculty session on this workstation.
+              </div>
             </div>
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ color: "var(--color-danger)" }}
-              onClick={async () => { await logout(); window.location.href = "/"; }}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                await logout();
+                window.location.href = "/";
+              }}
             >
-              Logout
-            </button>
+              Log Out
+            </Button>
           </div>
         </div>
-
-      </div>
-    </>
+      </section>
+    </div>
   );
 }

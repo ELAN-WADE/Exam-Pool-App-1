@@ -1,0 +1,368 @@
+/* ── Guardian Dashboard Mobile Screen Styles ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+  width: 100%;
+}
+
+/* ── 1. Greeting & Context Header ── */
+.greetingSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.greetingTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.greetingHeading {
+  font-size: 1.375rem;
+  font-weight: 800;
+  color: #0F172A;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.periodDropdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.periodDropdown:hover {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+  color: #0F172A;
+}
+
+.greetingSubtitle {
+  font-size: 0.8125rem;
+  color: #64748B;
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* ── 2. 2x2 Quick Overview Stat Grid ── */
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.statCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.statCard:active {
+  transform: scale(0.98);
+}
+
+.statCardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.statIconBox {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.statValue {
+  font-size: 1.375rem;
+  font-weight: 800;
+  color: #0F172A;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.statMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.statLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748B;
+}
+
+.statSubtext {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: #94A3B8;
+}
+
+/* ── 3. Performance Trend Line Chart ── */
+.trendCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 18px;
+  padding: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.trendHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trendTitle {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.subjectFilterPill {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: #165AF6;
+  background: #EFF4FF;
+  border: 1px solid #DBEAFE;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chartSvgWrapper {
+  width: 100%;
+  height: 130px;
+  position: relative;
+}
+
+/* ── 4. Upcoming Events Card ── */
+.sectionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.sectionHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sectionHeading {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0;
+}
+
+.sectionLink {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #165AF6;
+  text-decoration: none;
+}
+
+.sectionLink:hover {
+  text-decoration: underline;
+}
+
+.eventCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  text-decoration: none;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.eventCard:hover {
+  border-color: #CBD5E1;
+}
+
+.eventCard:active {
+  transform: scale(0.98);
+}
+
+.eventLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.eventDateBadge {
+  width: 44px;
+  height: 48px;
+  background: #EFF4FF;
+  border: 1px solid #DBEAFE;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.eventMonth {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  color: #165AF6;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.eventDay {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #0F172A;
+  line-height: 1;
+}
+
+.eventWeekday {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  color: #64748B;
+  text-transform: uppercase;
+}
+
+.eventDetailsCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.eventTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.eventTitle {
+  font-size: 0.84375rem;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.livePill {
+  font-size: 0.625rem;
+  font-weight: 700;
+  color: #059669;
+  background: #ECFDF5;
+  border: 1px solid #A7F3D0;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+
+.eventMetaText {
+  font-size: 0.75rem;
+  color: #64748B;
+}
+
+.chevronIcon {
+  color: #94A3B8;
+  flex-shrink: 0;
+}
+
+/* ── 5. Recent Activity List ── */
+.activityList {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 0.5rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.activityItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.35rem;
+  border-bottom: 1px solid #F1F5F9;
+}
+
+.activityItem:last-child {
+  border-bottom: none;
+}
+
+.activityLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.activityCheckIcon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ECFDF5;
+  color: #059669;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.activityInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.activityTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #0F172A;
+}
+
+.activityDate {
+  font-size: 0.6875rem;
+  color: #94A3B8;
+}
+
+.activityScoreChip {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #165AF6;
+  background: #EFF4FF;
+  padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+}

@@ -1,0 +1,300 @@
+/* ── Guardian Calendar Page Styles ── */
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* ── Page Header ── */
+.headerWrapper {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.25rem;
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.pageTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text, #0F172A);
+  letter-spacing: -0.025em;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.roleBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.08);
+  color: #6366F1;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-muted, #64748B);
+  margin: 0;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* ── Command Strip ── */
+.commandStrip {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-lg, 16px);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+@media (min-width: 768px) {
+  .commandStrip {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.filterButtons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.filterButton {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #E2E8F0);
+  background: var(--color-surface, #FFFFFF);
+  color: var(--color-muted, #64748B);
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+}
+
+.filterButton:hover {
+  border-color: #6366F1;
+  color: #6366F1;
+}
+
+.filterButtonActive {
+  background: #6366F1;
+  color: #FFFFFF;
+  border-color: #6366F1;
+}
+
+.filterButtonActive:hover {
+  background: #4F46E5;
+  border-color: #4F46E5;
+}
+
+/* ── Events List ── */
+.eventsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.eventCard {
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  transition: border-color 150ms ease;
+}
+
+.eventCard:hover {
+  border-color: #6366F1;
+}
+
+.eventDate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.08);
+  flex-shrink: 0;
+}
+
+.eventMonth {
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6366F1;
+}
+
+.eventDay {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text, #0F172A);
+  line-height: 1;
+}
+
+.eventDetails {
+  flex: 1;
+  min-width: 0;
+}
+
+.eventTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text, #0F172A);
+  margin: 0;
+}
+
+.eventDescription {
+  font-size: 0.8125rem;
+  color: var(--color-muted, #64748B);
+  margin: 0.25rem 0 0;
+  line-height: 1.5;
+}
+
+.eventMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.eventMetaItem {
+  font-size: 0.75rem;
+  color: var(--color-muted-2, #94A3B8);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.eventTypeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.typeHoliday {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+.typeExamPeriod {
+  background: rgba(239, 68, 68, 0.1);
+  color: #DC2626;
+}
+
+.typeResumption {
+  background: rgba(59, 130, 246, 0.1);
+  color: #2563EB;
+}
+
+.typeEvent {
+  background: rgba(245, 158, 11, 0.1);
+  color: #D97706;
+}
+
+.typeDeadline {
+  background: rgba(139, 92, 246, 0.1);
+  color: #7C3AED;
+}
+
+.typeOther {
+  background: rgba(100, 116, 139, 0.1);
+  color: #475569;
+}
+
+/* ── Empty State ── */
+.emptyState {
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.emptyTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0F172A;
+  margin-bottom: 0.5rem;
+}
+
+.emptySubtitle {
+  font-size: 0.8125rem;
+  color: #64748B;
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .headerWrapper {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .eventCard {
+    padding: 1rem;
+  }
+  
+  .eventDate {
+    width: 48px;
+    height: 48px;
+  }
+  
+  .eventDay {
+    font-size: 1.125rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding-bottom: 2rem;
+  }
+  
+  .filterButtons {
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+}

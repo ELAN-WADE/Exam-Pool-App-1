@@ -1,0 +1,235 @@
+/* ── Sleek Minimalist Academic Switcher Trigger ── */
+.container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.triggerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  background: var(--color-surface, #FFFFFF);
+  border: 1px solid var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition: all 0.14s cubic-bezier(0.4, 0, 0.2, 1);
+  min-height: unset;
+  line-height: 1.2;
+}
+
+.triggerBtn:hover {
+  background: rgba(79, 70, 229, 0.04);
+  border-color: #4F46E5;
+  color: #4F46E5;
+}
+
+.triggerBtn:active {
+  transform: scale(0.98);
+}
+
+.triggerOpen {
+  border-color: #4F46E5;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
+  background: rgba(79, 70, 229, 0.04);
+}
+
+.iconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.triggerIcon {
+  color: #4F46E5;
+  transition: transform 0.14s ease;
+}
+
+.labelSession {
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: inherit;
+}
+
+.separator {
+  color: #94A3B8;
+  padding: 0 0.05rem;
+}
+
+.labelTerm {
+  font-weight: 500;
+  color: inherit;
+}
+
+.chevron {
+  color: #94A3B8;
+  transition: transform 140ms ease;
+  margin-left: 0.1rem;
+}
+
+.chevronRotated {
+  transform: rotate(180deg);
+}
+
+/* ── Popover Dropdown Panel ── */
+.dropdownPanel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 120;
+  width: 260px;
+  background: #FFFFFF;
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.1), 0 4px 6px -2px rgba(15, 23, 42, 0.03);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  animation: popIn 120ms ease;
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--color-border, #E2E8F0);
+}
+
+.panelTitle {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-muted, #64748B);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sectionHeader {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-muted, #64748B);
+}
+
+.itemList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.itemBtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 100ms ease;
+  font-size: 0.75rem;
+  text-align: left;
+  min-height: unset;
+  color: var(--color-text, #0F172A);
+}
+
+.itemBtn:hover {
+  background: var(--color-surface-2, #F8FAFC);
+}
+
+.itemSelected {
+  background: #F1F5F9 !important;
+  color: #0F172A !important;
+  font-weight: 600;
+}
+
+.itemLeft {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.itemName {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+}
+
+.badgeLive {
+  font-size: 0.58rem;
+  font-weight: 600;
+  color: #059669;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+
+.checkIcon {
+  color: #4F46E5;
+}
+
+/* Terms Grid */
+.termsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.termPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  background: var(--color-surface-2, #F1F5F9);
+  border: 1px solid var(--color-border, #E2E8F0);
+  color: var(--color-text, #0F172A);
+  cursor: pointer;
+  transition: all 100ms ease;
+  min-height: unset;
+}
+
+.termPill:hover {
+  background: #E2E8F0;
+}
+
+.termPillActive {
+  background: #0F172A !important;
+  border-color: #0F172A !important;
+  color: #FFFFFF !important;
+}
+
+.tinyLiveDot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #10B981;
+}

@@ -86,7 +86,7 @@ const BellIcon = ({ width = "20", height = "20" }) => (
  *     the parsed notification payload so other components (Teacher
  *     Dashboard, Students roster, Results) can live-refresh their data.
  */
-export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
+export function NotificationBell({ role = "ADMIN" }: { role?: "ADMIN" | "teacher" | "guardian" | string }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
@@ -112,7 +112,7 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
           setUnreadCount(res.unreadCount);
         }
       })
-      .catch((e) => console.error("Failed to fetch notifications:", e));
+      .catch(() => {});
 
     // ── 2. SSE stream — uses HttpOnly cookie via credentials: "include" ─────────
     // [SECURITY FIX VULN-13] Removed localStorage.getItem("exampool_token"). The cookie is
@@ -120,6 +120,13 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
     // are readable by any XSS payload; HttpOnly cookies are not.
     const controller = new AbortController();
     abortRef.current = controller;
+
+    // [SECURITY FIX] SSE reconnection with exponential backoff
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 10;
+    const BASE_DELAY_MS = 1000;
+    const MAX_DELAY_MS = 30000;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connectSSE = async () => {
       try {
@@ -129,7 +136,18 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
           signal: controller.signal,
         });
 
-        if (!response.ok || !response.body) return;
+        if (!response.ok || !response.body) {
+          // Server error — retry with backoff
+          if (!controller.signal.aborted && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * Math.pow(2, reconnectAttempts));
+            reconnectAttempts++;
+            reconnectTimer = setTimeout(connectSSE, delay);
+          }
+          return;
+        }
+
+        // Connected successfully — reset reconnect counter
+        reconnectAttempts = 0;
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
@@ -170,14 +188,28 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
             }
           }
         }
+
+        // Stream ended normally — reconnect with backoff
+        if (!controller.signal.aborted && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * Math.pow(2, reconnectAttempts));
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(connectSSE, delay);
+        }
       } catch (err: any) {
-        // Aborted or network error — silently ignore
+        if (err.name === "AbortError") return; // Component unmounted
+        // Network error — retry with backoff
+        if (!controller.signal.aborted && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * Math.pow(2, reconnectAttempts));
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(connectSSE, delay);
+        }
       }
     };
 
     connectSSE();
 
     return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       controller.abort();
     };
   }, []);
@@ -277,7 +309,7 @@ export function NotificationBell({ role }: { role: "ADMIN" | "teacher" }) {
                   onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   onClick={() => {
                     if (notif.link) {
-                      window.location.href = notif.link;
+                      window.location.href = notif.link.replace(/^\/operator\//, "/ADMIN/");
                     }
                   }}
                   >

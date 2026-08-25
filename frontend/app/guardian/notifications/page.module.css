@@ -1,0 +1,139 @@
+/* ── Notifications Mobile Screen Styles ── */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pageTitle {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #0F172A;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.markReadBtn {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #165AF6;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.markReadBtn:hover {
+  text-decoration: underline;
+}
+
+.categoryPills {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.categoryPill {
+  padding: 0.35rem 0.75rem;
+  background: #F1F5F9;
+  border: 1px solid #E2E8F0;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748B;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 140ms ease;
+}
+
+.categoryPillActive {
+  background: #165AF6 !important;
+  color: #FFFFFF !important;
+  border-color: #165AF6 !important;
+}
+
+.notifList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.notifCard {
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 16px;
+  padding: 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  position: relative;
+  text-decoration: none;
+  color: inherit;
+  transition: all 140ms ease;
+}
+
+.notifCard:hover {
+  border-color: #CBD5E1;
+}
+
+.notifCardUnread {
+  background: #F8FAFF;
+  border-color: #DBEAFE;
+}
+
+.notifIconBox {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #EFF4FF;
+  color: #165AF6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.notifContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+}
+
+.notifTitle {
+  font-size: 0.84375rem;
+  font-weight: 700;
+  color: #0F172A;
+  line-height: 1.3;
+}
+
+.notifDesc {
+  font-size: 0.75rem;
+  color: #64748B;
+  line-height: 1.35;
+}
+
+.notifTime {
+  font-size: 0.6875rem;
+  color: #94A3B8;
+  margin-top: 0.15rem;
+}
+
+.unreadDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #165AF6;
+  flex-shrink: 0;
+  margin-top: 0.35rem;
+}

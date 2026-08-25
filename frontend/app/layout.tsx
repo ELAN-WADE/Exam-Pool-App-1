@@ -6,7 +6,7 @@ import "../styles/globals.css";
 import { ToastProvider } from "../hooks/useToast";
 
 export const metadata: Metadata = {
-  title: "Exampool LAN",
+  title: "ACAD LAN - Academic Assessment Platform",
   description: "Offline-first LAN examination platform",
 };
 
@@ -31,7 +31,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
                   navigator.serviceWorker.register('/sw.js').then(function(registration) {
-                    console.log('SW registered with scope:', registration.scope);
+                    registration.update();
+                    console.log('SW updated with scope:', registration.scope);
                   }, function(err) {
                     console.log('SW registration failed:', err);
                   });

@@ -1,0 +1,8 @@
+{
+  "presets": [
+    "next/babel"
+  ],
+  "plugins": [
+    "./live-ui-editor.babel-plugin.js"
+  ]
+}

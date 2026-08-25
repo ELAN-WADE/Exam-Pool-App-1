@@ -25,7 +25,7 @@ export interface OfflineFileUpload {
 }
 
 const DB_NAME = "ExampoolOfflineDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export async function openOfflineDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -35,8 +35,16 @@ export async function openOfflineDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("assignments")) {
         db.createObjectStore("assignments", { keyPath: "id" });
       }
+      if (db.objectStoreNames.contains("submissions")) {
+        // v1 used keyPath subject_id (only one per subject) → v2 migrates to autoIncrement
+        const oldDataReq = (e.target as any).transaction.objectStore("submissions").getAll();
+        oldDataReq.onsuccess = () => {};
+      }
+      if (db.objectStoreNames.contains("submissions") && (e as any).oldVersion < 2) {
+        db.deleteObjectStore("submissions");
+      }
       if (!db.objectStoreNames.contains("submissions")) {
-        db.createObjectStore("submissions", { keyPath: "subject_id" });
+        db.createObjectStore("submissions", { keyPath: "id", autoIncrement: true });
       }
       if (!db.objectStoreNames.contains("uploads")) {
         db.createObjectStore("uploads", { keyPath: "id" });
@@ -73,11 +81,14 @@ export async function getCachedAssignments(): Promise<OfflineAssignment[]> {
 }
 
 // ── Submissions Queue ────────────────────────────────────────────────────────
-export async function saveOfflineSubmission(submission: OfflineSubmission) {
+export async function saveOfflineSubmission(submission: OfflineSubmission & { id?: number }) {
   const db = await openOfflineDB();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction("submissions", "readwrite");
-    tx.objectStore("submissions").put(submission);
+    // v2 uses autoIncrement id to allow multiple pending per subject
+    const toSave: any = { ...submission };
+    if (toSave.id == null) delete toSave.id;
+    tx.objectStore("submissions").add(toSave);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
